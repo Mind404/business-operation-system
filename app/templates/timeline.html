@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}跨团队协作时间线 - 业务运转系统{% endblock %}
+{% block page_title %}跨团队协作时间线{% endblock %}
+
+{% block content %}
+<!-- 顶部说明 -->
+<div style="background:linear-gradient(135deg,#eff6ff 0%,#faf5ff 100%); border:1px solid #bae6fd; border-radius:10px; padding:14px 18px; margin-bottom:20px;">
+    <div style="font-size:13px; color:#475569; line-height:1.6;">
+        <strong style="color:#1e40af;">📊 视图说明：</strong>
+        本页面展示研发、测试、生产、交付各团队的关键节点时间线，清晰呈现各团队之间的依赖关系和协作节奏。
+        点击事件卡片可查看详情，颜色区分团队，图标区分事件类型。
+    </div>
+</div>
+
+<!-- 筛选栏 -->
+<div class="filter-bar" style="margin-bottom:16px;">
+    <span style="font-size:13px; color:#6b7280; margin-right:8px; font-weight:500;">团队筛选：</span>
+    <a href="{{ url_for('timeline_view') }}" class="filter-tag {% if not team_filter %}active{% endif %}">全部</a>
+    {% for team in ['研发组', '测试组', '生产组', '交付服务组'] %}
+    <a href="{{ url_for('timeline_view', team=team) }}" class="filter-tag {% if team_filter == team %}active{% endif %}">{{ team }}</a>
+    {% endfor %}
+    <span style="margin-left:20px; font-size:13px; color:#6b7280;">产品：</span>
+    <select onchange="if(this.value) window.location.href='{{ url_for('timeline_view') }}?product='+this.value" style="padding:5px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">
+        <option value="">全部产品</option>
+        {% for p in products %}
+        <option value="{{ p.id }}" {% if product_filter == p.id %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+<!-- 团队图例 -->
+<div style="display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap;">
+    <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:12px; height:12px; border-radius:3px; background:#3b82f6;"></div>
+        <span style="font-size:12px; color:#4b5563;">研发组</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:12px; height:12px; border-radius:3px; background:#8b5cf6;"></div>
+        <span style="font-size:12px; color:#4b5563;">测试组</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:12px; height:12px; border-radius:3px; background:#f59e0b;"></div>
+        <span style="font-size:12px; color:#4b5563;">生产组</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:12px; height:12px; border-radius:3px; background:#10b981;"></div>
+        <span style="font-size:12px; color:#4b5563;">交付服务组</span>
+    </div>
+    <div style="margin-left:auto; display:flex; gap:12px;">
+        <span style="font-size:12px; color:#6b7280;">共 {{ events|length }} 个关键节点</span>
+    </div>
+</div>
+
+<!-- 时间线 -->
+<div class="panel" style="padding:24px;">
+    {% if events %}
+    <div style="position:relative; padding-left:40px;">
+        <!-- 时间线竖线 -->
+        <div style="position:absolute; left:15px; top:0; bottom:0; width:2px; background:linear-gradient(to bottom, #3b82f6, #8b5cf6, #f59e0b, #10b981);"></div>
+
+        {% for event in events %}
+        <div style="position:relative; margin-bottom:24px;">
+            <!-- 时间点圆点 -->
+            <div style="position:absolute; left:-33px; top:8px; width:16px; height:16px; border-radius:50%; border:3px solid white; box-shadow:0 0 0 2px {{ '#3b82f6' if event.team == '研发组' else '#8b5cf6' if event.team == '测试组' else '#f59e0b' if event.team == '生产组' else '#10b981' }}; background:{{ '#3b82f6' if event.team == '研发组' else '#8b5cf6' if event.team == '测试组' else '#f59e0b' if event.team == '生产组' else '#10b981' }};"></div>
+
+            <!-- 事件卡片 -->
+            <div style="background:white; border:1px solid #e5e7eb; border-radius:10px; padding:16px; border-left:4px solid {{ '#3b82f6' if event.team == '研发组' else '#8b5cf6' if event.team == '测试组' else '#f59e0b' if event.team == '生产组' else '#10b981' }}; {% if event.status == '已完成' %}opacity:0.85;{% elif event.status == '进行中' %}box-shadow:0 4px 12px rgba(59,130,246,0.15);{% endif %}">
+                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:8px;">
+                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                        <span style="font-size:18px;">
+                            {% if event.event_type == '版本发布' %}🚀
+                            {% elif event.event_type == '版本提测' %}📦
+                            {% elif event.event_type == '测试开始' %}🧪
+                            {% elif event.event_type == '测试完成' %}✅
+                            {% elif event.event_type == '生产完成' %}🏭
+                            {% elif event.event_type == '交付' %}📦
+                            {% else %}📌{% endif %}
+                        </span>
+                        <span style="font-weight:600; font-size:15px; color:#111827;">{{ event.title }}</span>
+                        <span style="background:{{ '#dbeafe' if event.team == '研发组' else '#ede9fe' if event.team == '测试组' else '#fef3c7' if event.team == '生产组' else '#d1fae5' }}; color:{{ '#1e40af' if event.team == '研发组' else '#5b21b6' if event.team == '测试组' else '#92400e' if event.team == '生产组' else '#065f46' }}; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600;">{{ event.team }}</span>
+                        <span style="background:{{ '#d1fae5' if event.status == '已完成' else '#fef3c7' if event.status == '进行中' else '#f3f4f6' }}; color:{{ '#065f46' if event.status == '已完成' else '#92400e' if event.status == '进行中' else '#6b7280' }}; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600;">
+                            {% if event.status == '已完成' %}✓ 已完成{% elif event.status == '进行中' %}⚡ 进行中{% else %}📅 计划中{% endif %}
+                        </span>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:14px; font-weight:600; color:#374151;">{{ event.event_date }}</div>
+                        <div style="font-size:11px; color:#9ca3af;">{{ event.event_type }}</div>
+                    </div>
+                </div>
+                {% if event.description %}
+                <div style="font-size:13px; color:#4b5563; line-height:1.6; margin-top:8px; padding-top:8px; border-top:1px solid #f3f4f6;">
+                    {{ event.description }}
+                </div>
+                {% endif %}
+                {% if event.product_name or event.version_no %}
+                <div style="display:flex; gap:12px; margin-top:10px; flex-wrap:wrap;">
+                    {% if event.product_name %}
+                    <span style="font-size:11px; color:#6b7280; background:#f9fafb; padding:3px 8px; border-radius:6px;">📦 产品：{{ event.product_name }}</span>
+                    {% endif %}
+                    {% if event.version_no %}
+                    <span style="font-size:11px; color:#6b7280; background:#f9fafb; padding:3px 8px; border-radius:6px;">🔖 版本：{{ event.version_no }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div style="text-align:center; padding:60px; color:#9ca3af;">
+        <div style="font-size:48px; margin-bottom:16px;">📅</div>
+        <div style="font-size:16px;">暂无时间线事件</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 依赖关系说明 -->
+<div class="panel" style="margin-top:20px; padding:20px;">
+    <h3 style="font-size:15px; font-weight:600; color:#111827; margin-bottom:12px;">🔗 关键依赖关系</h3>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
+        <div style="background:#eff6ff; padding:12px; border-radius:8px; border-left:3px solid #3b82f6;">
+            <div style="font-size:13px; font-weight:600; color:#1e40af; margin-bottom:4px;">研发 → 测试</div>
+            <div style="font-size:12px; color:#4b5563; line-height:1.5;">研发完成版本开发后提测，测试团队基于提测版本开展黑盒测试与bug提单</div>
+        </div>
+        <div style="background:#faf5ff; padding:12px; border-radius:8px; border-left:3px solid #8b5cf6;">
+            <div style="font-size:13px; font-weight:600; color:#5b21b6; margin-bottom:4px;">测试 → 研发</div>
+            <div style="font-size:12px; color:#4b5563; line-height:1.5;">测试发现bug后反馈研发修复，研发修复后回归测试，循环直至版本催熟稳定</div>
+        </div>
+        <div style="background:#fffbeb; padding:12px; border-radius:8px; border-left:3px solid #f59e0b;">
+            <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:4px;">版本发布 → 生产</div>
+            <div style="font-size:12px; color:#4b5563; line-height:1.5;">版本通过测试确认具备可发布状态后，生产团队基于版本发布状态安排生产并刷新指定版本</div>
+        </div>
+        <div style="background:#ecfdf5; padding:12px; border-radius:8px; border-left:3px solid #10b981;">
+            <div style="font-size:13px; font-weight:600; color:#065f46; margin-bottom:4px;">生产 → 交付</div>
+            <div style="font-size:12px; color:#4b5563; line-height:1.5;">生产完成后按用户需求分批交付，每批次对应特定软件版本，确保交付版本与需求一致</div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

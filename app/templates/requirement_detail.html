@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+{% block title %}{{ requirement.title }} - 需求详情（端到端追溯）{% endblock %}
+{% block page_title %}需求详情 - 端到端全流程追溯{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('requirements_list') }}" class="btn btn-secondary">返回列表</a>
+{% if can_write('requirements') %}<a href="{{ url_for('requirement_edit', req_id=requirement.id) }}" class="btn btn-primary">编辑需求</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- 需求性质与影响范围说明 -->
+<div style="margin-bottom:16px; padding:14px 18px; border-radius:10px; {% if requirement.req_type == '用户需求' %}background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%); border:1px solid #93c5fd;{% else %}background:linear-gradient(135deg,#f5f3ff 0%,#ede9fe 100%); border:1px solid #c4b5fd;{% endif %}">
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div style="font-size:28px;">{% if requirement.req_type == '用户需求' %}📋{% else %}🔧{% endif %}</div>
+        <div style="flex:1; min-width:300px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                <span style="font-size:15px; font-weight:700; {% if requirement.req_type == '用户需求' %}color:#1e40af;{% else %}color:#5b21b6;{% endif %}">
+                    {% if requirement.req_type == '用户需求' %}合同刚性需求{% else %}演进约束需求{% endif %}
+                </span>
+                <span style="background:#fff; padding:2px 10px; border-radius:10px; font-size:12px; font-weight:600; color:#374151;">{{ requirement.req_type }}</span>
+            </div>
+            <div style="font-size:13px; color:#475569; line-height:1.6;">
+                {% if requirement.req_type == '用户需求' %}
+                针对产品售卖的<strong>硬性要求</strong>，有合同约束，<strong style="color:#1e40af;">影响产品定义、版本发布、生产排程和交付</strong>，可进入生产流程。
+                {% else %}
+                产品正常演进的<strong>约束性条件</strong>，无合同刚性，<strong style="color:#5b21b6;">一般只影响软件版本规划</strong>，不作为产品发布依据，不进入生产流程。
+                {% endif %}
+            </div>
+        </div>
+        <div style="text-align:center; padding:8px 16px; background:#fff; border-radius:8px;">
+            <div style="font-size:11px; color:#6b7280; margin-bottom:2px;">影响范围</div>
+            <div style="font-size:13px; font-weight:700; {% if requirement.req_type == '用户需求' %}color:#1e40af;{% else %}color:#5b21b6;{% endif %}">
+                {% if requirement.req_type == '用户需求' %}产品+版本+生产{% else %}仅软件版本{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 需求基本信息 -->
+<div class="panel">
+    <div class="detail-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:16px;">
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">需求标题</span><span class="detail-value" style="font-size:14px;font-weight:600;color:#111827;">{{ requirement.title }}</span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">来源部门</span><span class="detail-value" style="font-size:14px;font-weight:500;color:#111827;">{{ requirement.source_dept or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">关联客户</span><span class="detail-value" style="font-size:14px;font-weight:500;color:#111827;">{{ requirement.customer or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">需求数量</span><span class="detail-value" style="font-size:14px;font-weight:500;color:#111827;">{{ requirement.quantity }} 套</span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">优先级</span><span class="detail-value"><span class="priority priority-{{ requirement.priority }}">{{ requirement.priority }}</span></span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">交付节点</span><span class="detail-value mono" style="font-size:14px;font-weight:500;color:#111827;">{{ requirement.delivery_date or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">当前状态</span><span class="detail-value"><span class="status-tag status-{{ requirement.status }}">{{ requirement.status }}</span></span></div>
+        <div class="detail-item"><span class="detail-label" style="font-size:12px;color:#6b7280;">创建时间</span><span class="detail-value mono" style="font-size:14px;font-weight:500;color:#111827;">{{ requirement.created_at[:16] if requirement.created_at else '-' }}</span></div>
+    </div>
+    {% if requirement.description %}
+    <div style="margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb; font-size:14px; line-height:1.6; color:#374151;">
+        <strong style="color:#111827;">需求描述：</strong>{{ requirement.description }}
+    </div>
+    {% endif %}
+    {% if requirement.remark %}
+    <div style="margin-top:8px; font-size:13px; color:#6b7280;">
+        <strong>备注：</strong>{{ requirement.remark }}
+    </div>
+    {% endif %}
+</div>
+
+<!-- 分批交付明细 -->
+{% if delivery_batches %}
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">📦 分批交付明细（{{ delivery_batches|length }}批，共{{ delivery_batches | sum(attribute='quantity') }}套）</h3>
+    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; margin-bottom:16px;">
+        {% for batch in delivery_batches %}
+        <div style="background:{{ '#f0fdf4' if batch.status == '已交付' else '#fffbeb' if batch.status == '生产中' else '#f9fafb' }}; border:1px solid {{ '#86efac' if batch.status == '已交付' else '#fcd34d' if batch.status == '生产中' else '#e5e7eb' }}; border-radius:10px; padding:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:13px; font-weight:700; color:#111827;">第{{ batch.batch_no }}批</span>
+                <span style="background:{{ '#d1fae5' if batch.status == '已交付' else '#fef3c7' if batch.status == '生产中' else '#f3f4f6' }}; color:{{ '#065f46' if batch.status == '已交付' else '#92400e' if batch.status == '生产中' else '#6b7280' }}; padding:2px 8px; border-radius:8px; font-size:10px; font-weight:600;">
+                    {% if batch.status == '已交付' %}✓ 已交付{% elif batch.status == '生产中' %}🏭 生产中{% else %}📅 待交付{% endif %}
+                </span>
+            </div>
+            <div style="font-size:20px; font-weight:700; color:#1e40af; margin-bottom:4px;">{{ batch.quantity }} <span style="font-size:12px; font-weight:400; color:#6b7280;">套</span></div>
+            <div style="font-size:11px; color:#6b7280; margin-bottom:6px;">📅 交付日期：<span style="font-weight:600; color:#374151;">{{ batch.delivery_date }}</span></div>
+            {% if batch.version_no %}
+            <div style="font-size:11px; color:#6b7280; margin-bottom:6px;">🔖 软件版本：<span style="font-weight:600; color:#7c3aed;">{{ batch.version_no }}</span></div>
+            {% endif %}
+            {% if batch.remark %}
+            <div style="font-size:10px; color:#9ca3af; margin-top:6px; padding-top:6px; border-top:1px solid #e5e7eb;">{{ batch.remark }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    <!-- 交付进度 -->
+    {% set delivered = delivery_batches | selectattr('status', 'equalto', '已交付') | list %}
+    {% set delivered_qty = delivered | sum(attribute='quantity') %}
+    {% set total_qty = delivery_batches | sum(attribute='quantity') %}
+    <div style="background:#eff6ff; padding:10px 14px; border-radius:8px; display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <span style="font-size:12px; color:#1e40af; font-weight:600;">📊 交付进度：{{ delivered_qty }}/{{ total_qty }} 套（{{ (delivered_qty / total_qty * 100) | round }}%）</span>
+        <div style="flex:1; min-width:150px; background:white; border-radius:6px; height:8px; overflow:hidden;">
+            <div style="height:100%; width:{{ (delivered_qty / total_qty * 100) | round }}%; background:linear-gradient(90deg,#3b82f6,#60a5fa);"></div>
+        </div>
+        <span style="font-size:11px; color:#6b7280;">已交付{{ delivered|length }}批 / 共{{ delivery_batches|length }}批</span>
+    </div>
+</div>
+{% endif %}
+
+<!-- 端到端追溯流程图 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:16px; font-weight:600; margin-bottom:16px; color:#111827;">🔗 端到端全流程追溯</h3>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:16px; background:#f9fafb; border-radius:8px;">
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#dbeafe; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">📋</div>
+            <div style="font-size:12px; font-weight:600; color:#1e40af;">需求提出</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">1个需求</div>
+        </div>
+        <div style="color:#9ca3af; font-size:18px;">→</div>
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#e0e7ff; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">📦</div>
+            <div style="font-size:12px; font-weight:600; color:#3730a3;">版本规划</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">{{ versions|length }}个版本</div>
+        </div>
+        <div style="color:#9ca3af; font-size:18px;">→</div>
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#cffafe; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">💻</div>
+            <div style="font-size:12px; font-weight:600; color:#155e75;">开发任务</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">{{ tasks|length }}个任务</div>
+        </div>
+        <div style="color:#9ca3af; font-size:18px;">→</div>
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#fef3c7; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">🐛</div>
+            <div style="font-size:12px; font-weight:600; color:#92400e;">Bug测试</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">{{ bugs|length }}Bug/{{ test_cases|length }}用例</div>
+        </div>
+        <div style="color:#9ca3af; font-size:18px;">→</div>
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#fed7aa; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">🏭</div>
+            <div style="font-size:12px; font-weight:600; color:#9a3412;">生产排程</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">{{ schedules|length }}排程/{{ orders|length }}订单</div>
+        </div>
+        <div style="color:#9ca3af; font-size:18px;">→</div>
+        <div class="trace-node" style="text-align:center; padding:12px 16px; background:#bbf7d0; border-radius:8px; min-width:90px;">
+            <div style="font-size:20px; margin-bottom:4px;">🚚</div>
+            <div style="font-size:12px; font-weight:600; color:#166534;">交付收入</div>
+            <div style="font-size:11px; color:#6b7280; margin-top:2px;">{{ deliveries|length }}交付/{{ revenues|length }}收入</div>
+        </div>
+    </div>
+</div>
+
+<!-- 1. 关联版本规划 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">📦 1. 关联软件版本（{{ versions|length }}个）</h3>
+    {% if versions %}
+    <table class="data-table">
+        <thead><tr><th>版本号</th><th>产品</th><th>版本类型</th><th>计划发布</th><th>实际发布</th><th>状态</th><th>核心能力</th></tr></thead>
+        <tbody>
+            {% for v in versions %}
+            <tr>
+                <td class="cell-bold mono"><a href="{{ url_for('version_detail', vid=v.id) }}" style="color:#2563eb;">{{ v.version_no }}</a></td>
+                <td>{{ v.product_name or '-' }}</td>
+                <td>{{ v.version_type or '-' }}</td>
+                <td class="mono">{{ v.planned_release or '-' }}</td>
+                <td class="mono">{{ v.actual_release or '-' }}</td>
+                <td><span class="status-tag status-{{ v.status }}">{{ v.status }}</span></td>
+                <td style="max-width:200px; font-size:12px; color:#6b7280;">{{ v.core_features[:50] if v.core_features else '-' }}{% if v.core_features and v.core_features|length > 50 %}...{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的软件版本</div>
+    {% endif %}
+</div>
+
+<!-- 2. 关联开发任务 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">💻 2. 关联开发任务（{{ tasks|length }}个）</h3>
+    {% if tasks %}
+    <table class="data-table">
+        <thead><tr><th>任务名称</th><th>任务内容</th><th>优先级</th><th>负责人</th><th>计划开始</th><th>计划完成</th><th>状态</th></tr></thead>
+        <tbody>
+            {% for t in tasks %}
+            <tr>
+                <td class="cell-bold">{{ t.task_name }}</td>
+                <td style="max-width:200px; font-size:12px; color:#6b7280;">{{ t.description[:40] if t.description else '-' }}{% if t.description and t.description|length > 40 %}...{% endif %}</td>
+                <td><span class="priority priority-{{ t.priority }}">{{ t.priority }}</span></td>
+                <td>{{ t.assignee or '-' }}</td>
+                <td class="mono">{{ t.planned_start or '-' }}</td>
+                <td class="mono">{{ t.planned_finish or '-' }}</td>
+                <td><span class="status-tag status-{{ t.status }}">{{ t.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的开发任务</div>
+    {% endif %}
+</div>
+
+<!-- 3. 关联Bug和测试用例 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">🐛 3. 关联Bug记录（{{ bugs|length }}个）</h3>
+    {% if bugs %}
+    <table class="data-table">
+        <thead><tr><th>Bug编号</th><th>标题</th><th>严重程度</th><th>优先级</th><th>状态</th><th>报告人</th><th>负责人</th></tr></thead>
+        <tbody>
+            {% for b in bugs %}
+            <tr>
+                <td class="cell-bold mono"><a href="{{ url_for('bug_detail', bid=b.id) }}" style="color:#2563eb;">{{ b.bug_no }}</a></td>
+                <td class="cell-bold">{{ b.title }}</td>
+                <td><span class="priority priority-{{ b.severity }}">{{ b.severity }}</span></td>
+                <td><span class="priority priority-{{ b.priority }}">{{ b.priority }}</span></td>
+                <td><span class="status-tag status-{{ b.status }}">{{ b.status }}</span></td>
+                <td>{{ b.reporter or '-' }}</td>
+                <td>{{ b.assignee or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的Bug记录</div>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">🧪 4. 关联测试用例（{{ test_cases|length }}个）</h3>
+    {% if test_cases %}
+    <table class="data-table">
+        <thead><tr><th>用例编号</th><th>用例标题</th><th>模块</th><th>优先级</th><th>用例类型</th><th>状态</th><th>创建人</th></tr></thead>
+        <tbody>
+            {% for tc in test_cases %}
+            <tr>
+                <td class="cell-bold mono">{{ tc.case_no or '-' }}</td>
+                <td class="cell-bold">{{ tc.title }}</td>
+                <td>{{ tc.module or '-' }}</td>
+                <td><span class="priority priority-{{ tc.priority }}">{{ tc.priority }}</span></td>
+                <td>{{ tc.case_type or '-' }}</td>
+                <td><span class="status-tag status-{{ tc.status }}">{{ tc.status }}</span></td>
+                <td>{{ tc.creator or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的测试用例</div>
+    {% endif %}
+</div>
+
+<!-- 5. 关联生产排程和订单 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">🏭 5. 关联生产排程（{{ schedules|length }}个）</h3>
+    {% if schedules %}
+    <table class="data-table">
+        <thead><tr><th>排程编号</th><th>产品</th><th>生产数量</th><th>计划开始</th><th>计划完成</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for s in schedules %}
+            <tr>
+                <td class="cell-bold mono"><a href="{{ url_for('schedule_detail', sid=s.id) }}" style="color:#2563eb;">{{ s.schedule_no }}</a></td>
+                <td>{{ s.product_name or '-' }}</td>
+                <td class="mono">{{ s.quantity }} 套</td>
+                <td class="mono">{{ s.plan_start or '-' }}</td>
+                <td class="mono">{{ s.plan_finish or '-' }}</td>
+                <td><span class="status-tag status-{{ s.status }}">{{ s.status }}</span></td>
+                <td><a href="{{ url_for('schedule_detail', sid=s.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的生产排程</div>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">📋 6. 关联生产订单（{{ orders|length }}个）</h3>
+    {% if orders %}
+    <table class="data-table">
+        <thead><tr><th>订单编号</th><th>供应商</th><th>数量</th><th>计划开始</th><th>计划完成</th><th>状态</th><th>进度</th></tr></thead>
+        <tbody>
+            {% for o in orders %}
+            <tr>
+                <td class="cell-bold mono">{{ o.order_no }}</td>
+                <td>{{ o.supplier or '-' }}</td>
+                <td class="mono">{{ o.quantity }} 套</td>
+                <td class="mono">{{ o.plan_start or '-' }}</td>
+                <td class="mono">{{ o.plan_finish or '-' }}</td>
+                <td><span class="status-tag status-{{ o.status }}">{{ o.status }}</span></td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div style="flex:1; height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden;">
+                            <div style="width:{{ o.wip_progress }}%; height:100%; background:#2563eb; border-radius:3px;"></div>
+                        </div>
+                        <span style="font-size:11px; color:#6b7280;">{{ o.wip_progress }}%</span>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的生产订单</div>
+    {% endif %}
+</div>
+
+<!-- 7. 关联交付和收入 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">🚚 7. 关联交付记录（{{ deliveries|length }}个）</h3>
+    {% if deliveries %}
+    <table class="data-table">
+        <thead><tr><th>交付编号</th><th>市场团队</th><th>客户</th><th>数量</th><th>交付日期</th><th>用途</th><th>状态</th></tr></thead>
+        <tbody>
+            {% for d in deliveries %}
+            <tr>
+                <td class="cell-bold mono">{{ d.delivery_no }}</td>
+                <td>{{ d.market_team or '-' }}</td>
+                <td>{{ d.customer or '-' }}</td>
+                <td class="mono">{{ d.quantity }} 套</td>
+                <td class="mono">{{ d.delivery_date or '-' }}</td>
+                <td style="max-width:150px; font-size:12px; color:#6b7280;">{{ d.purpose[:30] if d.purpose else '-' }}{% if d.purpose and d.purpose|length > 30 %}...{% endif %}</td>
+                <td><span class="status-tag status-{{ d.status }}">{{ d.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的交付记录</div>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">💰 8. 关联收入确认（{{ revenues|length }}个）</h3>
+    {% if revenues %}
+    <table class="data-table">
+        <thead><tr><th>确认编号</th><th>客户</th><th>合同号</th><th>总金额</th><th>已确认</th><th>确认日期</th><th>状态</th></tr></thead>
+        <tbody>
+            {% for r in revenues %}
+            <tr>
+                <td class="cell-bold mono">{{ r.confirm_no }}</td>
+                <td>{{ r.customer or '-' }}</td>
+                <td class="mono">{{ r.contract_no or '-' }}</td>
+                <td class="mono" style="color:#dc2626; font-weight:600;">¥{{ '%.2f'|format(r.amount) }}</td>
+                <td class="mono" style="color:#16a34a; font-weight:600;">¥{{ '%.2f'|format(r.confirmed_amount) }}</td>
+                <td class="mono">{{ r.confirm_date or '-' }}</td>
+                <td><span class="status-tag status-{{ r.status }}">{{ r.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无关联的收入确认</div>
+    {% endif %}
+</div>
+
+<!-- 9. 需求评审记录 -->
+<div class="panel">
+    <h3 class="panel-title" style="font-size:15px; font-weight:600; margin-bottom:12px; color:#111827;">📝 9. 需求评审记录（{{ reviews|length }}条）</h3>
+    {% if reviews %}
+    <table class="data-table">
+        <thead><tr><th>评审人</th><th>评审日期</th><th>评审结论</th><th>建议优先级</th><th>建议版本</th><th>评审意见</th></tr></thead>
+        <tbody>
+            {% for rv in reviews %}
+            <tr>
+                <td>{{ rv.reviewer or '-' }}</td>
+                <td class="mono">{{ rv.review_date or '-' }}</td>
+                <td><span class="status-tag status-{{ rv.conclusion }}">{{ rv.conclusion }}</span></td>
+                <td><span class="priority priority-{{ rv.priority_suggested }}">{{ rv.priority_suggested or '-' }}</span></td>
+                <td class="mono">{{ rv.version_suggested or '-' }}</td>
+                <td style="max-width:250px; font-size:12px; color:#6b7280;">{{ rv.opinion[:50] if rv.opinion else '-' }}{% if rv.opinion and rv.opinion|length > 50 %}...{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-cell" style="padding:24px; text-align:center; color:#9ca3af;">暂无需求评审记录</div>
+    {% endif %}
+</div>
+
+<style>
+.detail-item { display:flex; flex-direction:column; gap:4px; }
+.panel-title { font-size:16px; font-weight:600; margin-bottom:16px; color:#111827; }
+.mono { font-family: monospace; }
+.empty-cell { color:#9ca3af; }
+.trace-node { transition: transform 0.2s; }
+.trace-node:hover { transform: translateY(-2px); box-shadow:0 4px 12px rgba(0,0,0,0.1); }
+</style>
+{% endblock %}

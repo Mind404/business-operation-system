@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}质量检测 - 业务运转系统{% endblock %}
+{% block page_title %}质量检测{% endblock %}
+
+{% block header_actions %}
+{% if tab == 'inspections' and can_write('quality') %}
+<a href="{{ url_for('quality_add') }}" class="btn btn-primary">+ 新增检验记录</a>
+<div class="batch-actions">
+    <a href="{{ url_for('download_template', table_name='quality_inspections') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
+    <form method="POST" action="{{ url_for('excel_import', table_name='quality_inspections') }}" enctype="multipart/form-data" style="display:inline;">
+        <label class="btn btn-success file-input-label" title="选择Excel文件批量导入">
+            📤 批量导入
+            <input type="file" name="excel_file" accept=".xlsx,.xls" required onchange="if(confirm('确定要导入这个Excel文件吗？')) this.form.submit();">
+        </label>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="tab-bar">
+    <a href="{{ url_for('quality_dashboard', tab='inspections') }}" class="tab-item {% if tab == 'inspections' %}active{% endif %}">✅ 检验记录</a>
+    <a href="{{ url_for('quality_dashboard', tab='defects') }}" class="tab-item {% if tab == 'defects' %}active{% endif %}">🔧 不合格品处理</a>
+</div>
+
+{% if tab == 'inspections' %}
+<!-- 质量统计 -->
+<div class="stats-grid stats-small">
+    <div class="stat-card stat-teal">
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-label">检验总数</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid #10b981">
+        <div class="stat-value">{{ stats.pass }}</div>
+        <div class="stat-label">合格批次</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid #ef4444">
+        <div class="stat-value">{{ stats.fail }}</div>
+        <div class="stat-label">不合格批次</div>
+    </div>
+    <div class="stat-card" style="border-left:4px solid #6366f1">
+        <div class="stat-value">{{ '%.1f'|format(stats.avg_rate) }}%</div>
+        <div class="stat-label">平均良品率</div>
+    </div>
+</div>
+
+<div class="panel">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>检验单号</th>
+                <th>类型</th>
+                <th>产品</th>
+                <th>生产订单</th>
+                <th>检验员</th>
+                <th>抽样数</th>
+                <th>合格数</th>
+                <th>不合格数</th>
+                <th>良品率</th>
+                <th>结果</th>
+                <th>检验日期</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for q in inspections %}
+            <tr>
+                <td class="mono">{{ q.inspection_no }}</td>
+                <td><span class="tag tag-{{ q.inspection_type }}">{{ q.inspection_type }}</span></td>
+                <td>{{ q.product_name or '-' }}</td>
+                <td class="mono text-sm">{{ q.order_no or '-' }}</td>
+                <td>{{ q.inspector or '-' }}</td>
+                <td>{{ q.sample_quantity }}</td>
+                <td>{{ q.pass_quantity }}</td>
+                <td class="{% if q.fail_quantity > 0 %}text-danger{% endif %}">{{ q.fail_quantity }}</td>
+                <td class="cell-bold {% if q.pass_rate and q.pass_rate < 95 %}text-danger{% endif %}">{{ q.pass_rate }}%</td>
+                <td><span class="status-tag status-{{ q.result }}">{{ q.result }}</span></td>
+                <td class="mono text-sm">{{ q.inspection_date }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="11" class="empty-cell">暂无检验记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% elif tab == 'defects' %}
+<div class="panel">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>关联检验单</th>
+                <th>产品</th>
+                <th>良品率</th>
+                <th>缺陷类型</th>
+                <th>根本原因</th>
+                <th>处理方式</th>
+                <th>责任人</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for d in defects %}
+            <tr>
+                <td class="mono">#{{ d.id }}</td>
+                <td class="mono">{{ d.inspection_no }}</td>
+                <td>{{ d.product_name or '-' }}</td>
+                <td class="text-danger">{{ d.pass_rate }}%</td>
+                <td>{{ d.defect_type or '-' }}</td>
+                <td class="text-sm">{{ d.root_cause or '待分析' }}</td>
+                <td class="text-sm">{{ d.handling_method or '待处理' }}</td>
+                <td>{{ d.responsible_person or '-' }}</td>
+                <td><span class="status-tag status-{{ d.status }}">{{ d.status }}</span></td>
+                <td>
+                    {% if d.status == '待处理' and can_write('quality') %}
+                    <form method="post" action="{{ url_for('defect_close', did=d.id) }}" class="inline-form">
+                        <input type="text" name="root_cause" placeholder="根因" class="input-sm" required>
+                        <input type="text" name="handling_method" placeholder="处理方式" class="input-sm" required>
+                        <button type="submit" class="btn btn-sm btn-primary">关闭</button>
+                    </form>
+                    {% elif d.status == '待处理' %}
+                    <span class="text-sm text-muted">待处理（只读）</span>
+                    {% else %}
+                    <span class="text-sm text-muted">已关闭</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="empty-cell">暂无不合格品处理记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<div class="panel panel-tip">
+    <div class="tip-content">
+        <strong>💡 质量检测流程：</strong>
+        ①进料检验IQC（物料上线前）→ ②生产巡检IPQC（生产过程中）→ ③回货测试OQC（生产完成后）→
+        ④良品率判定（≥95%为合格）→ ⑤不合格品启动8D根因追溯，形成测试报告后发起入库审批。
+    </div>
+</div>
+{% endblock %}

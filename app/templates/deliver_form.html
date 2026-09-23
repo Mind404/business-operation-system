@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}领用交付 - 业务运转系统{% endblock %}
+{% block page_title %}领用交付{% endblock %}
+
+{% block content %}
+<div class="panel form-panel">
+    <form method="post" class="form-grid">
+        <div class="form-group">
+            <label>关联产品</label>
+            <select name="product_id">
+                <option value="">-- 请选择 --</option>
+                {% for p in products %}
+                <option value="{{ p.id }}">{{ p.name }} ({{ p.model or '' }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>领用市场团队 <span class="required">*</span></label>
+            <input type="text" name="market_team" required placeholder="例如：华东市场团队">
+        </div>
+        <div class="form-group">
+            <label>领用数量</label>
+            <input type="number" name="quantity" value="0" min="0">
+        </div>
+        <div class="form-group">
+            <label>交付客户</label>
+            <input type="text" name="customer" placeholder="客户名称">
+        </div>
+        <div class="form-group">
+            <label>交付日期</label>
+            <input type="date" name="delivery_date">
+        </div>
+        <div class="form-group form-full">
+            <label>用途说明</label>
+            <input type="text" name="purpose" placeholder="例如：XX项目样机交付、客户测试验证等">
+        </div>
+        <div class="form-group form-full">
+            <label>客户反馈（可选）</label>
+            <textarea name="feedback" rows="2" placeholder="交付后客户反馈、使用情况、后续需求等"></textarea>
+        </div>
+        <div class="form-actions form-full">
+            <a href="{{ url_for('delivery_dashboard', tab='deliveries') }}" class="btn btn-outline">取消</a>
+            <button type="submit" class="btn btn-primary">记录交付</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

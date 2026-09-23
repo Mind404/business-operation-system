@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+{% block title %}生产管理 - 业务运转系统{% endblock %}
+{% block page_title %}生产管理{% endblock %}
+
+{% block header_actions %}
+{% if can_write('production') %}
+<a href="{{ url_for('schedule_add') }}" class="btn btn-primary">+ 新增排程</a>
+<a href="{{ url_for('production_order_add') }}" class="btn btn-outline">+ 生产订单</a>
+<a href="{{ url_for('requisition_add') }}" class="btn btn-outline">+ 物料领用</a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<style>
+/* ===== 生产管理看板样式（参考溯源平台看板风格） ===== */
+.pm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 22px; }
+.pm-stat { position: relative; border-radius: 12px; padding: 16px 18px; color: #fff; overflow: hidden; min-height: 88px; box-shadow: 0 4px 14px rgba(15,23,42,.08); }
+.pm-stat::after { content: ''; position: absolute; right: -22px; top: -22px; width: 90px; height: 90px; border-radius: 50%; background: rgba(255,255,255,.12); }
+.pm-stat .v { font-size: 30px; font-weight: 700; line-height: 1.15; letter-spacing: .5px; }
+.pm-stat .l { font-size: 12px; opacity: .9; margin-top: 4px; }
+.pm-stat .sub { font-size: 11px; opacity: .75; margin-top: 2px; }
+.pm-s-blue { background: linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%); }
+.pm-s-cyan { background: linear-gradient(135deg,#0891b2 0%,#0e7490 100%); }
+.pm-s-green { background: linear-gradient(135deg,#059669 0%,#047857 100%); }
+.pm-s-orange { background: linear-gradient(135deg,#d97706 0%,#b45309 100%); }
+.pm-s-purple { background: linear-gradient(135deg,#7c3aed 0%,#6d28d9 100%); }
+.pm-s-red { background: linear-gradient(135deg,#dc2626 0%,#b91c1c 100%); }
+
+.pm-section { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
+.pm-section-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #f0f2f5; }
+.pm-section-title { font-size: 15px; font-weight: 600; color: #1f2937; display: flex; align-items: center; gap: 8px; }
+.pm-section-title .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.pm-section-extra { font-size: 12px; color: #9ca3af; }
+
+/* 批次卡片 */
+.pm-batch { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; padding: 16px 18px; }
+.pm-card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; background: #fbfcfe; position: relative; }
+.pm-card-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
+.pm-card-title { font-weight: 600; font-size: 14px; color: #111827; }
+.pm-card-title .model { color: #6b7280; font-weight: 400; font-size: 12px; margin-left: 6px; }
+.pm-card-sub { font-size: 12px; color: #6b7280; margin-top: 3px; }
+.pm-tag { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+.pm-tag-done { background: #d1fae5; color: #065f46; }
+.pm-tag-active { background: #dbeafe; color: #1e40af; }
+.pm-tag-plan { background: #f3f4f6; color: #6b7280; }
+.pm-card-meta { display: flex; gap: 16px; font-size: 12px; color: #374151; margin-bottom: 10px; flex-wrap: wrap; }
+.pm-card-meta b { font-weight: 600; color: #111827; }
+.pm-proc-title { font-size: 11px; color: #9ca3af; margin-bottom: 6px; letter-spacing: .5px; }
+.pm-proc { display: flex; flex-wrap: wrap; gap: 6px; }
+.pm-step { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
+.pm-step.done { background: #ecfdf5; color: #059669; border-color: #a7f3d0; }
+.pm-step.active { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
+.pm-step .tick { font-weight: 700; }
+.pm-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e5e7eb; }
+.pm-shortage { color: #dc2626; font-size: 12px; font-weight: 500; }
+.pm-ok { color: #059669; font-size: 12px; }
+
+/* 表格 */
+.pm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pm-table th { text-align: left; padding: 10px 14px; font-size: 12px; color: #6b7280; font-weight: 500; background: #f9fafb; border-bottom: 1px solid #eef0f3; white-space: nowrap; }
+.pm-table td { padding: 10px 14px; border-bottom: 1px solid #f3f4f6; color: #374151; vertical-align: middle; }
+.pm-table tr:hover td { background: #fafbfd; }
+.pm-table .mono { font-family: monospace; font-size: 12px; }
+.pm-table .cell-bold { font-weight: 600; color: #111827; }
+.pm-status { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+.pm-status-已完成, .pm-status-已入库 { background: #d1fae5; color: #065f46; }
+.pm-status-生产中 { background: #dbeafe; color: #1e40af; }
+.pm-status-待排产, .pm-status-规划中 { background: #f3f4f6; color: #6b7280; }
+.pm-status-待审批 { background: #fef3c7; color: #92400e; }
+.pm-two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 1080px) { .pm-two { grid-template-columns: 1fr; } }
+.pm-mini-list { max-height: 300px; overflow-y: auto; }
+.pm-mini-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
+.pm-mini-item:last-child { border-bottom: none; }
+.pm-mini-name { font-weight: 500; color: #374151; }
+.pm-mini-num { font-weight: 600; }
+.pm-mini-num.low { color: #dc2626; }
+.pm-mini-tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; margin-left: 8px; }
+.pm-empty { text-align: center; color: #9ca3af; padding: 28px 14px; font-size: 13px; }
+.pm-tip { display: flex; gap: 10px; padding: 14px 18px; background: linear-gradient(135deg,#eff6ff,#f0f9ff); font-size: 12.5px; color: #1e40af; line-height: 1.7; border-radius: 0 0 12px 12px; }
+.input-sm { padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 5px; font-size: 12px; }
+.input-w50 { width: 50px; }
+.inline-form { display: inline-flex; gap: 6px; align-items: center; }
+.btn-sm { padding: 4px 12px; font-size: 12px; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; color: #374151; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn-sm:hover { border-color: #3b82f6; color: #3b82f6; }
+.btn-ok { background: #10b981; color: #fff; border-color: #10b981; }
+.btn-ok:hover { background: #059669; color: #fff; }
+.btn-primary { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn-outline { background: #fff; border: 1px solid #d1d5db; color: #374151; border-radius: 6px; padding: 8px 18px; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-block; }
+.btn-outline:hover { border-color: #3b82f6; color: #3b82f6; }
+.pm-progress-wrap { display: flex; align-items: center; min-width: 130px; }
+.pm-progress { height: 6px; background: #eef2f7; border-radius: 3px; overflow: hidden; flex: 1; margin-right: 10px; }
+.pm-progress-fill { height: 100%; background: linear-gradient(90deg,#3b82f6,#2563eb); border-radius: 3px; transition: width .4s; }
+.pm-pct { font-size: 12px; font-weight: 600; color: #2563eb; }
+</style>
+
+<!-- ========== 统计看板 ========== -->
+<div class="pm-stats">
+    <div class="pm-stat pm-s-blue">
+        <div class="v">{{ stats.schedule_total }}</div>
+        <div class="l">生产批次（排程）</div>
+        <div class="sub">进行中 {{ stats.schedule_active }} · 已完成 {{ stats.schedule_done }}</div>
+    </div>
+    <div class="pm-stat pm-s-cyan">
+        <div class="v">{{ stats.pending_delivery }}</div>
+        <div class="l">待交付套数</div>
+        <div class="sub">未完成批次合计</div>
+    </div>
+    <div class="pm-stat pm-s-green">
+        <div class="v">{{ stats.process_done }}/{{ stats.process_total }}</div>
+        <div class="l">工序完成</div>
+        <div class="sub">{% if stats.process_total %}完成率 {{ (stats.process_done * 100 / stats.process_total) | round(0) }}%{% else %}暂无工序{% endif %}</div>
+    </div>
+    <div class="pm-stat pm-s-purple">
+        <div class="v">{{ stats.order_total }}</div>
+        <div class="l">生产订单</div>
+        <div class="sub">进行中 {{ stats.order_active }}</div>
+    </div>
+    <div class="pm-stat pm-s-orange">
+        <div class="v">{{ stats.shortage_total }}</div>
+        <div class="l">物料缺口</div>
+        <div class="sub">待采购物料项</div>
+    </div>
+    <div class="pm-stat pm-s-red">
+        <div class="v">{{ stats.pending_requisitions }}</div>
+        <div class="l">待审批领用</div>
+        <div class="sub">物料领用申请</div>
+    </div>
+</div>
+
+<!-- ========== 生产批次进度（成果展示核心） ========== -->
+<div class="pm-section">
+    <div class="pm-section-head">
+        <div class="pm-section-title"><span class="dot" style="background:#2563eb;"></span>生产批次进度</div>
+        <div class="pm-section-extra">按用户需求反向规划 · 点击"查看详情"可调整工序时间节点与物料计划</div>
+    </div>
+    <div class="pm-batch">
+        {% for s in schedules %}
+        <div class="pm-card">
+            <div class="pm-card-head">
+                <div>
+                    <div class="pm-card-title">{{ s.product_name }} <span class="model">{{ s.model or '' }}</span></div>
+                    <div class="pm-card-sub">{{ s.schedule_no }}{% if s.flash_version_no %} · 刷新版本 {{ s.flash_version_no }}{% endif %}</div>
+                </div>
+                <span class="pm-tag {% if s.status == '已完成' %}pm-tag-done{% elif s.status == '进行中' %}pm-tag-active{% else %}pm-tag-plan{% endif %}">{{ s.status }}</span>
+            </div>
+            <div class="pm-card-meta">
+                <span>数量 <b>{{ s.quantity }} 套</b></span>
+                <span>周期 <b>{{ s.plan_start or '—' }} ~ {{ s.plan_finish or '—' }}</b></span>
+                {% if s.req_title %}<span>需求 <b style="font-weight:500;">{{ s.req_title[:14] }}{% if s.req_title|length > 14 %}…{% endif %}</b></span>{% endif %}
+            </div>
+            <div class="pm-proc-title">工序进度（{{ s.process_done }}/{{ s.process_count }}）</div>
+            <div class="pm-proc">
+                {% set procs = schedule_processes.get(s.id, []) %}
+                {% for p in procs %}
+                <span class="pm-step {% if p.status == '已完成' %}done{% elif p.status == '进行中' %}active{% endif %}">
+                    {% if p.status == '已完成' %}<span class="tick">✓</span>{% endif %}{{ p.process_name }}
+                </span>
+                {% else %}
+                <span style="font-size:12px;color:#9ca3af;">暂无工序，请在详情中生成</span>
+                {% endfor %}
+            </div>
+            <div class="pm-card-foot">
+                {% if s.shortage_count > 0 %}
+                <span class="pm-shortage">⚠ 缺 {{ s.shortage_count }} 项物料待采购</span>
+                {% else %}
+                <span class="pm-ok">✓ 物料就绪</span>
+                {% endif %}
+                <a href="{{ url_for('schedule_detail', sid=s.id) }}" class="btn-sm">查看详情 →</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="pm-empty" style="grid-column:1/-1;">暂无生产排程，点击右上角"新增排程"按用户需求反向规划</div>
+        {% endfor %}
+    </div>
+    <div class="pm-tip">
+        <span>💡</span>
+        <span>新增排程时系统自动：①按BOM表计算关键物料需求并查询库存状态；②自动生成6道标准工序（SMT贴片→回流焊接→AOI检测→功能测试→外观检验→包装入库），可在详情中调整时间节点。</span>
+    </div>
+</div>
+
+<!-- ========== 生产订单 ========== -->
+<div class="pm-section">
+    <div class="pm-section-head">
+        <div class="pm-section-title"><span class="dot" style="background:#0891b2;"></span>生产订单执行</div>
+        <div class="pm-section-extra">WIP进度可视化跟踪 · 供应商排产反馈</div>
+    </div>
+    <table class="pm-table">
+        <thead>
+            <tr><th>订单号</th><th>产品</th><th>关联需求</th><th>数量</th><th>计划时间</th><th style="min-width:150px;">进度</th><th>状态</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+            {% for o in orders %}
+            <tr>
+                <td class="mono">{{ o.order_no }}</td>
+                <td class="cell-bold">{{ o.product_name or '-' }}</td>
+                <td style="font-size:12px;">{{ o.req_title or '-' }}</td>
+                <td>{{ o.quantity }}</td>
+                <td class="mono" style="font-size:12px;">{{ o.plan_start or '-' }}<br>{{ o.plan_finish or '-' }}</td>
+                <td>
+                    <div class="pm-progress-wrap">
+                        <div class="pm-progress"><div class="pm-progress-fill" style="width:{{ o.wip_progress }}%"></div></div>
+                        <span class="pm-pct">{{ o.wip_progress }}%</span>
+                    </div>
+                </td>
+                <td><span class="pm-status pm-status-{{ o.status }}">{{ o.status }}</span></td>
+                <td>
+                    {% if can_write('production') %}
+                    <form method="post" action="{{ url_for('production_order_update', oid=o.id) }}" class="inline-form">
+                        <select name="status" class="input-sm">
+                            <option value="待排产" {% if o.status == '待排产' %}selected{% endif %}>待排产</option>
+                            <option value="生产中" {% if o.status == '生产中' %}selected{% endif %}>生产中</option>
+                            <option value="已完成" {% if o.status == '已完成' %}selected{% endif %}>已完成</option>
+                            <option value="已入库" {% if o.status == '已入库' %}selected{% endif %}>已入库</option>
+                        </select>
+                        <input type="number" name="wip_progress" value="{{ o.wip_progress }}" min="0" max="100" class="input-sm input-w50">
+                        <button type="submit" class="btn-sm btn-ok">更新</button>
+                    </form>
+                    {% else %}<span style="font-size:12px;color:#9ca3af;">只读</span>{% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="pm-empty">暂无生产订单</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- ========== 回货检测（生产第6步成果展示） ========== -->
+<div class="pm-section">
+    <div class="pm-section-head">
+        <div class="pm-section-title"><span class="dot" style="background:#059669;"></span>回货检测</div>
+        <div class="pm-section-extra">回货测试 → 测试报告 → 良品情况 → 发起入库（{{ stats.test_total }} 套已测 · 良品率 {% if stats.test_total %}{{ (stats.test_pass * 100 / stats.test_total) | round(1) }}%{% else %}-{% endif %}）</div>
+    </div>
+    <div class="pm-batch">
+        {% for b in test_batches %}
+        <div class="pm-card">
+            <div class="pm-card-head">
+                <div>
+                    <div class="pm-card-title">{{ b.product_name }}</div>
+                    <div class="pm-card-sub">{{ b.batch_no }}{% if b.schedule_no %} · {{ b.schedule_no }}{% endif %}</div>
+                </div>
+                <span class="pm-tag {% if b.status == '已完成' %}pm-tag-done{% else %}pm-tag-active{% endif %}">{{ b.status }}</span>
+            </div>
+            <div class="pm-card-meta">
+                <span>检测日期 <b>{{ b.test_date or '—' }}</b></span>
+                <span>检测 <b>{{ b.total_count }} 套</b></span>
+            </div>
+            <div style="margin-bottom:8px;">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                    <span>良品率</span>
+                    <span class="pm-pct">{{ (b.pass_count * 100 / b.total_count) | round(1) if b.total_count else 0 }}%</span>
+                </div>
+                <div class="pm-progress" style="height:8px;">
+                    <div class="pm-progress-fill" style="width:{{ (b.pass_count * 100 / b.total_count) | round(1) if b.total_count else 0 }}%; background:linear-gradient(90deg,#34d399,#059669);"></div>
+                </div>
+            </div>
+            <div class="pm-card-foot">
+                <span style="font-size:12px;color:#374151;">良品 <b style="color:#059669;">{{ b.pass_count }}</b> · 不良 <b style="color:#dc2626;">{{ b.fail_count }}</b></span>
+                <a href="{{ url_for('test_batch_detail', tid=b.id) }}" class="btn-sm">检测报告 →</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="pm-empty" style="grid-column:1/-1;">暂无回货检测记录，生产完成后在此形成测试报告与良品情况</div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- ========== 物料状态：库存 + 领用 ========== -->
+<div class="pm-two">
+    <div class="pm-section">
+        <div class="pm-section-head">
+            <div class="pm-section-title"><span class="dot" style="background:#d97706;"></span>关键物料库存</div>
+            <div class="pm-section-extra">低库存预警（&lt;50）</div>
+        </div>
+        <div class="pm-mini-list">
+            {% for item in inventory %}
+            <div class="pm-mini-item">
+                <div>
+                    <span class="pm-mini-name">{{ item.material_name }}</span>
+                    {% if item.is_key_material %}<span class="pm-mini-tag" style="background:#fef3c7;color:#92400e;">关键料</span>{% endif %}
+                    <span class="pm-mini-tag" style="background:#f3f4f6;color:#6b7280;">{{ item.location or '公司库房' }}</span>
+                </div>
+                <span class="pm-mini-num {% if item.quantity < 50 %}low{% endif %}">{{ item.quantity }} {{ item.unit }}</span>
+            </div>
+            {% else %}
+            <div class="pm-empty">暂无库存数据，可点击右上角"物料领用"或先登记库存</div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="pm-section">
+        <div class="pm-section-head">
+            <div class="pm-section-title"><span class="dot" style="background:#dc2626;"></span>物料领用申请</div>
+            <div class="pm-section-extra">待审批 {{ stats.pending_requisitions }} 条</div>
+        </div>
+        <div class="pm-mini-list">
+            {% for r in requisitions %}
+            <div class="pm-mini-item">
+                <div>
+                    <span class="pm-mini-name">{{ r.product_name or '—' }}</span>
+                    <span class="pm-mini-tag" style="background:#f3f4f6;color:#6b7280;">{{ r.requisition_no }}</span>
+                    <span class="pm-mini-tag" style="background:#f3f4f6;color:#6b7280;">{{ r.applicant or '-' }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="pm-mini-num">{{ r.total_quantity }}</span>
+                    {% if r.status == '待审批' and can_write('production') %}
+                    <form method="post" action="{{ url_for('requisition_approve', rid=r.id) }}" style="display:inline;" onsubmit="return confirm('确认审批通过？审批后将扣减对应库存。')">
+                        <button type="submit" class="btn-sm btn-ok">审批</button>
+                    </form>
+                    {% elif r.status == '待审批' %}
+                    <span class="pm-tag pm-tag-plan">待审批</span>
+                    {% else %}
+                    <span class="pm-status pm-status-{{ r.status }}">{{ r.status }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="pm-empty">暂无领用申请</div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="panel panel-tip" style="margin-top:20px;border:1px solid #e5e7eb;border-radius:12px;background:#fbfcfe;padding:16px 18px;">
+    <div class="tip-content" style="font-size:13px;color:#6b7280;line-height:1.8;">
+        <strong style="color:#374151;">💡 生产管理流程：</strong>
+        ①核实公司库房和供应商暂存物料数量 → ②库存齐套性检查（不匹配则缺料预警/采购/上报）→
+        ③提起关键物料领用流程，公司审批后领用 → ④物料交接生产供应商并记录 → ⑤供应商排产反馈生产计划 →
+        ⑥WIP进度可视化跟踪 → ⑦回货测试与质量审批 → ⑧入库与交付。
+    </div>
+</div>
+{% endblock %}

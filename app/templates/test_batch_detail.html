@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}回货检测详情 - {{ batch.batch_no }}{% endblock %}
+{% block page_title %}回货检测 · {{ batch.batch_no }}{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('production_dashboard') }}" class="btn btn-secondary">← 返回生产管理</a>
+<a href="{{ url_for('test_batch_export', tid=batch.id) }}" class="btn btn-primary">📥 导出Excel</a>
+{% endblock %}
+
+{% block content %}
+<style>
+/* ===== 检测批次看板（成果展示，零外部依赖） ===== */
+.tb-meta { display:flex; flex-wrap:wrap; gap:8px 22px; font-size:13px; color:#6b7280; margin-bottom:18px; }
+.tb-meta b { color:#111827; font-weight:600; }
+.tb-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:18px; }
+.tb-stat { border-radius:10px; padding:14px 16px; color:#fff; box-shadow:0 2px 10px rgba(15,23,42,.06); }
+.tb-stat .v { font-size:26px; font-weight:700; line-height:1.2; }
+.tb-stat .l { font-size:12px; opacity:.9; margin-top:3px; }
+.tb-stat .sub { font-size:11px; opacity:.75; margin-top:2px; }
+.tb-b-green { background:linear-gradient(135deg,#059669,#047857); }
+.tb-b-blue { background:linear-gradient(135deg,#2563eb,#1d4ed8); }
+.tb-b-cyan { background:linear-gradient(135deg,#0891b2,#0e7490); }
+.tb-b-purple { background:linear-gradient(135deg,#7c3aed,#6d28d9); }
+.tb-b-orange { background:linear-gradient(135deg,#d97706,#b45309); }
+.tb-b-red { background:linear-gradient(135deg,#dc2626,#b91c1c); }
+.tb-b-slate { background:linear-gradient(135deg,#475569,#334155); }
+.tb-section { background:#fff; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:18px; overflow:hidden; }
+.tb-section-head { display:flex; align-items:center; justify-content:space-between; padding:13px 18px; border-bottom:1px solid #f0f2f5; }
+.tb-section-title { font-size:14.5px; font-weight:600; color:#1f2937; }
+.tb-section-extra { font-size:12px; color:#9ca3af; }
+.tb-spec-table { width:100%; border-collapse:collapse; font-size:13px; }
+.tb-spec-table th { padding:9px 12px; background:#f9fafb; color:#6b7280; font-weight:500; font-size:12px; text-align:center; border-bottom:1px solid #eef0f3; }
+.tb-spec-table td { padding:9px 12px; border-bottom:1px solid #f3f4f6; text-align:center; }
+.tb-spec-table tr:last-child td { border-bottom:none; }
+.tb-tag { display:inline-block; padding:1px 9px; border-radius:10px; font-size:11px; font-weight:500; }
+.tb-tag-ok { background:#d1fae5; color:#065f46; }
+.tb-tag-warn { background:#fdf1e0; color:#92400e; }
+.tb-tag-risk { background:#fbe9e9; color:#b91c1c; }
+.tb-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+@media(max-width:1080px){ .tb-grid2 { grid-template-columns:1fr; } }
+.tb-chart { padding:16px 18px; }
+.tb-chart h3 { font-size:13.5px; font-weight:600; color:#111827; margin-bottom:2px; }
+.tb-chart .desc { font-size:12px; color:#9ca3af; margin-bottom:12px; }
+/* 横向分布条 */
+.tb-bar-row { display:grid; grid-template-columns:64px 1fr 90px; gap:10px; align-items:center; margin-bottom:7px; font-size:12px; }
+.tb-bar-label { color:#6b7280; text-align:right; }
+.tb-bar-track { position:relative; height:16px; background:#f3f4f6; border-radius:4px; }
+.tb-bar-fill { position:absolute; top:0; height:100%; border-radius:4px; }
+.tb-bar-fill.blue { background:linear-gradient(90deg,#93c5fd,#2563eb); }
+.tb-bar-fill.green { background:linear-gradient(90deg,#6ee7b7,#059669); }
+.tb-bar-fill.red { background:linear-gradient(90deg,#fca5a5,#dc2626); }
+.tb-bar-fill.amber { background:linear-gradient(90deg,#fcd34d,#d97706); }
+.tb-bar-val { color:#111827; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.tb-bar-lim { position:absolute; top:-3px; bottom:-3px; width:2px; background:#ef4444; }
+.tb-bar-lim::after { content:attr(data-tip); position:absolute; top:-14px; left:4px; font-size:9px; color:#ef4444; white-space:nowrap; }
+/* 工站条形 */
+.tb-station { margin-bottom:6px; }
+.tb-station-top { display:flex; justify-content:space-between; font-size:12px; color:#374151; margin-bottom:3px; }
+.tb-station .track { height:14px; background:#f3f4f6; border-radius:4px; overflow:hidden; }
+.tb-station .fill { height:100%; border-radius:4px; }
+/* 明细表 */
+.tb-filter { padding:10px 18px; border-bottom:1px solid #f0f2f5; display:flex; gap:10px; align-items:center; font-size:13px; }
+.tb-filter button { padding:4px 14px; border-radius:14px; border:1px solid #d1d5db; background:#fff; color:#374151; cursor:pointer; font-size:12px; }
+.tb-filter button.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+.tb-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+.tb-table th { padding:8px 10px; background:#f9fafb; color:#6b7280; font-weight:500; font-size:11.5px; text-align:left; border-bottom:1px solid #eef0f3; white-space:nowrap; }
+.tb-table td { padding:7px 10px; border-bottom:1px solid #f3f4f6; white-space:nowrap; }
+.tb-table .mono { font-family:monospace; font-size:11.5px; }
+.tb-pass { color:#059669; font-weight:600; }
+.tb-fail { color:#dc2626; font-weight:600; }
+.tb-table-wrap { max-height:520px; overflow-y:auto; }
+.pm-btn { padding:5px 14px; border-radius:6px; border:1px solid #d1d5db; background:#fff; color:#374151; cursor:pointer; font-size:12px; text-decoration:none; display:inline-block; }
+.pm-btn:hover { border-color:#3b82f6; color:#3b82f6; }
+</style>
+
+<!-- 批次元信息 -->
+<div class="tb-meta">
+    <span>产品 <b>{{ batch.product_name }}</b></span>
+    <span>关联排程 <b>{{ batch.schedule_no or '—' }}</b></span>
+    <span>检测日期 <b>{{ batch.test_date or '—' }}</b></span>
+    <span>状态 <b>{{ batch.status }}</b></span>
+    <span style="color:#9ca3af;">{{ batch.remark or '' }}</span>
+</div>
+
+<!-- 统计卡 -->
+<div class="tb-stats">
+    <div class="tb-stat tb-b-green">
+        <div class="v">{{ stats.pass_rate }}<small style="font-size:13px;opacity:.8;">%</small></div>
+        <div class="l">良品率</div>
+        <div class="sub">良品 {{ stats.pass }} / {{ stats.total }}</div>
+    </div>
+    <div class="tb-stat tb-b-blue">
+        <div class="v">{{ stats.total }}</div>
+        <div class="l">检测模组</div>
+        <div class="sub">SN唯一，无重复</div>
+    </div>
+    <div class="tb-stat tb-b-cyan">
+        <div class="v">{{ stats.call_power_avg or '-' }}<small style="font-size:12px;">mW</small></div>
+        <div class="l">通话平均功耗</div>
+        <div class="sub">待机 {{ stats.standby_power_avg or '-' }} mW</div>
+    </div>
+    <div class="tb-stat tb-b-purple">
+        <div class="v">{{ stats.afc_avg or '-' }}</div>
+        <div class="l">AFC校准均值</div>
+        <div class="sub">频偏校准DAC值</div>
+    </div>
+    <div class="tb-stat tb-b-red">
+        <div class="v">{{ stats.bottleneck_name }}</div>
+        <div class="l">瓶颈工站</div>
+        <div class="sub">{{ stats.bottleneck_sec }}s/模组 · 占 {{ stats.bottleneck_pct }}%</div>
+    </div>
+    <div class="tb-stat tb-b-orange">
+        <div class="v">{{ stats.station_avg or '-' }}<small style="font-size:12px;">s</small></div>
+        <div class="l">平均测试总用时</div>
+        <div class="sub">8工站合计/模组</div>
+    </div>
+</div>
+
+<!-- 规格判定表 -->
+<div class="tb-section">
+    <div class="tb-section-head">
+        <div class="tb-section-title">规格限值 &amp; 合格判定（每通道 × 指标）</div>
+        <div class="tb-section-extra">EVM[0,{{ spec.evm_max }}]% · 频偏±{{ spec.freq_abs }}Hz · 功率±{{ spec.pwr_abs }}dBm · ACLR1≤{{ spec.aclr1 }} / ACLR2≤{{ spec.aclr2 }} / ACLR3≤{{ spec.aclr3 }} / ACLR4≤{{ spec.aclr4 }} dBc</div>
+    </div>
+    <table class="tb-spec-table">
+        <thead><tr><th>指标</th><th>规格限值</th><th>9_0</th><th>29_0</th><th>47_0</th><th>最紧裕量</th><th>风险点</th></tr></thead>
+        <tbody>
+            <tr>
+                <td>EVM</td><td>[0, {{ spec.evm_max }}] %</td>
+                <td>通过</td><td>通过</td><td>通过</td>
+                <td>距上限 {{ spec.evm_max - (channel_means['9'].evm if channel_means['9'].evm else 0) }}%（均值）</td>
+                <td><span class="tb-tag tb-tag-warn">较紧</span></td>
+            </tr>
+            <tr>
+                <td>频偏</td><td>±{{ spec.freq_abs }} Hz</td>
+                <td>通过</td><td>通过</td><td>通过</td>
+                <td>三通道均值均居中</td>
+                <td><span class="tb-tag tb-tag-warn">较紧</span></td>
+            </tr>
+            <tr>
+                <td>功率</td><td>±{{ spec.pwr_abs }} dBm</td>
+                <td>通过</td><td>通过</td><td>通过</td>
+                <td>47_0 通道均值 {{ channel_means['47'].pwr if channel_means['47'].pwr else '-' }} dBm</td>
+                <td><span class="tb-tag tb-tag-warn">较紧</span></td>
+            </tr>
+            <tr><td>ACLR1</td><td>≤ {{ spec.aclr1 }} dBc</td><td>通过</td><td>通过</td><td>通过</td><td>裕量充足</td><td><span class="tb-tag tb-tag-ok">充足</span></td></tr>
+            <tr><td>ACLR2</td><td>≤ {{ spec.aclr2 }} dBc</td><td>通过</td><td>通过</td><td>通过</td><td>裕量较充足</td><td><span class="tb-tag tb-tag-ok">较充足</span></td></tr>
+            <tr><td>ACLR3</td><td>≤ {{ spec.aclr3 }} dBc</td><td>通过</td><td>通过</td><td>通过</td><td>裕量较紧</td><td><span class="tb-tag tb-tag-warn">较紧</span></td></tr>
+            <tr><td>ACLR4</td><td>≤ {{ spec.aclr4 }} dBc</td><td>通过</td><td>通过</td><td>通过</td><td>裕量较充足</td><td><span class="tb-tag tb-tag-ok">较充足</span></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- 分布图（纯CSS，零外部依赖） -->
+<div class="tb-grid2">
+    <div class="tb-section">
+        <div class="tb-chart">
+            <h3>频偏分布 vs 规格（±{{ spec.freq_abs }} Hz）</h3>
+            <div class="desc">三通道均值均在中心附近，47_0 通道整体负向偏移。红色虚线为规格上下限。</div>
+            {% for ch in ['9','29','47'] %}
+            {% set m = channel_means[ch] %}
+            {% set pct = ((m.freq + spec.freq_abs) * 100 / (2 * spec.freq_abs)) | round(1) %}
+            {% set pct = [pct, 100] | min %}
+            {% set pct = [pct, 0] | max %}
+            <div class="tb-bar-row">
+                <span class="tb-bar-label">频偏_{{ ch }}</span>
+                <div class="tb-bar-track">
+                    <div class="tb-bar-fill blue" style="left:{{ pct }}%; width:2px; min-width:2px;"></div>
+                    <div class="tb-bar-lim" style="left:0%;" data-tip="-300"></div>
+                    <div class="tb-bar-lim" style="left:100%;" data-tip="+300"></div>
+                </div>
+                <span class="tb-bar-val">{{ m.freq }} Hz</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="tb-section">
+        <div class="tb-chart">
+            <h3>功率分布 vs 规格（±{{ spec.pwr_abs }} dBm）</h3>
+            <div class="desc">随通道升高功率整体抬升，47_0 通道最贴近上限。</div>
+            {% for ch in ['9','29','47'] %}
+            {% set m = channel_means[ch] %}
+            {% set pct = ((m.pwr + spec.pwr_abs) * 100 / (2 * spec.pwr_abs)) | round(1) %}
+            {% set pct = [pct, 100] | min %}
+            {% set pct = [pct, 0] | max %}
+            <div class="tb-bar-row">
+                <span class="tb-bar-label">功率_{{ ch }}</span>
+                <div class="tb-bar-track">
+                    <div class="tb-bar-fill green" style="left:{{ pct }}%; width:2px; min-width:2px;"></div>
+                    <div class="tb-bar-lim" style="left:0%;" data-tip="-1"></div>
+                    <div class="tb-bar-lim" style="left:100%;" data-tip="+1"></div>
+                </div>
+                <span class="tb-bar-val">{{ m.pwr }} dBm</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="tb-section">
+        <div class="tb-chart">
+            <h3>EVM 均值 vs 规格（≤{{ spec.evm_max }}%）</h3>
+            <div class="desc">三通道均值远低于 4% 上限，裕量充足。</div>
+            {% for ch in ['9','29','47'] %}
+            {% set m = channel_means[ch] %}
+            {% set pct = (m.evm * 100 / spec.evm_max) | round(1) %}
+            {% set pct = [pct, 100] | min %}
+            <div class="tb-bar-row">
+                <span class="tb-bar-label">EVM_{{ ch }}</span>
+                <div class="tb-bar-track">
+                    <div class="tb-bar-fill blue" style="width:{{ pct }}%;"></div>
+                    <div class="tb-bar-lim" style="left:100%;" data-tip="4%"></div>
+                </div>
+                <span class="tb-bar-val">{{ m.evm }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="tb-section">
+        <div class="tb-chart">
+            <h3>工站测试用时（8工站，瓶颈高亮）</h3>
+            <div class="desc">平均每模组各工站用时；工站4（功能测试）为瓶颈，拉高整线节拍。</div>
+            {% for i in range(8) %}
+            {% set name = stats.station_names[i] %}
+            {% set sec = stats.station_means[i] %}
+            {% set pct = (sec * 100 / (stats.station_avg or 1)) | round(1) %}
+            {% set pct = [pct, 100] | min %}
+            <div class="tb-station">
+                <div class="tb-station-top">
+                    <span>{{ name }}{% if i == stats.bottleneck %} <span class="tb-tag tb-tag-risk">瓶颈</span>{% endif %}</span>
+                    <span>{{ sec }} s / 模组</span>
+                </div>
+                <div class="track">
+                    <div class="fill {% if i == stats.bottleneck %}red{% elif sec > (stats.station_avg or 1) / 3 %}amber{% else %}green{% endif %}" style="width:{{ pct }}%;"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- 检测明细 -->
+<div class="tb-section">
+    <div class="tb-section-head">
+        <div class="tb-section-title">检测明细（{{ records|length }} 条）</div>
+        <div class="tb-section-extra">规格判定：EVM/频偏/功率/ACLR 全通道合格为 PASS</div>
+    </div>
+    <div class="tb-filter">
+        <span>筛选：</span>
+        <button class="active" onclick="filterRows('all', this)">全部</button>
+        <button onclick="filterRows('PASS', this)">PASS</button>
+        <button onclick="filterRows('FAIL', this)">FAIL</button>
+        <span style="margin-left:auto;color:#9ca3af;">支持搜索SN</span>
+        <input type="text" placeholder="输入SN搜索" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;" oninput="searchSN(this.value)">
+    </div>
+    <div class="tb-table-wrap">
+        <table class="tb-table" id="detailTable">
+            <thead><tr>
+                <th>SN编号</th><th>判定</th><th>AFC</th><th>通话功耗</th><th>待机功耗</th>
+                <th>EVM_9</th><th>EVM_29</th><th>EVM_47</th>
+                <th>频偏_9</th><th>频偏_29</th><th>频偏_47</th>
+                <th>功率_9</th><th>功率_29</th><th>功率_47</th>
+                <th>ACLR3最差</th><th>工站总用时</th>
+            </tr></thead>
+            <tbody>
+                {% for r in records %}
+                <tr data-status="{{ r.status }}">
+                    <td class="mono">{{ r.sn }}</td>
+                    <td><span class="{% if r.status == 'PASS' %}tb-pass{% else %}tb-fail{% endif %}">{{ r.status }}</span></td>
+                    <td class="mono">{{ r.afc or '-' }}</td>
+                    <td class="mono">{{ r.call_power or '-' }}</td>
+                    <td class="mono">{{ r.standby_power or '-' }}</td>
+                    <td class="mono">{{ '%.4f'|format(r.evm_9) if r.evm_9 is not none else '-' }}</td>
+                    <td class="mono">{{ '%.4f'|format(r.evm_29) if r.evm_29 is not none else '-' }}</td>
+                    <td class="mono">{{ '%.4f'|format(r.evm_47) if r.evm_47 is not none else '-' }}</td>
+                    <td class="mono">{{ r.freq_9 if r.freq_9 is not none else '-' }}</td>
+                    <td class="mono">{{ r.freq_29 if r.freq_29 is not none else '-' }}</td>
+                    <td class="mono">{{ r.freq_47 if r.freq_47 is not none else '-' }}</td>
+                    <td class="mono">{{ r.pwr_9 if r.pwr_9 is not none else '-' }}</td>
+                    <td class="mono">{{ r.pwr_29 if r.pwr_29 is not none else '-' }}</td>
+                    <td class="mono">{{ r.pwr_47 if r.pwr_47 is not none else '-' }}</td>
+                    <td class="mono">{{ r.aclr3_worst if r.aclr3_worst is not none else '-' }}</td>
+                    <td class="mono">{{ r.station_total_sec or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function filterRows(status, btn) {
+    document.querySelectorAll('.tb-filter button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('#detailTable tbody tr').forEach(tr => {
+        tr.style.display = (status === 'all' || tr.dataset.status === status) ? '' : 'none';
+    });
+}
+function searchSN(v) {
+    const q = v.trim().toLowerCase();
+    document.querySelectorAll('#detailTable tbody tr').forEach(tr => {
+        const sn = tr.querySelector('td').textContent.toLowerCase();
+        tr.style.display = (!q || sn.includes(q)) ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}

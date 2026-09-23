@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}数据管理 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>数据管理</h1>
+    <p class="page-desc">数据沉淀、导出导入、数据字典 — 用于AI训练与数据分析</p>
+</div>
+
+<!-- 数据概览卡片 -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.overview.total_tables }}</div>
+        <div class="stat-label">数据表数量</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ '{:,}'.format(stats.overview.total_records) }}</div>
+        <div class="stat-label">总记录数</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.business_metrics.quality_pass_rate }}%</div>
+        <div class="stat-label">平均良品率</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.business_metrics.products_in_production }}</div>
+        <div class="stat-label">量产中产品</div>
+    </div>
+</div>
+
+<!-- 全库导出 -->
+<div class="card">
+    <div class="card-header">
+        <h3>全库导出</h3>
+        <span class="card-subtitle">一键导出全部业务数据，支持三种格式</span>
+    </div>
+    <div class="card-body">
+        <div class="export-grid">
+            <a href="{{ url_for('data_export_json') }}" class="export-card export-json">
+                <div class="export-icon">📄</div>
+                <div class="export-title">JSON 格式</div>
+                <div class="export-desc">结构化数据，含数据字典<br>适合 AI 训练与分析</div>
+                <div class="export-btn">下载 JSON</div>
+            </a>
+            <a href="{{ url_for('data_export_csv') }}" class="export-card export-csv">
+                <div class="export-icon">📊</div>
+                <div class="export-title">CSV 压缩包</div>
+                <div class="export-desc">每表一个 CSV 文件<br>适合 Excel / 数据分析工具</div>
+                <div class="export-btn">下载 ZIP</div>
+            </a>
+            <a href="{{ url_for('data_export_sql') }}" class="export-card export-sql">
+                <div class="export-icon">💾</div>
+                <div class="export-title">SQL 备份</div>
+                <div class="export-desc">完整数据库备份<br>可直接恢复到任意 SQLite</div>
+                <div class="export-btn">下载 SQL</div>
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- 单表导出 -->
+<div class="card">
+    <div class="card-header">
+        <h3>单表导出</h3>
+        <span class="card-subtitle">按业务模块导出指定数据表</span>
+    </div>
+    <div class="card-body">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>表名</th>
+                    <th>中文名称</th>
+                    <th>记录数</th>
+                    <th>字段数</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for table in tables %}
+                <tr>
+                    <td><code>{{ table.name }}</code></td>
+                    <td>{{ table.name_cn }}</td>
+                    <td>{{ '{:,}'.format(table.count) }}</td>
+                    <td>{{ table.columns|length }}</td>
+                    <td>
+                        <a href="{{ url_for('data_export_table', table_name=table.name, fmt='csv') }}" class="btn btn-sm btn-outline">CSV</a>
+                        <a href="{{ url_for('data_export_table', table_name=table.name, fmt='json') }}" class="btn btn-sm btn-outline">JSON</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 数据导入与字典 -->
+<div class="card">
+    <div class="card-header">
+        <h3>数据工具</h3>
+    </div>
+    <div class="card-body">
+        <div class="tool-grid">
+            <a href="{{ url_for('data_import') }}" class="tool-card">
+                <div class="tool-icon">📥</div>
+                <div class="tool-title">数据导入</div>
+                <div class="tool-desc">从 CSV / JSON 文件导入数据到指定表</div>
+            </a>
+            <a href="{{ url_for('data_dictionary') }}" class="tool-card">
+                <div class="tool-icon">📖</div>
+                <div class="tool-title">数据字典</div>
+                <div class="tool-desc">查看所有表结构、字段说明与示例数据（供AI理解）</div>
+            </a>
+        </div>
+    </div>
+</div>
+
+<style>
+.export-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.export-card { display: block; padding: 24px; border-radius: 12px; text-decoration: none; color: inherit; transition: transform 0.2s, box-shadow 0.2s; border: 2px solid transparent; }
+.export-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+.export-json { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #93c5fd; }
+.export-csv { background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-color: #86efac; }
+.export-sql { background: linear-gradient(135deg, #fefce8, #fef9c3); border-color: #fde047; }
+.export-icon { font-size: 32px; margin-bottom: 12px; }
+.export-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.export-desc { font-size: 13px; color: #6b7280; line-height: 1.6; margin-bottom: 16px; }
+.export-btn { display: inline-block; padding: 8px 20px; background: rgba(255,255,255,0.8); border-radius: 6px; font-size: 13px; font-weight: 500; }
+.tool-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+.tool-card { display: block; padding: 24px; border-radius: 12px; background: #f9fafb; border: 1px solid #e5e7eb; text-decoration: none; color: inherit; transition: all 0.2s; }
+.tool-card:hover { background: #f3f4f6; border-color: #d1d5db; }
+.tool-icon { font-size: 28px; margin-bottom: 12px; }
+.tool-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.tool-desc { font-size: 13px; color: #6b7280; line-height: 1.6; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }
+.btn-outline { background: transparent; border: 1px solid #d1d5db; color: #374151; border-radius: 6px; text-decoration: none; display: inline-block; margin-right: 6px; }
+.btn-outline:hover { background: #f3f4f6; }
+</style>
+{% endblock %}

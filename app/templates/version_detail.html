@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}{{ version.version_no }} - 版本详情{% endblock %}
+{% block page_title %}{{ version.version_no }} {{ version.version_name or '' }}{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('version_list') }}" class="btn btn-secondary">返回列表</a>
+{% endblock %}
+
+{% block content %}
+<!-- 版本基本信息 -->
+<div class="panel">
+    <div class="detail-grid">
+        <div class="detail-item"><span class="detail-label">产品</span><span class="detail-value">{{ version.product_name }} {{ version.model or '' }}</span></div>
+        <div class="detail-item"><span class="detail-label">版本号</span><span class="detail-value mono">{{ version.version_no }}</span></div>
+        <div class="detail-item"><span class="detail-label">关联系统版本</span><span class="detail-value" style="color:#1e40af; font-weight:600;">{{ version.system_version or '未指定' }}</span></div>
+        <div class="detail-item"><span class="detail-label">前向兼容</span><span class="detail-value">
+            {% if version.is_forward_compatible == 1 %}
+            <span style="color:#065f46; font-weight:600;">✓ 兼容</span>
+            {% else %}
+            <span style="color:#dc2626; font-weight:600;">✗ 不兼容（需全新适配）</span>
+            {% endif %}
+        </span></div>
+        <div class="detail-item"><span class="detail-label">OTA升级</span><span class="detail-value">
+            {% if version.ota_supported == 1 %}
+            <span style="color:#065f46; font-weight:600;">✓ 支持</span>
+            {% else %}
+            <span style="color:#6b7280;">✗ 不支持</span>
+            {% endif %}
+        </span></div>
+        <div class="detail-item"><span class="detail-label">计划发布</span><span class="detail-value mono">{{ version.planned_release_date or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label">实际发布</span><span class="detail-value mono">{{ version.actual_release_date or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label">状态</span><span class="status-tag status-{{ version.status }}">{{ version.status }}</span></div>
+    </div>
+    {% if version.description %}
+    <div class="detail-section"><strong>版本描述：</strong>{{ version.description }}</div>
+    {% endif %}
+    {% if version.capabilities %}
+    <div class="detail-section"><strong>核心能力：</strong><pre class="capability-text">{{ version.capabilities }}</pre></div>
+    {% endif %}
+</div>
+
+<!-- 关联用户需求 -->
+<div class="panel">
+    <h3 class="panel-title">关联用户需求（{{ linked_reqs|length }}）</h3>
+    <table class="data-table">
+        <thead><tr><th>需求标题</th><th>客户</th><th>优先级</th><th>状态</th></tr></thead>
+        <tbody>
+            {% for r in linked_reqs %}
+            <tr>
+                <td class="cell-bold">{{ r.title }}</td>
+                <td>{{ r.customer or '-' }}</td>
+                <td><span class="priority priority-{{ r.link_priority }}">{{ r.link_priority }}</span></td>
+                <td><span class="status-tag status-{{ r.status }}">{{ r.status }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty-cell">暂未关联用户需求</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- 版本功能清单 -->
+<div class="panel">
+    <h3 class="panel-title">版本功能清单（{{ features|length }}）</h3>
+    {% if features %}
+    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; margin-bottom:16px;">
+        {% for f in features %}
+        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; border-left:3px solid {{ '#10b981' if f.status == '已完成' else '#f59e0b' if f.status == '开发中' else '#9ca3af' }};">
+            <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:6px;">
+                <span style="font-weight:600; font-size:13px; color:#111827;">{{ f.feature_name }}</span>
+                <span style="background:{{ '#d1fae5' if f.status == '已完成' else '#fef3c7' if f.status == '开发中' else '#f3f4f6' }}; color:{{ '#065f46' if f.status == '已完成' else '#92400e' if f.status == '开发中' else '#6b7280' }}; padding:2px 8px; border-radius:8px; font-size:10px; font-weight:600; white-space:nowrap;">
+                    {% if f.status == '已完成' %}✓ 已完成{% elif f.status == '开发中' %}⚡ 开发中{% else %}📋 未开始{% endif %}
+                </span>
+            </div>
+            {% if f.feature_desc %}
+            <div style="font-size:11px; color:#6b7280; line-height:1.5; margin-bottom:8px;">{{ f.feature_desc }}</div>
+            {% endif %}
+            <div style="display:flex; gap:8px; align-items:center;">
+                <span style="font-size:10px; color:#9ca3af;">优先级：</span>
+                <span style="font-size:10px; font-weight:600; color:{{ '#dc2626' if f.priority == '高' else '#f59e0b' if f.priority == '中' else '#6b7280' }};">{{ f.priority }}</span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <!-- 功能进度统计 -->
+    <div style="background:#eff6ff; padding:10px 14px; border-radius:8px; display:flex; gap:20px; flex-wrap:wrap;">
+        {% set completed = features | selectattr('status', 'equalto', '已完成') | list | length %}
+        {% set in_progress = features | selectattr('status', 'equalto', '开发中') | list | length %}
+        {% set not_started = features | selectattr('status', 'equalto', '未开始') | list | length %}
+        <span style="font-size:12px; color:#1e40af;">📊 功能进度：<strong>{{ completed }}/{{ features|length }}</strong> 已完成</span>
+        <span style="font-size:12px; color:#065f46;">✓ 已完成：{{ completed }}</span>
+        <span style="font-size:12px; color:#92400e;">⚡ 开发中：{{ in_progress }}</span>
+        <span style="font-size:12px; color:#6b7280;">📋 未开始：{{ not_started }}</span>
+        <div style="flex:1; min-width:120px; background:white; border-radius:6px; height:8px; overflow:hidden; margin-top:4px;">
+            <div style="height:100%; width:{{ (completed / features|length * 100) | round }}%; background:linear-gradient(90deg,#10b981,#34d399);"></div>
+        </div>
+    </div>
+    {% else %}
+    <div style="text-align:center; padding:30px; color:#9ca3af; font-size:13px;">暂无功能清单，可在版本规划时添加功能模块</div>
+    {% endif %}
+</div>
+
+<!-- 开发任务 -->
+<div class="panel">
+    <h3 class="panel-title">开发任务（{{ tasks|length }}）</h3>
+    <table class="data-table">
+        <thead><tr><th>任务名称</th><th>任务内容</th><th>关联需求</th><th>优先级</th><th>负责人</th><th>计划开始</th><th>计划完成</th><th>状态</th></tr></thead>
+        <tbody>
+            {% for t in tasks %}
+            <tr>
+                <td class="cell-bold">{{ t.task_name }}</td>
+                <td style="max-width:200px; font-size:12px; color:#6b7280;">{{ t.description[:50] if t.description else '—' }}{% if t.description and t.description|length > 50 %}...{% endif %}</td>
+                <td style="font-size:12px;">
+                    {% if t.requirement_id %}
+                        {% set req = linked_reqs | selectattr('id', 'equalto', t.requirement_id) | first %}
+                        {% if req %}
+                            <span class="link-req" title="{{ req.title }}">{{ req.title[:15] }}{% if req.title|length > 15 %}...{% endif %}</span>
+                        {% else %}
+                            <span style="color:#9ca3af;">需求#{{ t.requirement_id }}</span>
+                        {% endif %}
+                    {% else %}
+                        <span style="color:#9ca3af;">—</span>
+                    {% endif %}
+                </td>
+                <td><span class="priority priority-{{ t.priority }}">{{ t.priority }}</span></td>
+                <td>{{ t.assignee or '-' }}</td>
+                <td class="mono">{{ t.planned_start or '-' }}</td>
+                <td class="mono">{{ t.planned_finish or '-' }}</td>
+                <td><span class="status-tag status-{{ t.status }}">{{ t.status }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty-cell">暂无开发任务</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- 新增任务表单 -->
+    {% if can_write('version') %}
+    <div class="add-task-form">
+        <h4>+ 新增开发任务</h4>
+        <form method="post" action="{{ url_for('version_task_add', vid=version.id) }}" class="form-inline">
+            <input type="text" name="task_name" placeholder="任务名称 *" required class="form-control-sm" style="min-width:180px;">
+            <select name="requirement_id" class="form-control-sm" title="关联需求">
+                <option value="">不关联需求</option>
+                {% for req in linked_reqs %}
+                <option value="{{ req.id }}">{{ req.title[:20] }}{% if req.title|length > 20 %}...{% endif %}</option>
+                {% endfor %}
+            </select>
+            <select name="priority" class="form-control-sm">
+                <option value="高">高</option>
+                <option value="中" selected>中</option>
+                <option value="低">低</option>
+            </select>
+            <input type="text" name="assignee" placeholder="负责人" class="form-control-sm" style="width:100px;">
+            <input type="date" name="planned_start" class="form-control-sm" title="计划开始">
+            <input type="date" name="planned_finish" class="form-control-sm" title="计划完成">
+            <button type="submit" class="btn btn-sm btn-primary">添加</button>
+            <textarea name="description" rows="2" class="form-control-sm" placeholder="任务内容/描述（选填）：详细说明任务要求、技术要点、验收标准等" style="width:100%; margin-top:8px; resize:vertical;"></textarea>
+        </form>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 关联Bug -->
+<div class="panel">
+    <h3 class="panel-title">关联Bug（{{ bugs|length }}）</h3>
+    <table class="data-table">
+        <thead><tr><th>Bug编号</th><th>标题</th><th>详细描述</th><th>严重程度</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for b in bugs %}
+            <tr>
+                <td class="mono">{{ b.bug_no }}</td>
+                <td class="cell-bold">{{ b.title }}</td>
+                <td style="max-width:300px; font-size:12px; color:#6b7280;">{{ b.description[:80] if b.description else '—' }}{% if b.description and b.description|length > 80 %}...{% endif %}</td>
+                <td><span class="priority priority-{{ b.severity }}">{{ b.severity }}</span></td>
+                <td><span class="status-tag status-{{ b.status }}">{{ b.status }}</span></td>
+                <td><a href="{{ url_for('bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty-cell">暂无关联Bug</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- 关联测试用例 -->
+<div class="panel">
+    <h3 class="panel-title">关联测试用例（{{ test_cases|length }}）</h3>
+    <table class="data-table">
+        <thead><tr><th>用例编号</th><th>用例标题</th><th>模块</th><th>优先级</th><th>用例类型</th><th>状态</th><th>创建人</th></tr></thead>
+        <tbody>
+            {% for tc in test_cases %}
+            <tr>
+                <td class="mono">{{ tc.case_no or '-' }}</td>
+                <td class="cell-bold">{{ tc.title }}</td>
+                <td>{{ tc.module or '-' }}</td>
+                <td><span class="priority priority-{{ tc.priority }}">{{ tc.priority }}</span></td>
+                <td>{{ tc.case_type or '-' }}</td>
+                <td><span class="status-tag status-{{ tc.status }}">{{ tc.status }}</span></td>
+                <td>{{ tc.creator or '-' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="empty-cell">暂无关联测试用例</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<style>
+.detail-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 16px; }
+.detail-item { display: flex; flex-direction: column; gap: 4px; }
+.detail-label { font-size: 12px; color: #6b7280; }
+.detail-value { font-size: 14px; font-weight: 500; color: #111827; }
+.detail-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 14px; line-height: 1.6; }
+.capability-text { background: #f9fafb; padding: 12px; border-radius: 6px; margin-top: 8px; white-space: pre-wrap; font-family: inherit; font-size: 13px; }
+.panel-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #111827; }
+.add-task-form { margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e7eb; }
+.add-task-form h4 { font-size: 14px; margin-bottom: 12px; color: #374151; }
+.form-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.form-control-sm { padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; }
+.btn-sm { padding: 6px 16px; font-size: 13px; }
+.btn-primary { background: #2563eb; color: white; border: none; cursor: pointer; border-radius: 6px; }
+.btn-outline { background: white; color: #2563eb; border: 1px solid #2563eb; cursor: pointer; border-radius: 6px; text-decoration: none; padding: 4px 12px; font-size: 12px; }
+.mono { font-family: monospace; }
+</style>
+{% endblock %}

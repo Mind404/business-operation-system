@@ -1,0 +1,249 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '设备运维与OTA版本管理' %}
+
+{% block ext_content %}
+<style>
+/* ===== 设备运维与OTA合并页 ===== */
+.dc-tabs { display:flex; gap:4px; border-bottom:2px solid #e5e7eb; margin-bottom:18px; }
+.dc-tab { padding:10px 22px; font-size:14px; color:#6b7280; border-bottom:2px solid transparent; margin-bottom:-2px;
+          text-decoration:none; display:flex; align-items:center; gap:8px; font-weight:500; transition:all .15s; }
+.dc-tab:hover { color:#2563eb; }
+.dc-tab.active { color:#2563eb; border-bottom-color:#2563eb; }
+.dc-tab .cnt { background:#e5e7eb; color:#374151; font-size:11px; border-radius:10px; padding:0 8px; line-height:18px; }
+.dc-tab.active .cnt { background:#dbeafe; color:#1e40af; }
+.dc-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+.dc-toolbar .spacer { flex:1; }
+.dc-btn { display:inline-flex; align-items:center; gap:5px; padding:6px 14px; border-radius:6px; font-size:12.5px;
+         border:1px solid #d1d5db; background:#fff; color:#374151; cursor:pointer; text-decoration:none; transition:all .15s; }
+.dc-btn:hover { border-color:#2563eb; color:#2563eb; }
+.dc-btn.primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+.dc-btn.primary:hover { background:#1d4ed8; color:#fff; }
+.dc-btn.green { background:#059669; color:#fff; border-color:#059669; }
+.dc-btn.green:hover { background:#047857; color:#fff; }
+.dc-btn.danger { color:#dc2626; border-color:#fca5a5; }
+.dc-btn.danger:hover { background:#fef2f2; }
+.dc-file { display:none; }
+.dc-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:16px; }
+.dc-stat { border:1px solid #e5e7eb; border-radius:10px; padding:14px 16px; background:#fff; }
+.dc-stat .v { font-size:24px; font-weight:700; color:#111827; line-height:1.2; }
+.dc-stat .l { font-size:12px; color:#6b7280; margin-top:3px; }
+.dc-stat.blue .v { color:#2563eb; } .dc-stat.green .v { color:#059669; }
+.dc-stat.orange .v { color:#d97706; } .dc-stat.red .v { color:#dc2626; }
+.dc-stat.purple .v { color:#7c3aed; }
+.dc-flash { padding:10px 16px; border-radius:8px; margin-bottom:14px; font-size:13px; }
+.dc-flash.success { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
+.dc-flash.error { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+.dc-change-list { font-size:12.5px; }
+.dc-change-list tr td { padding:8px 10px; }
+.dc-change-type { display:inline-block; padding:1px 8px; border-radius:4px; font-size:11px; }
+.dc-ct-ota { background:#dbeafe; color:#1e40af; } .dc-ct-manual { background:#fef3c7; color:#92400e; }
+.dc-ct-factory { background:#f3f4f6; color:#374151; } .dc-ct-rollback { background:#fee2e2; color:#991b1b; }
+.dc-arrow { color:#9ca3af; padding:0 4px; }
+.dc-empty { text-align:center; padding:36px 0; color:#9ca3af; font-size:13px; }
+</style>
+
+<!-- 全局消息 -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for cat, msg in messages %}
+    <div class="dc-flash {{ cat if cat in ('success','error') else 'success' }}">{{ msg }}</div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+<!-- 双子页切换 -->
+<div class="dc-tabs">
+    <a href="{{ url_for('ext.device_center', tab='device') }}" class="dc-tab {% if tab == 'device' %}active{% endif %}">
+        📡 设备运维（状态监控） <span class="cnt">{{ d_total }}</span>
+    </a>
+    <a href="{{ url_for('ext.device_center', tab='ota') }}" class="dc-tab {% if tab == 'ota' %}active{% endif %}">
+        🔄 OTA版本管理 <span class="cnt">{{ o_total }}</span>
+    </a>
+</div>
+
+<!-- ================= Tab1：设备运维 ================= -->
+{% if tab == 'device' %}
+<div class="dc-stats">
+    <div class="dc-stat blue"><div class="v">{{ d_total }}</div><div class="l">设备总数</div></div>
+    <div class="dc-stat green"><div class="v">{{ online }}</div><div class="l">在线</div></div>
+    <div class="dc-stat orange"><div class="v">{{ offline }}</div><div class="l">离线</div></div>
+    <div class="dc-stat"><div class="v">{{ inactive }}</div><div class="l">未激活</div></div>
+    <div class="dc-stat red"><div class="v">{{ alerts }}</div><div class="l">未处理告警</div></div>
+</div>
+
+<div class="dc-toolbar">
+    <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="hidden" name="tab" value="device">
+        <select name="d_status" onchange="this.form.submit()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;">
+            <option value="">全部状态</option>
+            <option value="在线" {% if d_status == '在线' %}selected{% endif %}>在线</option>
+            <option value="离线" {% if d_status == '离线' %}selected{% endif %}>离线</option>
+            <option value="未激活" {% if d_status == '未激活' %}selected{% endif %}>未激活</option>
+        </select>
+        <input type="text" name="d_search" value="{{ d_search }}" placeholder="搜索SN / 客户 / 固件版本"
+               style="padding:6px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;width:240px;">
+        <button type="submit" class="dc-btn primary">搜索</button>
+        {% if d_search or d_status %}<a href="{{ url_for('ext.device_center', tab='device') }}" class="dc-btn">清除</a>{% endif %}
+    </form>
+    <div class="spacer"></div>
+    <a href="{{ url_for('ext.device_template') }}" class="dc-btn">📋 下载导入模板</a>
+    {% if can_write('ext.device') %}
+    <label class="dc-btn green" style="cursor:pointer;">📥 批量导入<input type="file" class="dc-file" accept=".xlsx" onchange="uploadDevice(this)"></label>
+    {% endif %}
+    <a href="{{ url_for('ext.device_export') }}" class="dc-btn">📤 导出Excel</a>
+    {% if can_write('ext.device') %}<a href="{{ url_for('ext.device_add') }}" class="dc-btn primary">+ 登记设备</a>{% endif %}
+</div>
+
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>设备SN</th><th>产品</th><th>客户</th><th>固件版本</th><th>状态</th><th>最后在线</th><th>位置</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for d in devices %}
+            <tr>
+                <td class="mono">{{ d.device_sn }}</td>
+                <td>{{ d.product_name or '-' }}</td>
+                <td>{{ d.customer or '-' }}</td>
+                <td class="mono">{{ d.firmware_version or '-' }}</td>
+                <td class="text-center"><span class="status-tag status-{{ d.status }}">{% if d.status == '在线' %}● {% endif %}{{ d.status }}</span></td>
+                <td style="font-size:12px;">{{ d.last_online or '-' }}</td>
+                <td>{{ d.location or '-' }}</td>
+                <td><a href="{{ url_for('ext.device_detail', did=d.id) }}" class="btn btn-sm btn-outline">详情/变更</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty-cell">暂无设备，可通过"批量导入"或"登记设备"录入</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% if d_pages > 1 %}
+<div class="pagination">
+    <span class="page-info">第 {{ request.args.get('d_page', 1) }} / {{ d_pages }} 页</span>
+    <div class="page-buttons">
+        {% set cur = request.args.get('d_page', 1) | int %}
+        {% if cur > 1 %}<a href="{{ url_for('ext.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% if cur < d_pages %}<a href="{{ url_for('ext.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur+1) }}" class="page-btn">下一页</a>{% endif %}
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- 最近版本变更记录（设备运维全局视图） -->
+{% if tab == 'device' %}
+<div class="panel" style="margin-top:18px;">
+    <div class="panel-head"><h3 style="font-size:14px;margin:0;padding:12px 16px;border-bottom:1px solid #f3f4f6;">最近固件版本变更记录（全局监控）</h3></div>
+    <table class="data-table dc-change-list">
+        <thead><tr><th>时间</th><th>设备SN</th><th>变更类型</th><th>版本变化</th><th>原因/操作</th><th>操作人</th></tr></thead>
+        <tbody>
+            {% for c in recent_changes %}
+            <tr>
+                <td style="font-size:12px;">{{ c.changed_at }}</td>
+                <td class="mono">{{ c.sn or ('设备#' ~ c.device_id) }}</td>
+                <td>
+                    {% set ct = c.change_type %}
+                    <span class="dc-change-type {% if 'OTA' in ct %}dc-ct-ota{% elif '手动' in ct or '刷新' in ct %}dc-ct-manual{% elif '回滚' in ct %}dc-ct-rollback{% else %}dc-ct-factory{% endif %}">{{ ct }}</span>
+                </td>
+                <td class="mono">{{ c.old_version }} <span class="dc-arrow">→</span> {{ c.new_version }}</td>
+                <td>{{ c.reason or '-' }}</td>
+                <td>{{ c.operator or '-' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty-cell">暂无版本变更记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- ================= Tab2：OTA版本管理 ================= -->
+{% if tab == 'ota' %}
+<div class="dc-stats">
+    <div class="dc-stat blue"><div class="v">{{ o_total }}</div><div class="l">版本总数</div></div>
+    <div class="dc-stat green"><div class="v">{{ o_released }}</div><div class="l">已发布（历史+现行）</div></div>
+    <div class="dc-stat orange"><div class="v">{{ o_testing }}</div><div class="l">测试中</div></div>
+    <div class="dc-stat red"><div class="v">{{ o_rolled }}</div><div class="l">已回滚</div></div>
+</div>
+
+<div class="dc-toolbar">
+    <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="hidden" name="tab" value="ota">
+        <select name="o_status" onchange="this.form.submit()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;">
+            <option value="">全部状态</option>
+            <option value="测试中" {% if o_status == '测试中' %}selected{% endif %}>测试中</option>
+            <option value="已发布" {% if o_status == '已发布' %}selected{% endif %}>已发布</option>
+            <option value="已回滚" {% if o_status == '已回滚' %}selected{% endif %}>已回滚</option>
+        </select>
+        <input type="text" name="o_search" value="{{ o_search }}" placeholder="搜索版本号 / 文件名"
+               style="padding:6px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;width:220px;">
+        <button type="submit" class="dc-btn primary">搜索</button>
+        {% if o_search or o_status %}<a href="{{ url_for('ext.device_center', tab='ota') }}" class="dc-btn">清除</a>{% endif %}
+    </form>
+    <div class="spacer"></div>
+    <a href="{{ url_for('ext.ota_template') }}" class="dc-btn">📋 下载导入模板</a>
+    {% if can_write('ext.ota') %}
+    <label class="dc-btn green" style="cursor:pointer;">📥 批量导入<input type="file" class="dc-file" accept=".xlsx" onchange="uploadOta(this)"></label>
+    {% endif %}
+    <a href="{{ url_for('ext.ota_export') }}" class="dc-btn">📤 导出Excel</a>
+    {% if can_write('ext.ota') %}<a href="{{ url_for('ext.ota_add') }}" class="dc-btn primary">+ 上传版本</a>{% endif %}
+</div>
+
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>版本号</th><th>产品</th><th>文件名</th><th>大小</th><th>发布策略</th><th>状态</th><th>发布时间</th><th>创建人</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for o in otas %}
+            <tr>
+                <td class="cell-bold mono">{{ o.version_no }}</td>
+                <td>{{ o.product_name or '-' }}</td>
+                <td class="mono">{{ o.file_name or '-' }}</td>
+                <td class="text-center">{% if o.file_size %}{{ '%.1f'|format(o.file_size/1024/1024) }}MB{% else %}-{% endif %}</td>
+                <td>{{ o.rollout_strategy }}{% if o.rollout_percentage < 100 %} ({{ o.rollout_percentage }}%){% endif %}</td>
+                <td class="text-center"><span class="status-tag status-{{ o.status }}">{{ o.status }}</span></td>
+                <td style="font-size:12px;">{{ o.published_at or '—' }}</td>
+                <td>{{ o.creator or '-' }}</td>
+                <td>
+                    {% if o.status == '测试中' and can_write('ext.ota') %}
+                    <form method="post" action="{{ url_for('ext.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定发布此版本？将记录发布时间。')">
+                        <input type="hidden" name="status" value="已发布">
+                        <input type="hidden" name="operator" value="{{ session.get('username', 'delivery_c') }}">
+                        <button type="submit" class="btn btn-sm btn-success">发布</button>
+                    </form>
+                    {% elif o.status == '已发布' and can_write('ext.ota') %}
+                    <form method="post" action="{{ url_for('ext.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定回滚此版本？')">
+                        <input type="hidden" name="status" value="已回滚">
+                        <button type="submit" class="btn btn-sm btn-outline">回滚</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="empty-cell">暂无OTA版本，可通过"批量导入"或"上传版本"录入</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<div style="background:#f0f9ff;padding:16px;border-radius:8px;margin-top:16px;">
+    <p style="font-size:13px;color:#0369a1;margin:0;">
+        <strong>OTA发布流程：</strong>上传/导入版本（测试中）→ 验证通过后发布（记录发布时间与操作人）→ 灰度/全量升级 → 设备固件变更自动留痕 → 异常可回滚（保留历史记录）
+    </p>
+</div>
+{% endif %}
+
+<script>
+function uploadDevice(input) {
+    if (!input.files || !input.files.length) return;
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    fetch('{{ url_for('ext.device_import') }}', { method: 'POST', body: fd })
+        .then(r => { window.location.href = '{{ url_for('ext.device_center', tab='device') }}'; })
+        .catch(() => window.location.reload());
+}
+function uploadOta(input) {
+    if (!input.files || !input.files.length) return;
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    fetch('{{ url_for('ext.ota_import') }}', { method: 'POST', body: fd })
+        .then(r => { window.location.href = '{{ url_for('ext.device_center', tab='ota') }}'; })
+        .catch(() => window.location.reload());
+}
+</script>
+{% endblock %}

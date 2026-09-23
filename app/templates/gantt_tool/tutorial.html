@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>使用教程 - 项目工作进度表甘特图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #f2f5fa; color: #1e293b;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.7;
+    padding-bottom: 60px;
+  }
+  .doc-wrap { max-width: 900px; margin: 0 auto; padding: 0 18px; }
+  header.doc-head {
+    background: #fff; border-bottom: 1px solid #e4e9f2;
+    padding: 18px 0; margin-bottom: 26px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .doc-head .doc-wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .doc-head h1 { font-size: 20px; color: #17233d; }
+  .back-btn {
+    display: inline-block; background: #3b76ff; color: #fff; text-decoration: none;
+    padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  }
+  .back-btn:hover { background: #5b8dff; }
+  .card {
+    background: #fff; border: 1px solid #e4e9f2; border-radius: 12px;
+    padding: 22px 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(15,23,42,.05);
+  }
+  h2 { font-size: 17px; color: #17233d; margin-bottom: 14px; padding-left: 12px; border-left: 4px solid #3b76ff; }
+  h3 { font-size: 15px; margin: 14px 0 8px; color: #334155; }
+  p { margin-bottom: 10px; }
+  ol, ul { padding-left: 22px; margin-bottom: 10px; }
+  li { margin-bottom: 6px; }
+  code, .code {
+    background: #eef3fc; border: 1px solid #dbe6f7; color: #1d4ed8;
+    padding: 2px 8px; border-radius: 6px; font-size: 13px; font-family: Consolas, Monaco, monospace;
+  }
+  .cmd {
+    display: block; background: #17233d; color: #dbeafe;
+    padding: 12px 16px; border-radius: 8px; font-size: 13.5px;
+    font-family: Consolas, Monaco, monospace; margin: 10px 0; overflow-x: auto;
+  }
+  .tip {
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px;
+  }
+  .ok {
+    background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46;
+    padding: 10px 14px; border-radius: 8px; margin: 10px 0; font-size: 13.5px;
+  }
+  .shot {
+    width: 100%; border: 1px solid #e4e9f2; border-radius: 10px; margin: 12px 0;
+    display: block; box-shadow: 0 2px 8px rgba(15,23,42,.06);
+  }
+  .shot-cap { font-size: 12.5px; color: #64748b; text-align: center; margin: -6px 0 14px; }
+  table.simple { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  table.simple th, table.simple td { border: 1px solid #e4e9f2; padding: 8px 12px; text-align: left; }
+  table.simple th { background: #f4f7fc; font-weight: 600; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<header class="doc-head">
+  <div class="doc-wrap">
+    <h1>📖 使用教程 · 项目工作进度表-甘特图</h1>
+    <a class="back-btn" href="/">返回工具</a>
+  </div>
+</header>
+
+<div class="doc-wrap">
+
+  <!-- 快速开始 -->
+  <div class="card">
+    <h2>一、快速开始（3 步）</h2>
+    <ol>
+      <li>解压本压缩包，进入 <code>甘特图工作计划工具</code> 文件夹；</li>
+      <li><b>Windows</b>：双击 <code>start.bat</code>；<b>Mac / Linux</b>：运行 <code>start.sh</code> 或 <code>python3 server.py</code>；</li>
+      <li>浏览器会自动打开工具页面，即可开始使用。</li>
+    </ol>
+    <p>如果浏览器没有自动打开，请手动访问：<code>http://127.0.0.1:8000</code></p>
+    <div class="tip">电脑需要安装 <b>Python 3</b>（无需安装任何第三方库，标准库即可运行）。在命令行输入 <code>python --version</code> 可查看是否已安装。</div>
+    <div class="cmd"># 也可在命令行手动启动，支持指定端口
+python server.py
+python server.py 9000          # 指定端口 9000
+python server.py 9000 --no-browser</div>
+  </div>
+
+  <!-- 界面介绍 -->
+  <div class="card">
+    <h2>二、界面介绍</h2>
+    <img class="shot" src="/gantt_tool/界面预览.png" alt="主界面预览">
+    <div class="shot-cap">▲ 主界面：左侧分类任务面板 + 统计卡片 + 表格 + 甘特图</div>
+    <p>界面为白色简洁风格，从上到下、从左到右分别是：</p>
+    <table class="simple">
+      <tr><th>区域</th><th>说明</th></tr>
+      <tr><td>顶部工具栏</td><td>添加项目、使用教程、导出数据、导入数据、示例数据、清空</td></tr>
+      <tr><td>左侧「任务名称」面板</td><td>按 <b>产品研发情况 / 产品测试情况 / 产品生产情况</b> 三个分类管理任务，每个分类可单独「＋ 新增」；点击分类或分类下的任务即可筛选</td></tr>
+      <tr><td>统计卡片</td><td>全部项目及各分类的任务数量与完成率，点击卡片可切换筛选</td></tr>
+      <tr><td>环形图</td><td>整体项目完成率</td></tr>
+      <tr><td>任务表格</td><td>序号、是否完成、工作项目名称、开始/结束日期、分类、操作（编辑/删除）</td></tr>
+      <tr><td>甘特图</td><td>按时间轴展示每个任务的时间跨度；已完成任务带 ✓，虚线为今天</td></tr>
+    </table>
+    <div class="ok"><b>全屏自适应：</b>页面会自动占满整个浏览器窗口，所有元素随屏幕大小等比缩放——大屏不会缩成一小块、小屏也不会挤压变形。任务天数较多时，在甘特图区域底部左右拖动即可查看完整时间轴（左侧表格列始终固定）；按 <b>F11</b> 可进入浏览器全屏获得更大显示区。</div>
+  </div>
+
+  <!-- 新增任务 -->
+  <div class="card">
+    <h2>三、新增任务</h2>
+    <p>有两种方式：</p>
+    <ol>
+      <li>点击顶部「＋ 添加项目」：在弹窗中填写名称、日期，并从「分类」下拉框选择所属分类；</li>
+      <li>点击左侧某个分类旁边的「＋ 新增」：分类会自动带出，直接填写即可。</li>
+    </ol>
+    <img class="shot" src="/gantt_tool/教程-添加项目.png" alt="添加项目弹窗">
+    <div class="shot-cap">▲ 添加项目弹窗（分类已自动选中「产品研发情况」）</div>
+    <ul>
+      <li><b>工作项目名称</b>：必填，例如「V1.3基础协议适配开发」；</li>
+      <li><b>开始日期 / 结束日期</b>：必填，结束日期不能早于开始日期；</li>
+      <li><b>分类</b>：产品研发情况（蓝）/ 产品测试情况（橙）/ 产品生产情况（绿），决定甘特条颜色与左侧归类；</li>
+      <li><b>是否已完成</b>：可勾选，也可在表格「是否完成」列随时切换。</li>
+    </ul>
+    <div class="tip">在弹窗中按 <b>回车</b> 可直接保存；按 <b>Esc</b> 或点「取消」关闭。</div>
+  </div>
+
+  <!-- 编辑/完成/删除 -->
+  <div class="card">
+    <h2>四、编辑、完成、删除</h2>
+    <ul>
+      <li><b>切换完成状态</b>：点击表格「是否完成」列的 ☐/☑ 即可；</li>
+      <li><b>编辑</b>：点击任务所在行的「编辑」按钮，修改后保存；</li>
+      <li><b>删除</b>：点击「删除」按钮，确认后删除该任务。</li>
+    </ul>
+    <p>所有操作都会<b>自动保存</b>到本目录的 <code>data.json</code>，无需手动点保存。</p>
+  </div>
+
+  <!-- 分类筛选 -->
+  <div class="card">
+    <h2>五、分类筛选与统计</h2>
+    <ul>
+      <li>点击左侧「全部项目」或任意分类（含分类头部、分类下的任务行），表格和甘特图会只显示该分类的任务；</li>
+      <li>点击顶部任意统计卡片，效果相同；</li>
+      <li>统计卡片实时显示各分类任务数与完成率，环形图显示整体完成率。</li>
+    </ul>
+  </div>
+
+  <!-- 时间范围 -->
+  <div class="card">
+    <h2>六、计划时间范围</h2>
+    <ul>
+      <li><b>自动范围</b>：勾选后时间轴自动跟随所有任务的起止日期；</li>
+      <li><b>手动范围</b>：取消勾选后，可自行修改开始/结束日期（适合固定周期的计划表，如按月排期）。</li>
+    </ul>
+  </div>
+
+  <!-- 导入导出 -->
+  <div class="card">
+    <h2>七、数据导出 / 导入（备份与复用，支持 Excel）</h2>
+    <ol>
+      <li><b>导出数据</b>：点击「⬇ 导出数据 ▾」，可选择
+        <ul>
+          <li><b>导出为 JSON 文件（.json）</b>：完整备份，含分类、完成状态、时间范围设置；</li>
+          <li><b>导出为 Excel 文件（.xlsx）</b>：直接用 Excel / WPS 打开，可编辑后再导回，表格列为
+            <code>序号 / 是否完成 / 工作项目名称 / 开始日期 / 结束日期 / 分类</code>。</li>
+        </ul>
+      </li>
+      <li><b>导入数据</b>：点击「⬆ 导入数据」选择 <code>.json</code> 或 <code>.xlsx</code> 文件，即可完整恢复任务与设置。</li>
+      <li><b>Excel 导入规则</b>：带表头（推荐用工具导出的文件修改）与无表头（按 名称/开始/结束/分类/完成 列序）都支持；
+        完成列可写 是/否、1/0、true/false、√；日期支持 2026-09-01、2026/9/1 及 Excel 日期序列号。</li>
+      <li>也可以直接备份 / 拷贝工具目录下的 <code>data.json</code>。</li>
+    </ol>
+    <div class="ok">换电脑使用：把整个文件夹拷走，或在新电脑上「导入数据」选择 JSON / Excel 文件即可，数据完全复用。</div>
+  </div>
+
+  <!-- 示例与清空 -->
+  <div class="card">
+    <h2>八、示例数据 / 清空</h2>
+    <ul>
+      <li><b>示例数据</b>：一键载入内置示例（三个分类共 10 条任务），适合首次体验；</li>
+      <li><b>清空</b>：清空所有任务（建议先导出备份）。</li>
+    </ul>
+  </div>
+
+  <!-- 内网部署 -->
+  <div class="card">
+    <h2>九、内网部署（局域网多人使用）</h2>
+    <ol>
+      <li>在一台装有 Python 3 的内网电脑上启动工具（双击 <code>start.bat</code>）；</li>
+      <li>启动后命令行会显示本机局域网地址，例如 <code>http://192.168.1.100:8000</code>；</li>
+      <li>同一局域网内其他电脑，用浏览器打开该地址即可共同查看 / 编辑（数据统一保存在这台电脑上）。</li>
+    </ol>
+    <div class="tip">若无法访问，请检查系统防火墙是否放行对应端口（如 8000）。</div>
+  </div>
+
+  <!-- FAQ -->
+  <div class="card">
+    <h2>十、常见问题</h2>
+    <table class="simple">
+      <tr><th>问题</th><th>解决办法</th></tr>
+      <tr><td>双击 start.bat 闪退</td><td>在命令行运行 <code>python server.py</code> 查看报错信息；确认 Python 3 已安装</td></tr>
+      <tr><td>端口被占用</td><td>换端口启动：<code>python server.py 9000</code></td></tr>
+      <tr><td>数据不见了</td><td>检查同目录 <code>data.json</code> 是否还在；文件损坏时会自动备份为 <code>data.json.bak-时间</code> 并恢复示例数据</td></tr>
+      <tr><td>想换个浏览器打开</td><td>手动访问命令行中显示的地址即可</td></tr>
+    </table>
+  </div>
+
+</div>
+</body>
+</html>

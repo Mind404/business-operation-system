@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑' if item else '新增' }}软件版本 - 业务运转系统{% endblock %}
+{% block page_title %}{{ '编辑' if item else '新增' }}软件版本{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <!-- 步骤指示器 -->
+    <div class="step-indicator">
+        <div class="step-item active" id="step-1-indicator">
+            <div class="step-num">1</div>
+            <div class="step-label">基本信息</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" id="step-2-indicator">
+            <div class="step-num">2</div>
+            <div class="step-label">关联需求</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" id="step-3-indicator">
+            <div class="step-num">3</div>
+            <div class="step-label">高级选项</div>
+        </div>
+    </div>
+
+    <form method="post" id="versionForm">
+        <!-- 第1步：基本信息 -->
+        <div class="form-step" id="step-1">
+            <div class="step-title">📝 填写版本基本信息</div>
+            <div class="step-desc">选择关联产品，填写版本号和计划发布时间</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>关联产品 <span class="required">*</span></label>
+                    <select name="product_id" required class="form-control" id="f_product">
+                        <option value="">-- 选择产品 --</option>
+                        {% for p in products %}
+                        <option value="{{ p.id }}" {% if item and item.product_id == p.id %}selected{% endif %}>{{ p.name }} ({{ p.model }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>版本号 <span class="required">*</span></label>
+                    <input type="text" name="version_no" required class="form-control" placeholder="如 V2.1.0" value="{{ item.version_no if item else '' }}" id="f_version">
+                </div>
+                <div class="form-group">
+                    <label>版本名称</label>
+                    <input type="text" name="version_name" class="form-control" placeholder="如 5G增强版" value="{{ item.version_name if item else '' }}">
+                </div>
+                <div class="form-group">
+                    <label>计划发布日期</label>
+                    <input type="date" name="planned_release_date" class="form-control" value="{{ item.planned_release_date if item else '' }}">
+                </div>
+            </div>
+            <div class="step-actions">
+                <button type="button" class="btn btn-primary" onclick="nextStep(1)">下一步：选择关联需求 →</button>
+            </div>
+        </div>
+
+        <!-- 第2步：关联用户需求 -->
+        <div class="form-step" id="step-2" style="display:none;">
+            <div class="step-title">📋 选择关联用户需求</div>
+            <div class="step-desc">勾选本版本将满足的用户需求，可多选</div>
+            <div class="form-group form-full">
+                <div class="req-selector">
+                    <div class="req-selector-header">
+                        <label class="select-all-label">
+                            <input type="checkbox" id="selectAllReq" onchange="toggleAllReq(this)"> 全选
+                        </label>
+                        <span class="req-count">共 {{ requirements|length }} 条待评审/进行中需求</span>
+                    </div>
+                    <div class="req-table-wrapper">
+                        <table class="req-table">
+                            <thead>
+                                <tr>
+                                    <th width="40">选择</th>
+                                    <th width="50">ID</th>
+                                    <th>需求标题 + 详情描述</th>
+                                    <th width="90">来源部门</th>
+                                    <th width="100">关联客户</th>
+                                    <th width="60">数量</th>
+                                    <th width="60">优先级</th>
+                                    <th width="90">交付日期</th>
+                                    <th width="70">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for req in requirements %}
+                                <tr class="req-row {% if item and req.id in selected_req_ids %}selected{% endif %}" onclick="toggleRowReq(this, event)">
+                                    <td class="text-center">
+                                        <input type="checkbox" name="requirement_ids" value="{{ req.id }}" class="req-checkbox" {% if item and req.id in selected_req_ids %}checked{% endif %}>
+                                    </td>
+                                    <td class="mono">#{{ req.id }}</td>
+                                    <td class="req-title-cell">
+                                        <div class="req-title">{{ req.title }}</div>
+                                        {% if req.description %}
+                                        <div class="req-desc">{{ req.description[:80] }}{% if req.description|length > 80 %}...{% endif %}</div>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ req.source_dept or '-' }}</td>
+                                    <td>{{ req.customer or '-' }}</td>
+                                    <td class="text-center">{{ req.quantity }}套</td>
+                                    <td class="text-center"><span class="priority priority-{{ req.priority }}">{{ req.priority }}</span></td>
+                                    <td class="mono text-center">{{ req.delivery_date or '-' }}</td>
+                                    <td class="text-center"><span class="status-tag status-{{ req.status }}">{{ req.status }}</span></td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="9" class="empty-cell">暂无可关联的需求</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="step-actions">
+                <button type="button" class="btn btn-secondary" onclick="prevStep(2)">← 上一步</button>
+                <button type="button" class="btn btn-primary" onclick="nextStep(2)">下一步：高级选项 →</button>
+            </div>
+        </div>
+
+        <!-- 第3步：高级选项 -->
+        <div class="form-step" id="step-3" style="display:none;">
+            <div class="step-title">⚙️ 高级选项（可选）</div>
+            <div class="step-desc">设置版本状态、描述和核心能力，如无特殊需求可直接保存</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>版本状态</label>
+                    <select name="status" class="form-control">
+                        {% for s in ['规划中','开发中','测试中','已发布','已取消'] %}
+                        <option value="{{ s }}" {% if item and item.status == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group form-full">
+                    <label>版本描述</label>
+                    <textarea name="description" rows="3" class="form-control" placeholder="描述本版本的目标和范围（选填）">{{ item.description if item else '' }}</textarea>
+                </div>
+                <div class="form-group form-full">
+                    <label>核心能力</label>
+                    <textarea name="capabilities" rows="3" class="form-control" placeholder="本版本具备的核心能力，每行一项（选填）">{{ item.capabilities if item else '' }}</textarea>
+                </div>
+            </div>
+            <div class="step-actions">
+                <button type="button" class="btn btn-secondary" onclick="prevStep(3)">← 上一步</button>
+                <button type="submit" class="btn btn-primary btn-success">✓ 保存版本</button>
+                <a href="{{ url_for('version_list') }}" class="btn btn-secondary">取消</a>
+            </div>
+        </div>
+    </form>
+</div>
+
+<style>
+/* 步骤指示器 */
+.step-indicator { display: flex; align-items: center; justify-content: center; padding: 24px 0; margin-bottom: 24px; border-bottom: 1px solid #f3f4f6; }
+.step-item { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.step-num { width: 36px; height: 36px; border-radius: 50%; background: #e5e7eb; color: #9ca3af; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; transition: all 0.3s; }
+.step-item.active .step-num { background: #3b82f6; color: white; box-shadow: 0 0 0 4px rgba(59,130,246,0.2); }
+.step-item.done .step-num { background: #10b981; color: white; }
+.step-label { font-size: 13px; color: #9ca3af; font-weight: 500; }
+.step-item.active .step-label { color: #3b82f6; }
+.step-item.done .step-label { color: #10b981; }
+.step-line { width: 80px; height: 2px; background: #e5e7eb; margin: 0 12px; margin-bottom: 22px; }
+
+/* 步骤内容 */
+.form-step { animation: fadeIn 0.3s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.step-title { font-size: 18px; font-weight: 600; color: #111827; margin-bottom: 6px; }
+.step-desc { font-size: 14px; color: #6b7280; margin-bottom: 24px; }
+.step-actions { display: flex; gap: 12px; justify-content: center; margin-top: 32px; padding-top: 24px; border-top: 1px solid #f3f4f6; }
+.required { color: #dc2626; }
+
+/* 表单 */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.form-full { grid-column: 1 / -1; }
+.form-group label { display: block; font-weight: 500; margin-bottom: 6px; color: #374151; font-size: 14px; }
+.form-control { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+.form-control:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.btn { padding: 10px 24px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; text-decoration: none; display: inline-block; }
+.btn-primary { background: #2563eb; color: white; }
+.btn-primary:hover { background: #1d4ed8; }
+.btn-success { background: #10b981; }
+.btn-success:hover { background: #059669; }
+.btn-secondary { background: #f3f4f6; color: #374151; }
+.btn-secondary:hover { background: #e5e7eb; }
+
+/* 需求选择器 */
+.req-selector { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.req-selector-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; }
+.select-all-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: #374151; font-weight: 500; }
+.req-count { font-size: 12px; color: #6b7280; }
+.req-table-wrapper { max-height: 400px; overflow-y: auto; }
+.req-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.req-table thead th { position: sticky; top: 0; background: #f3f4f6; padding: 10px 8px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; z-index: 1; }
+.req-table tbody td { padding: 10px 8px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+.req-row { cursor: pointer; transition: background 0.15s; }
+.req-row:hover { background: #eff6ff; }
+.req-row.selected { background: #dbeafe; }
+.req-title-cell { max-width: 300px; }
+.req-title { font-weight: 500; color: #111827; margin-bottom: 4px; line-height: 1.4; }
+.req-desc { font-size: 11px; color: #6b7280; line-height: 1.5; }
+.mono { font-family: monospace; }
+.text-center { text-align: center; }
+.empty-cell { text-align: center; color: #9ca3af; padding: 24px !important; }
+.priority { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.priority-高 { background: #fee2e2; color: #991b1b; }
+.priority-中 { background: #fef3c7; color: #92400e; }
+.priority-低 { background: #d1fae5; color: #065f46; }
+.status-tag { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.status-待评审, .status-规划中 { background: #f3f4f6; color: #6b7280; }
+.status-已评审, .status-开发中 { background: #dbeafe; color: #1e40af; }
+.status-进行中, .status-测试中 { background: #fef3c7; color: #92400e; }
+.status-已完成, .status-已发布 { background: #d1fae5; color: #065f46; }
+.status-已取消 { background: #f3f4f6; color: #9ca3af; }
+</style>
+
+<script>
+let currentStep = 1;
+const totalSteps = 3;
+
+function showStep(step) {
+    for (let i = 1; i <= totalSteps; i++) {
+        document.getElementById('step-' + i).style.display = (i === step) ? 'block' : 'none';
+        const indicator = document.getElementById('step-' + i + '-indicator');
+        indicator.classList.remove('active', 'done');
+        if (i < step) indicator.classList.add('done');
+        if (i === step) indicator.classList.add('active');
+    }
+    currentStep = step;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function nextStep(from) {
+    if (from === 1) {
+        const product = document.getElementById('f_product').value;
+        const version = document.getElementById('f_version').value;
+        if (!product) { alert('请选择关联产品'); return; }
+        if (!version) { alert('请填写版本号'); return; }
+    }
+    showStep(from + 1);
+}
+
+function prevStep(from) {
+    showStep(from - 1);
+}
+
+function toggleRowReq(row, event) {
+    if (event.target.tagName === 'INPUT') return;
+    const checkbox = row.querySelector('.req-checkbox');
+    checkbox.checked = !checkbox.checked;
+    row.classList.toggle('selected', checkbox.checked);
+}
+
+function toggleAllReq(checkbox) {
+    const checkboxes = document.querySelectorAll('.req-checkbox');
+    const rows = document.querySelectorAll('.req-row');
+    checkboxes.forEach((cb, i) => {
+        cb.checked = checkbox.checked;
+        if (rows[i]) rows[i].classList.toggle('selected', checkbox.checked);
+    });
+}
+</script>
+{% endblock %}

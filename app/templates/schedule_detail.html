@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}{{ schedule.schedule_no }} - 排程详情{% endblock %}
+{% block page_title %}{{ schedule.schedule_no }} 生产排程详情{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('production_dashboard') }}" class="btn btn-secondary">← 返回生产管理</a>
+{% endblock %}
+
+{% block content %}
+<!-- 排程基本信息 -->
+<div class="panel">
+    <div class="detail-grid">
+        <div class="detail-item"><span class="detail-label">产品</span><span class="detail-value">{{ schedule.product_name }} {{ schedule.model or '' }}</span></div>
+        <div class="detail-item"><span class="detail-label">关联需求</span><span class="detail-value">{{ schedule.req_title or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label">生产数量</span><span class="detail-value">{{ schedule.quantity }} 套</span></div>
+        <div class="detail-item"><span class="detail-label">计划开始</span><span class="detail-value mono">{{ schedule.plan_start or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label">计划完成</span><span class="detail-value mono">{{ schedule.plan_finish or '-' }}</span></div>
+        <div class="detail-item"><span class="detail-label">状态</span><span class="detail-value"><span class="status-tag status-{{ schedule.status }}">{{ schedule.status }}</span></span></div>
+    </div>
+    {% if schedule.remark %}
+    <div class="detail-section"><strong>备注：</strong>{{ schedule.remark }}</div>
+    {% endif %}
+</div>
+
+<!-- 物料需求计划 -->
+<div class="panel">
+    <h3 class="panel-title">物料需求计划（{{ materials|length }}项）</h3>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>物料名称</th>
+                <th>物料编码</th>
+                <th>关键物料</th>
+                <th>需求数量</th>
+                <th>库存数量</th>
+                <th>缺口</th>
+                <th>单位</th>
+                <th>状态</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in materials %}
+            {% set gap = m.quantity_needed - m.quantity_available %}
+            <tr class="{% if gap > 0 %}row-warning{% endif %}">
+                <td class="cell-bold">{{ m.material_name }}</td>
+                <td class="mono">{{ m.material_code or '-' }}</td>
+                <td>{% if m.is_key_material %}<span class="key-badge">关键</span>{% else %}通用{% endif %}</td>
+                <td class="mono">{{ m.quantity_needed }}</td>
+                <td class="mono">{{ m.quantity_available }}</td>
+                <td class="mono {% if gap > 0 %}text-danger{% else %}text-success{% endif %}">{{ gap if gap > 0 else 0 }}</td>
+                <td>{{ m.unit }}</td>
+                <td><span class="status-tag status-{{ m.status }}">{{ m.status }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty-cell">暂无物料需求（请检查产品BOM表是否已配置）</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if materials %}
+    <div class="material-summary">
+        <span class="summary-item">关键物料：{{ materials|selectattr('is_key_material')|list|length }}项</span>
+        <span class="summary-item">待采购：{{ materials|selectattr('status','equalto','待采购')|list|length }}项</span>
+        <span class="summary-item">已确认：{{ materials|selectattr('status','equalto','已确认')|list|length }}项</span>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 生产工序 -->
+<div class="panel">
+    <h3 class="panel-title">生产工序（{{ processes|length }}道）</h3>
+    <div class="process-flow">
+        {% for p in processes %}
+        <div class="process-step">
+            <div class="process-number">{{ p.sequence }}</div>
+            <div class="process-info">
+                <div class="process-name">{{ p.process_name }}</div>
+                <div class="process-time mono">
+                    {{ p.planned_start or '-' }} ~ {{ p.planned_finish or '-' }}
+                </div>
+                <div class="process-responsible">{{ p.responsible or '未分配' }}</div>
+            </div>
+            <div class="process-status">
+                <select class="process-status-select status-{{ p.status }}" onchange="updateProcessStatus({{ schedule.id }}, {{ p.id }}, this)">
+                    <option value="待开始" {% if p.status == '待开始' %}selected{% endif %}>待开始</option>
+                    <option value="进行中" {% if p.status == '进行中' %}selected{% endif %}>进行中</option>
+                    <option value="已完成" {% if p.status == '已完成' %}selected{% endif %}>已完成</option>
+                    <option value="已跳过" {% if p.status == '已跳过' %}selected{% endif %}>已跳过</option>
+                </select>
+                {% if p.actual_finish %}
+                <div class="process-actual mono">完成: {{ p.actual_finish[:10] }}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% if not loop.last %}
+        <div class="process-arrow">↓</div>
+        {% endif %}
+        {% else %}
+        <p class="empty-cell">暂无工序</p>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 关联生产订单（规划与执行打通） -->
+<div class="panel">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 class="panel-title" style="margin:0;">关联生产订单（{{ linked_orders|length }}个）</h3>
+        {% if can_write('schedule') %}
+        <a href="{{ url_for('production_order_add') }}?schedule_id={{ schedule.id }}" class="btn btn-sm btn-primary">
+            + 生成生产订单
+        </a>
+        {% endif %}
+    </div>
+    {% if linked_orders %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>订单编号</th>
+                <th>供应商</th>
+                <th>数量</th>
+                <th>计划开始</th>
+                <th>计划完成</th>
+                <th>状态</th>
+                <th>进度</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for o in linked_orders %}
+            <tr>
+                <td class="cell-bold mono">{{ o.order_no }}</td>
+                <td>{{ o.supplier or '-' }}</td>
+                <td class="mono">{{ o.quantity }} 套</td>
+                <td class="mono">{{ o.plan_start or '-' }}</td>
+                <td class="mono">{{ o.plan_finish or '-' }}</td>
+                <td><span class="status-tag status-{{ o.status }}">{{ o.status }}</span></td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <div style="flex:1; height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden;">
+                            <div style="width:{{ o.wip_progress }}%; height:100%; background:{% if o.wip_progress >= 100 %}#16a34a{% else %}#2563eb{% endif %}; border-radius:4px;"></div>
+                        </div>
+                        <span style="font-size:12px; color:#6b7280; min-width:35px;">{{ o.wip_progress }}%</span>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" style="text-align:center; padding:32px; color:#9ca3af;">
+        <p style="font-size:14px; margin-bottom:12px;">暂无关联的生产订单</p>
+        <p style="font-size:12px;">点击右上角"生成生产订单"按钮，将本排程转化为实际执行的生产订单</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- 关联领用记录（物料与领用打通） -->
+<div class="panel">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 class="panel-title" style="margin:0;">关联物料领用记录（{{ requisitions|length }}条）</h3>
+    </div>
+    {% if requisitions %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>领用单号</th>
+                <th>物料名称</th>
+                <th>领用数量</th>
+                <th>申请人</th>
+                <th>状态</th>
+                <th>审批时间</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in requisitions %}
+            <tr>
+                <td class="cell-bold mono">{{ r.requisition_no }}</td>
+                <td>{{ r.item_material or '-' }}</td>
+                <td class="mono">{{ r.item_quantity }} {{ r.unit or '个' }}</td>
+                <td>{{ r.applicant or '-' }}</td>
+                <td><span class="status-tag status-{{ r.status }}">{{ r.status }}</span></td>
+                <td class="mono">{{ r.approved_at[:16] if r.approved_at else '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" style="text-align:center; padding:32px; color:#9ca3af;">
+        <p style="font-size:14px; margin-bottom:8px;">暂无关联的物料领用记录</p>
+        <p style="font-size:12px;">当物料领用单中选择关联本排程的物料需求计划后，会自动显示在这里</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.detail-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 16px; }
+.detail-item { display: flex; flex-direction: column; gap: 4px; }
+.detail-label { font-size: 12px; color: #6b7280; }
+.detail-value { font-size: 14px; font-weight: 500; color: #111827; }
+.detail-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 14px; line-height: 1.6; }
+.panel-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #111827; }
+.mono { font-family: monospace; }
+.key-badge { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.row-warning { background: #fffbeb; }
+.text-danger { color: #dc2626; font-weight: 600; }
+.text-success { color: #16a34a; font-weight: 600; }
+.material-summary { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb; display: flex; gap: 24px; }
+.summary-item { font-size: 13px; color: #374151; }
+.process-flow { display: flex; flex-direction: column; gap: 0; }
+.process-step { display: flex; align-items: center; gap: 16px; padding: 16px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; }
+.process-number { width: 36px; height: 36px; border-radius: 50%; background: #2563eb; color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; flex-shrink: 0; }
+.process-info { flex: 1; }
+.process-name { font-size: 15px; font-weight: 600; color: #111827; margin-bottom: 4px; }
+.process-time { font-size: 12px; color: #6b7280; margin-bottom: 2px; }
+.process-responsible { font-size: 12px; color: #9ca3af; }
+.process-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.process-status-select { padding: 6px 10px; border-radius: 6px; font-size: 12px; border: 1px solid #d1d5db; cursor: pointer; background: white; min-width: 90px; }
+.process-actual { font-size: 11px; color: #16a34a; }
+.process-arrow { text-align: center; color: #9ca3af; font-size: 18px; padding: 4px 0; }
+.status-待开始 { background: #f3f4f6; color: #6b7280; border-color: #d1d5db; }
+.status-进行中 { background: #dbeafe; color: #1e40af; border-color: #93c5fd; }
+.status-已完成 { background: #d1fae5; color: #065f46; border-color: #6ee7b7; }
+.status-已跳过 { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.status-待采购 { background: #fee2e2; color: #991b1b; }
+.status-已确认 { background: #d1fae5; color: #065f46; }
+</style>
+
+<script>
+function updateProcessStatus(scheduleId, processId, select) {
+    const newStatus = select.value;
+    fetch(`/production/schedules/${scheduleId}/processes/${processId}/status`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `status=${encodeURIComponent(newStatus)}`
+    }).then(r => r.json()).then(data => {
+        if (data.success) {
+            select.className = 'process-status-select status-' + data.status;
+            const original = select.style.boxShadow;
+            select.style.boxShadow = '0 0 0 2px rgba(34,197,94,0.4)';
+            setTimeout(() => { select.style.boxShadow = original; }, 800);
+        } else {
+            alert('更新失败');
+            location.reload();
+        }
+    }).catch(() => {
+        alert('网络错误');
+        location.reload();
+    });
+}
+</script>
+{% endblock %}

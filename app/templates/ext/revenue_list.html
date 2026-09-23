@@ -1,0 +1,103 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '收入确认' %}
+{% block header_actions %}
+{% if can_write(request.endpoint or '') %}
+<a href="{{ url_for('ext.revenue_add') }}" class="btn btn-primary">+ 新增确认</a>
+{% endif %}
+<a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-outline">交付计划</a>
+{% endblock %}
+{% block ext_content %}
+<div class="stats-row">
+    <div class="stat-mini stat-mini-blue"><div class="stat-mini-value">¥{{ '%.0f'|format(total_amount) }}</div><div class="stat-mini-label">合同总金额</div></div>
+    <div class="stat-mini stat-mini-green"><div class="stat-mini-value">¥{{ '%.0f'|format(confirmed_amount) }}</div><div class="stat-mini-label">已确认收入</div></div>
+    <div class="stat-mini stat-mini-orange"><div class="stat-mini-value">¥{{ '%.0f'|format(total_amount - confirmed_amount) }}</div><div class="stat-mini-label">待确认</div></div>
+</div>
+<div class="filter-bar">
+    <a href="{{ url_for('ext.revenue_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
+    <a href="{{ url_for('ext.revenue_list', status='待确认') }}" class="filter-tag {% if current_status == '待确认' %}active{% endif %}">待确认</a>
+    <a href="{{ url_for('ext.revenue_list', status='已确认') }}" class="filter-tag {% if current_status == '已确认' %}active{% endif %}">已确认</a>
+</div>
+<div class="search-bar">
+    <form method="get">
+        {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+        <input type="text" name="search" class="search-input" placeholder="搜索客户、合同号、确认编号..." value="{{ search }}">
+        <button type="submit" class="search-btn">搜索</button>
+        <span class="search-count">共 {{ total }} 条记录</span>
+    </form>
+</div>
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>确认编号</th><th>客户</th><th>合同号</th><th>产品</th><th>合同金额</th><th>已确认</th><th>期间</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for r in revenues %}
+            <tr>
+                <td class="mono">{{ r.confirm_no }}</td>
+                <td class="cell-bold">{{ r.customer }}</td>
+                <td>{{ r.contract_no or '-' }}</td>
+                <td>{{ r.product_name or '-' }}</td>
+                <td class="text-right">¥{{ '%.2f'|format(r.amount) }}</td>
+                <td class="text-right text-success">¥{{ '%.2f'|format(r.confirmed_amount or 0) }}</td>
+                <td>{{ r.period or '-' }}</td>
+                <td class="text-center"><span class="status-tag status-{{ r.status }}">{{ r.status }}</span></td>
+                <td>
+                    {% if r.status == '待确认' and can_write(request.endpoint or '') %}
+                    <button onclick="showConfirm({{ r.id }})" class="btn btn-sm btn-primary">确认收入</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="empty-cell">暂无收入确认记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% if total_pages > 1 %}
+<div class="pagination">
+    <span class="page-info">第 {{ page }} / {{ total_pages }} 页</span>
+    <div class="page-buttons">
+        {% if page > 1 %}<a href="{{ url_for('ext.revenue_list', status=current_status, search=search, page=page-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% for p in range(1, total_pages+1) %}
+        {% if p == page %}<span class="page-btn page-active">{{ p }}</span>
+        {% elif p <= 3 or p > total_pages-3 or (p >= page-1 and p <= page+1) %}
+        <a href="{{ url_for('ext.revenue_list', status=current_status, search=search, page=p) }}" class="page-btn">{{ p }}</a>
+        {% elif p == 4 or p == total_pages-3 %}<span class="page-ellipsis">...</span>{% endif %}
+        {% endfor %}
+        {% if page < total_pages %}<a href="{{ url_for('ext.revenue_list', status=current_status, search=search, page=page+1) }}" class="page-btn">下一页</a>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 确认收入弹窗 -->
+<div id="confirmModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:white;padding:24px;border-radius:12px;width:400px;max-width:90%;">
+        <h3 style="margin-bottom:16px;font-size:16px;">确认收入</h3>
+        <form id="confirmForm" method="post">
+            <div class="form-group" style="margin-bottom:12px;">
+                <label>确认金额（元） <span class="required">*</span></label>
+                <input type="number" name="confirmed_amount" step="0.01" required class="form-control" placeholder="本次确认金额">
+            </div>
+            <div class="form-group" style="margin-bottom:12px;">
+                <label>确认日期</label>
+                <input type="date" name="confirm_date" class="form-control" value="{{ 'now'|date('Y-m-d') if false else '' }}">
+            </div>
+            <div class="form-group" style="margin-bottom:16px;">
+                <label>凭证号</label>
+                <input type="text" name="voucher" class="form-control" placeholder="财务凭证号（选填）">
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button type="button" onclick="hideConfirm()" class="btn btn-secondary">取消</button>
+                <button type="submit" class="btn btn-primary">确认</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function showConfirm(id) {
+    document.getElementById('confirmForm').action = '/revenue/' + id + '/confirm';
+    document.getElementById('confirmModal').style.display = 'flex';
+}
+function hideConfirm() {
+    document.getElementById('confirmModal').style.display = 'none';
+}
+</script>
+{% endblock %}

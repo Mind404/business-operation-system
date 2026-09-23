@@ -1,0 +1,139 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '交付计划详情' %}
+{% block header_actions %}
+<a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-outline">返回列表</a>
+{% if can_write(request.endpoint or '') %}
+<a href="{{ url_for('ext.delivery_plan_edit', plan_id=plan.id) }}" class="btn btn-primary">编辑</a>
+{% endif %}
+{% endblock %}
+{% block ext_content %}
+<div class="detail-card">
+    <div class="detail-header">
+        <div class="detail-title">
+            <h3>{{ plan.plan_no }}</h3>
+            <span class="status-tag status-{{ plan.status }}">{{ plan.status }}</span>
+        </div>
+        <div class="detail-meta">
+            <span>创建时间：{{ plan.created_at }}</span>
+        </div>
+    </div>
+    <div class="detail-body">
+        <div class="detail-section">
+            <h4>基本信息</h4>
+            <div class="detail-grid">
+                <div class="detail-item">
+                    <label>客户</label>
+                    <value>{{ plan.customer or '-' }}</value>
+                </div>
+                <div class="detail-item">
+                    <label>产品</label>
+                    <value>{{ plan.product_name or '-' }}{% if plan.product_model %}（{{ plan.product_model }}）{% endif %}</value>
+                </div>
+                <div class="detail-item">
+                    <label>数量</label>
+                    <value>{{ plan.quantity }}套</value>
+                </div>
+                <div class="detail-item">
+                    <label>负责人</label>
+                    <value>{{ plan.owner or '-' }}</value>
+                </div>
+                <div class="detail-item">
+                    <label>计划交付日期</label>
+                    <value>{{ plan.planned_date or '-' }}</value>
+                </div>
+                <div class="detail-item">
+                    <label>实际交付日期</label>
+                    <value>{{ plan.actual_date or '-' }}</value>
+                </div>
+            </div>
+        </div>
+        {% if plan.remark %}
+        <div class="detail-section">
+            <h4>备注</h4>
+            <div class="detail-remark">{{ plan.remark }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+<style>
+.detail-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    overflow: hidden;
+}
+.detail-header {
+    padding: 24px;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+.detail-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.detail-title h3 {
+    margin: 0;
+    font-size: 20px;
+    color: #1f2937;
+}
+.detail-meta {
+    color: #6b7280;
+    font-size: 13px;
+}
+.detail-body {
+    padding: 24px;
+}
+.detail-section {
+    margin-bottom: 24px;
+}
+.detail-section:last-child {
+    margin-bottom: 0;
+}
+.detail-section h4 {
+    margin: 0 0 16px 0;
+    font-size: 15px;
+    color: #374151;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #3b82f6;
+    display: inline-block;
+}
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+.detail-item {
+    background: #f9fafb;
+    padding: 12px 16px;
+    border-radius: 8px;
+}
+.detail-item label {
+    display: block;
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 4px;
+}
+.detail-item value {
+    display: block;
+    font-size: 14px;
+    color: #1f2937;
+    font-weight: 500;
+}
+.detail-remark {
+    background: #f9fafb;
+    padding: 16px;
+    border-radius: 8px;
+    color: #374151;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+@media (max-width: 768px) {
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+{% endblock %}

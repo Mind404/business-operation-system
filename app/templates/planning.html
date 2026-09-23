@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}产品与版本规划 - 业务运转系统{% endblock %}
+{% block page_title %}产品与版本规划{% endblock %}
+
+{% block header_actions %}
+{% if can_write('planning') %}
+<a href="{{ url_for('product_add') }}" class="btn btn-primary">+ 新增产品</a>
+<a href="{{ url_for('version_add') }}" class="btn btn-info">+ 新增版本</a>
+<div class="batch-actions">
+    <a href="{{ url_for('download_template', table_name='products') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- 概览统计卡片 -->
+<div class="stats-cards" style="display:flex; gap:14px; margin-bottom:20px; flex-wrap:wrap;">
+    <div class="stat-card" style="background:linear-gradient(135deg, #3b82f6, #2563eb); color:white; padding:16px 20px; border-radius:10px; flex:1; min-width:160px; max-width:240px;">
+        <div style="font-size:12px; opacity:0.9; margin-bottom:2px;">在管产品</div>
+        <div style="font-size:28px; font-weight:700;">{{ products|length }}</div>
+    </div>
+    <div class="stat-card" style="background:linear-gradient(135deg, #8b5cf6, #7c3aed); color:white; padding:16px 20px; border-radius:10px; flex:1; min-width:160px; max-width:240px;">
+        <div style="font-size:12px; opacity:0.9; margin-bottom:2px;">软件版本</div>
+        <div style="font-size:28px; font-weight:700;">{{ versions|length }}</div>
+    </div>
+    <div class="stat-card" style="background:linear-gradient(135deg, #10b981, #059669); color:white; padding:16px 20px; border-radius:10px; flex:1; min-width:160px; max-width:240px;">
+        <div style="font-size:12px; opacity:0.9; margin-bottom:2px;">已发布版本</div>
+        <div style="font-size:28px; font-weight:700;">{{ versions|selectattr('status','equalto','已发布')|list|length }}</div>
+    </div>
+    <div class="stat-card" style="background:linear-gradient(135deg, #f59e0b, #d97706); color:white; padding:16px 20px; border-radius:10px; flex:1; min-width:160px; max-width:240px;">
+        <div style="font-size:12px; opacity:0.9; margin-bottom:2px;">关联需求</div>
+        <div style="font-size:28px; font-weight:700;">{{ versions|sum(attribute='req_count') }}</div>
+    </div>
+</div>
+
+<!-- 第一部分：产品规划 -->
+<div class="panel" style="margin-bottom:24px;">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:2px solid #eff6ff;">
+        <div>
+            <h3 class="panel-title" style="margin:0; font-size:16px; color:#1e40af;">📦 产品规划（{{ products|length }}款）</h3>
+            <div style="font-size:12px; color:#6b7280; margin-top:4px;">基于 <span style="background:#fef3c7; color:#92400e; padding:1px 6px; border-radius:6px; font-weight:600;">用户需求（合同刚性）</span> 进行产品定义、生产排程与交付 | 点击产品名称查看BOM详情</div>
+        </div>
+    </div>
+    <div class="product-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 360px)); gap:16px;">
+        {% for p in products %}
+        <div class="product-card" style="border:1px solid #e5e7eb; border-radius:10px; padding:16px; background:#fff; transition:all 0.2s; border-left:4px solid {% if p.lifecycle_stage == '量产中' %}#10b981{% elif p.lifecycle_stage == '研发中' %}#3b82f6{% elif p.lifecycle_stage == '维护中' %}#f59e0b{% else %}#9ca3af{% endif %};">
+            <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:8px;">
+                <div>
+                    <div style="font-weight:600; font-size:15px; color:#111827;">{{ p.name }}</div>
+                    <div style="font-size:12px; color:#6b7280; font-family:monospace;">{{ p.model or '-' }}</div>
+                </div>
+                <span class="status-tag status-{{ p.lifecycle_stage }}" style="font-size:11px; padding:2px 8px; border-radius:10px;">{{ p.lifecycle_stage or '规划中' }}</span>
+            </div>
+            <div style="font-size:12px; color:#4b5563; margin-bottom:10px; line-height:1.5; min-height:36px;">
+                {{ p.description[:60] if p.description else '暂无描述' }}{% if p.description and p.description|length > 60 %}...{% endif %}
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px; text-align:center; padding-top:10px; border-top:1px solid #f3f4f6;">
+                <div>
+                    <div style="font-size:18px; font-weight:700; color:#3b82f6;">{{ p.version_count or 0 }}</div>
+                    <div style="font-size:11px; color:#9ca3af;">版本数</div>
+                </div>
+                <div>
+                    <div style="font-size:18px; font-weight:700; color:#8b5cf6;">{{ p.user_req_count or p.req_count or 0 }}</div>
+                    <div style="font-size:11px; color:#9ca3af;">用户需求</div>
+                </div>
+                <div>
+                    <div style="font-size:18px; font-weight:700; color:#10b981;">{% if p.stocking_strategy and '不囤货' in p.stocking_strategy %}按需{% else %}备货{% endif %}</div>
+                    <div style="font-size:11px; color:#9ca3af;">备货策略</div>
+                </div>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px;">
+                {% if can_write('planning') %}
+                <a href="{{ url_for('product_edit', pid=p.id) }}" class="btn btn-sm btn-outline" style="flex:1; text-align:center;">编辑</a>
+                {% endif %}
+                <a href="{{ url_for('version_list') }}?product_id={{ p.id }}" class="btn btn-sm btn-info" style="flex:1; text-align:center;">版本</a>
+            </div>
+        </div>
+        {% else %}
+        <div style="grid-column:1/-1; text-align:center; padding:40px; color:#9ca3af;">
+            暂无产品，点击右上角"新增产品"开始添加
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 第二部分：版本规划（按产品分组） -->
+<div class="panel">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:2px solid #f5f3ff;">
+        <div>
+            <h3 class="panel-title" style="margin:0; font-size:16px; color:#6d28d9;">🔖 版本规划（{{ versions|length }}个版本，按产品分组）</h3>
+            <div style="font-size:12px; color:#6b7280; margin-top:4px;">基于 <span style="background:#e0e7ff; color:#3730a3; padding:1px 6px; border-radius:6px; font-weight:600;">所有类型需求</span>（用户需求+系统侧+应用侧+其他）进行软件版本演进 | 不直接影响生产</div>
+        </div>
+        <a href="{{ url_for('version_list') }}" style="font-size:12px; color:#6b7280; text-decoration:underline;">查看全部版本 →</a>
+    </div>
+
+    {% for p in products %}
+    {% set product_versions = versions_by_product.get(p.id, []) %}
+    {% if product_versions %}
+    <div class="product-version-group" style="margin-bottom:20px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+            <div style="width:4px; height:20px; background:#8b5cf6; border-radius:2px;"></div>
+            <span style="font-weight:600; color:#1f2937;">{{ p.name }}</span>
+            <span style="font-size:12px; color:#9ca3af; font-family:monospace;">{{ p.model }}</span>
+            <span style="font-size:11px; background:#f5f3ff; color:#7c3aed; padding:2px 8px; border-radius:10px;">{{ product_versions|length }}个版本</span>
+        </div>
+        <div class="version-timeline" style="display:flex; gap:12px; overflow-x:auto; padding-bottom:8px;">
+            {% for v in product_versions %}
+            <div class="version-card" style="flex:0 0 auto; width:280px; border:1px solid #e5e7eb; border-radius:10px; padding:14px; background:#fff; border-top:3px solid {% if v.status == '已发布' %}#10b981{% elif v.status == '开发中' %}#3b82f6{% elif v.status == '测试中' %}#f59e0b{% else %}#9ca3af{% endif %};">
+                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:6px;">
+                    <div style="font-weight:600; font-size:14px; color:#111827; font-family:monospace;">{{ v.version_no }}</div>
+                    <span class="status-tag status-{{ v.status }}" style="font-size:10px; padding:1px 6px; border-radius:8px;">{{ v.status }}</span>
+                </div>
+                <div style="font-size:12px; color:#4b5563; margin-bottom:8px;">{{ v.version_name or '-' }}</div>
+                <div style="font-size:11px; color:#6b7280; margin-bottom:8px;">
+                    📅 计划发布：<span style="font-family:monospace;">{{ v.planned_release_date or '-' }}</span>
+                </div>
+                <!-- 任务进度条 -->
+                {% if v.task_count > 0 %}
+                <div style="margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:11px; color:#6b7280; margin-bottom:3px;">
+                        <span>开发任务</span>
+                        <span>{{ v.task_done or 0 }}/{{ v.task_count }}</span>
+                    </div>
+                    <div style="height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden;">
+                        <div style="height:100%; background:linear-gradient(90deg, #3b82f6, #60a5fa); width:{{ ((v.task_done or 0) / v.task_count * 100)|int }}%; border-radius:3px;"></div>
+                    </div>
+                </div>
+                {% endif %}
+                <div style="display:flex; gap:12px; font-size:11px; color:#6b7280; padding-top:8px; border-top:1px solid #f3f4f6;">
+                    <span>📋 {{ v.req_count or 0 }}需求</span>
+                    <span>💻 {{ v.task_count or 0 }}任务</span>
+                    <span>🐛 {{ v.bug_count or 0 }}Bug</span>
+                </div>
+                <div style="margin-top:10px;">
+                    <a href="{{ url_for('version_detail', vid=v.id) }}" class="btn btn-sm btn-outline" style="width:100%; text-align:center; font-size:11px;">查看详情</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    {% if not versions %}
+    <div style="text-align:center; padding:40px; color:#9ca3af;">
+        暂无软件版本，点击右上角"新增版本"开始添加
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.product-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.version-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.version-timeline::-webkit-scrollbar {
+    height: 6px;
+}
+.version-timeline::-webkit-scrollbar-track {
+    background: #f3f4f6;
+    border-radius: 3px;
+}
+.version-timeline::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 3px;
+}
+</style>
+{% endblock %}

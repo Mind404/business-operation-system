@@ -1,0 +1,59 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '新建测试执行' %}
+{% block ext_content %}
+<div class="panel">
+    <form method="post">
+        <div class="form-grid">
+            <div class="form-group">
+                <label>测试产品 <span class="required">*</span></label>
+                <select name="product_id" required class="form-control" id="productSelect">
+                    <option value="">-- 选择产品 --</option>
+                    {% for p in products %}
+                    <option value="{{ p.id }}">{{ p.name }} ({{ p.model }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>测试版本</label>
+                <select name="version_id" class="form-control" id="versionSelect">
+                    <option value="">-- 选择版本（选填）--</option>
+                    {% for v in versions %}
+                    <option value="{{ v.id }}" data-product="{{ v.product_id }}">{{ v.version_no }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>执行轮次</label>
+                <input type="number" name="round_no" value="1" min="1" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>执行人</label>
+                <input type="text" name="executor" value="tester" class="form-control">
+            </div>
+        </div>
+        <div style="background:#f0f9ff;padding:16px;border-radius:8px;margin-top:20px;">
+            <p style="font-size:13px;color:#0369a1;margin:0;">
+                <strong>说明：</strong>创建执行后，系统会自动加载该产品的所有启用用例，您可以逐个执行并记录结果。失败用例可直接关联Bug。
+            </p>
+        </div>
+        <div class="step-actions">
+            <button type="submit" class="btn btn-primary">开始执行</button>
+            <a href="{{ url_for('ext.test_execution_list') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+<script>
+document.getElementById('productSelect').addEventListener('change', function() {
+    var pid = this.value;
+    var versionSelect = document.getElementById('versionSelect');
+    for (var i = 0; i < versionSelect.options.length; i++) {
+        var opt = versionSelect.options[i];
+        if (opt.value === '' || opt.dataset.product === pid) {
+            opt.style.display = '';
+        } else {
+            opt.style.display = 'none';
+        }
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,157 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '合同跟进' %}
+{% block header_actions %}
+{% if can_write('ext.contract') %}
+<a href="{{ url_for('ext.contract_add') }}" class="btn btn-primary">+ 新建合同</a>
+<div class="batch-actions">
+    <a href="{{ url_for('download_template', table_name='contracts') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
+    <form method="POST" action="{{ url_for('excel_import', table_name='contracts') }}" enctype="multipart/form-data" style="display:inline;">
+        <label class="btn btn-success file-input-label" title="选择Excel文件批量导入">
+            📤 批量导入
+            <input type="file" name="excel_file" accept=".xlsx,.xls" required onchange="if(confirm('确定要导入这个Excel文件吗？')) this.form.submit();">
+        </label>
+    </form>
+</div>
+{% endif %}
+<a href="{{ url_for('ext.resource_list') }}" class="btn btn-outline">资源调度</a>
+{% endblock %}
+{% block ext_content %}
+<div class="filter-bar">
+    <a href="{{ url_for('ext.contract_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
+    <a href="{{ url_for('ext.contract_list', status='执行中') }}" class="filter-tag {% if current_status == '执行中' %}active{% endif %}">执行中</a>
+    <a href="{{ url_for('ext.contract_list', status='已完成') }}" class="filter-tag {% if current_status == '已完成' %}active{% endif %}">已完成</a>
+    <a href="{{ url_for('ext.contract_list', status='已终止') }}" class="filter-tag {% if current_status == '已终止' %}active{% endif %}">已终止</a>
+    <span class="filter-divider"></span>
+    <span class="filter-label">类型：</span>
+    <span class="type-mini type-生产合同">生产合同</span>
+    <span class="type-mini type-物料合同">物料合同</span>
+    <span class="type-mini type-用户合同">用户合同</span>
+</div>
+<div class="search-bar">
+    <form method="get">
+        {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+        <input type="text" name="search" class="search-input" placeholder="搜索供应商、合同号..." value="{{ search }}">
+        <button type="submit" class="search-btn">搜索</button>
+        <span class="search-count">共 {{ total }} 份合同</span>
+    </form>
+</div>
+<div class="panel">
+    <table class="data-table">
+        <thead><tr>
+            <th>合同编号</th>
+            <th>类型</th>
+            <th>供应商/客户</th>
+            <th>产品</th>
+            <th>金额</th>
+            <th>签订日期</th>
+            <th>交付日期</th>
+            <th>付款状态</th>
+            <th>合同状态</th>
+            <th>负责人</th>
+            <th>操作</th>
+        </tr></thead>
+        <tbody>
+            {% for c in contracts %}
+            <tr>
+                <td class="mono">{{ c.contract_no }}</td>
+                <td><span class="contract-type-tag type-{{ c.contract_type }}">{{ c.contract_type }}</span></td>
+                <td class="cell-bold">{{ c.supplier }}</td>
+                <td>{{ c.product_name or '-' }}</td>
+                <td class="text-right">¥{{ '%.2f'|format(c.amount) }}</td>
+                <td>{{ c.sign_date or '-' }}</td>
+                <td>{{ c.delivery_date or '-' }}</td>
+                <td class="text-center">
+                    {% if can_write('ext.contract') %}
+                    <form method="post" action="{{ url_for('ext.contract_update_status', cid=c.id) }}" style="display:inline;">
+                        <select name="payment_status" class="status-select status-select-{% if c.payment_status == '已付款' %}done{% elif c.payment_status == '部分付款' %}partial{% else %}pending{% endif %}" onchange="this.form.submit()">
+                            <option value="未付款" {% if c.payment_status == '未付款' %}selected{% endif %}>未付款</option>
+                            <option value="部分付款" {% if c.payment_status == '部分付款' %}selected{% endif %}>部分付款</option>
+                            <option value="已付款" {% if c.payment_status == '已付款' %}selected{% endif %}>已付款</option>
+                        </select>
+                        <input type="hidden" name="status" value="{{ c.status }}">
+                        <input type="hidden" name="progress" value="{{ c.progress }}">
+                    </form>
+                    {% else %}
+                    <span class="status-tag status-{% if c.payment_status == '已付款' %}已完成{% elif c.payment_status == '部分付款' %}处理中{% else %}待处理{% endif %}">{{ c.payment_status }}</span>
+                    {% endif %}
+                </td>
+                <td class="text-center">
+                    {% if can_write('ext.contract') %}
+                    <form method="post" action="{{ url_for('ext.contract_update_status', cid=c.id) }}" style="display:inline;">
+                        <select name="status" class="status-select status-select-{% if c.status == '已完成' %}done{% elif c.status == '已终止' %}cancelled{% else %}active{% endif %}" onchange="this.form.submit()">
+                            <option value="执行中" {% if c.status == '执行中' %}selected{% endif %}>执行中</option>
+                            <option value="已完成" {% if c.status == '已完成' %}selected{% endif %}>已完成</option>
+                            <option value="已终止" {% if c.status == '已终止' %}selected{% endif %}>已终止</option>
+                        </select>
+                        <input type="hidden" name="payment_status" value="{{ c.payment_status }}">
+                        <input type="hidden" name="progress" value="{{ c.progress }}">
+                    </form>
+                    {% else %}
+                    <span class="status-tag status-{{ c.status }}">{{ c.status }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ c.owner }}</td>
+                <td>
+                    {% if can_write('ext.contract') %}
+                    <a href="{{ url_for('ext.contract_edit', cid=c.id) }}" class="btn btn-sm btn-outline">编辑</a>
+                    {% else %}
+                    <span class="text-muted">只读</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="11" class="empty-cell">暂无合同记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% if total_pages > 1 %}
+<div class="pagination">
+    <span class="page-info">第 {{ page }} / {{ total_pages }} 页</span>
+    <div class="page-buttons">
+        {% if page > 1 %}<a href="{{ url_for('ext.contract_list', status=current_status, search=search, page=page-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% for p in range(1, total_pages+1) %}
+        {% if p == page %}<span class="page-btn page-active">{{ p }}</span>
+        {% elif p <= 3 or p > total_pages-3 or (p >= page-1 and p <= page+1) %}
+        <a href="{{ url_for('ext.contract_list', status=current_status, search=search, page=p) }}" class="page-btn">{{ p }}</a>
+        {% elif p == 4 or p == total_pages-3 %}<span class="page-ellipsis">...</span>{% endif %}
+        {% endfor %}
+        {% if page < total_pages %}<a href="{{ url_for('ext.contract_list', status=current_status, search=search, page=page+1) }}" class="page-btn">下一页</a>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+<style>
+.contract-type-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.type-生产合同 { background: #dbeafe; color: #1e40af; }
+.type-物料合同 { background: #fef3c7; color: #92400e; }
+.type-用户合同 { background: #d1fae5; color: #065f46; }
+.type-服务合同 { background: #e0e7ff; color: #3730a3; }
+.type-技术合作 { background: #fce7f3; color: #9d174d; }
+.type-其他 { background: #f3f4f6; color: #374151; }
+.status-select {
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    border: 1px solid #d1d5db;
+    cursor: pointer;
+    font-weight: 500;
+}
+.status-select-active { background: #dbeafe; color: #1e40af; border-color: #93c5fd; }
+.status-select-done { background: #d1fae5; color: #065f46; border-color: #6ee7b7; }
+.status-select-cancelled { background: #f3f4f6; color: #6b7280; border-color: #d1d5db; }
+.status-select-pending { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+.status-select-partial { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.filter-divider { display: inline-block; width: 1px; height: 20px; background: #e5e7eb; margin: 0 8px; vertical-align: middle; }
+.filter-label { font-size: 13px; color: #6b7280; margin-right: 4px; }
+.type-mini { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; font-weight: 500; }
+.form-hint { display: block; font-size: 11px; color: #9ca3af; margin-top: 4px; }
+.text-muted { color: #9ca3af; font-size: 12px; }
+</style>
+{% endblock %}

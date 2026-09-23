@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Bug管理 - 业务运转系统{% endblock %}
+{% block page_title %}Bug管理{% endblock %}
+
+{% block header_actions %}
+{% if can_write('bug') %}
+<a href="{{ url_for('bug_add') }}" class="btn btn-primary">+ 登记Bug</a>
+<div class="batch-actions">
+    <a href="{{ url_for('download_template', table_name='bug_records') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
+    <form method="POST" action="{{ url_for('excel_import', table_name='bug_records') }}" enctype="multipart/form-data" style="display:inline;">
+        <label class="btn btn-success file-input-label" title="选择Excel文件批量导入">
+            📤 批量导入
+            <input type="file" name="excel_file" accept=".xlsx,.xls" required onchange="if(confirm('确定要导入这个Excel文件吗？')) this.form.submit();">
+        </label>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="filter-bar">
+    <a href="{{ url_for('bug_list', tab='all') }}" class="filter-tag {% if tab == 'all' %}active{% endif %}">全部</a>
+    <a href="{{ url_for('bug_list', tab='open') }}" class="filter-tag {% if tab == 'open' %}active{% endif %}">未关闭</a>
+    <a href="{{ url_for('bug_list', tab='quality') }}" class="filter-tag {% if tab == 'quality' %}active{% endif %}">质量问题</a>
+    <span class="filter-divider"></span>
+    <span class="filter-label">状态：</span>
+    <span class="status-mini status-新建">新建</span>
+    <span class="status-mini status-已分配">已分配</span>
+    <span class="status-mini status-处理中">处理中</span>
+    <span class="status-mini status-已修复">已修复</span>
+    <span class="status-mini status-验证中">验证中</span>
+    <span class="status-mini status-已关闭">已关闭</span>
+    <span class="status-mini status-重新打开">重开</span>
+</div>
+
+<div class="panel">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Bug编号</th>
+                <th>标题</th>
+                <th>产品</th>
+                <th>类型</th>
+                <th>严重度</th>
+                <th>优先级</th>
+                <th>状态</th>
+                <th>负责人</th>
+                <th>质量问题</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for b in bugs %}
+            <tr>
+                <td class="mono">{{ b.bug_no }}</td>
+                <td class="cell-bold">{{ b.title }}</td>
+                <td>{{ b.product_name or '-' }}</td>
+                <td><span class="type-tag type-{{ b.bug_type }}">{{ b.bug_type or '功能Bug' }}</span></td>
+                <td><span class="priority priority-{{ b.severity }}">{{ b.severity }}</span></td>
+                <td><span class="priority-tag priority-tag-{{ b.priority }}">{{ b.priority or '中' }}</span></td>
+                <td><span class="status-tag status-{{ b.status }}">{{ b.status }}</span></td>
+                <td>{{ b.assignee or '-' }}</td>
+                <td>{% if b.is_quality_issue %}<span class="quality-badge">是</span>{% else %}-{% endif %}</td>
+                <td><a href="{{ url_for('bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="empty-cell">暂无Bug记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="panel panel-tip">
+    <div class="tip-content">
+        <strong>Bug完整生命周期：</strong>
+        新建 → 已分配 → 处理中 → 已修复 → 验证中 → 已关闭（验证不通过则重新打开）。
+        每个状态流转都记录操作人、时间、备注；修复时记录修复方案，验证时记录验证结果，关闭时需填写根因分析、纠正措施、预防措施实现闭环。
+        严重Bug可升级为质量问题，进行专项根因分析与举一反三。
+    </div>
+</div>
+
+<style>
+.quality-badge { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }
+.btn-primary { background: #2563eb; color: white; border: none; cursor: pointer; border-radius: 6px; text-decoration: none; padding: 8px 20px; font-size: 14px; }
+.btn-outline { background: white; color: #2563eb; border: 1px solid #2563eb; cursor: pointer; border-radius: 6px; text-decoration: none; padding: 4px 12px; font-size: 12px; }
+.mono { font-family: monospace; }
+.type-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #e0e7ff; color: #3730a3; }
+.priority-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.priority-tag-紧急 { background: #fee2e2; color: #991b1b; }
+.priority-tag-高 { background: #fed7aa; color: #9a3412; }
+.priority-tag-中 { background: #fef3c7; color: #92400e; }
+.priority-tag-低 { background: #d1fae5; color: #065f46; }
+.status-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.status-新建 { background: #dbeafe; color: #1e40af; }
+.status-已分配 { background: #e0e7ff; color: #3730a3; }
+.status-处理中 { background: #fef3c7; color: #92400e; }
+.status-已修复 { background: #d1fae5; color: #065f46; }
+.status-验证中 { background: #cffafe; color: #155e75; }
+.status-已关闭 { background: #e5e7eb; color: #374151; }
+.status-重新打开 { background: #fee2e2; color: #991b1b; }
+.status-已取消 { background: #f3f4f6; color: #6b7280; }
+.filter-divider { display: inline-block; width: 1px; height: 20px; background: #e5e7eb; margin: 0 8px; vertical-align: middle; }
+.filter-label { font-size: 13px; color: #6b7280; margin-right: 4px; }
+.status-mini { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; }
+</style>
+{% endblock %}

@@ -1,0 +1,487 @@
+{% extends "base.html" %}
+{% block title %}{{ req.customer }} - 需求满足详情{% endblock %}
+{% block page_title %}需求满足详情{% endblock %}
+
+{% block content %}
+<style>
+/* 页面导航 */
+.page-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.page-nav a {
+    font-size: 13px;
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 500;
+}
+.page-nav a:hover { text-decoration: underline; }
+.page-nav .sep { color: #d1d5db; }
+.page-nav .current { color: #374151; font-weight: 600; }
+
+/* 区块标题条 - 草图风格 */
+.section-title-bar {
+    background: white;
+    border: 2px solid #334155;
+    border-radius: 4px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e293b;
+    text-align: center;
+    margin-top: 24px;
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+}
+
+/* 信息卡片行 - 草图风格 */
+.info-row {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+.info-box {
+    background: white;
+    border: 2px solid #334155;
+    border-radius: 4px;
+    padding: 14px 20px;
+    min-width: 140px;
+    text-align: center;
+    flex: 1;
+    max-width: 200px;
+}
+.info-box-label {
+    font-size: 12px;
+    color: #475569;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+.info-box-value {
+    font-size: 14px;
+    color: #0f172a;
+    font-weight: 700;
+    line-height: 1.4;
+    word-break: break-all;
+}
+.info-box-value.small { font-size: 12px; font-weight: 600; }
+.info-box-value.mono { font-family: monospace; }
+
+/* 约束卡片 */
+.constraint-box {
+    text-align: left;
+    max-width: 280px;
+}
+.constraint-type-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+/* ========== 甘特图区域 - 严格按照草图 ========== */
+.gantt-area {
+    background: white;
+    border: 2px solid #334155;
+    border-radius: 4px;
+    padding: 20px;
+    overflow-x: auto;
+}
+.gantt-inner {
+    min-width: 1000px;
+    position: relative;
+}
+
+/* 时间轴 - 草图风格蓝色横条 */
+.gantt-timeline {
+    position: relative;
+    height: 28px;
+    margin-left: 130px;
+    background: linear-gradient(180deg, #93c5fd 0%, #60a5fa 50%, #3b82f6 100%);
+    border-radius: 14px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+}
+.gantt-timeline-marks {
+    position: relative;
+    height: 20px;
+    margin-left: 130px;
+    margin-bottom: 4px;
+}
+.timeline-mark {
+    position: absolute;
+    font-size: 10px;
+    color: #64748b;
+    transform: translateX(-50%);
+    font-family: monospace;
+}
+
+/* 甘特图行 */
+.gantt-line {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 20px;
+    min-height: 80px;
+}
+.gantt-line-label {
+    width: 130px;
+    flex-shrink: 0;
+    background: white;
+    border: 2px solid #334155;
+    border-radius: 4px;
+    padding: 12px 8px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-right: 16px;
+    line-height: 1.3;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 70px;
+}
+.gantt-line-label .label-sub {
+    font-size: 10px;
+    color: #94a3b8;
+    font-weight: 400;
+    margin-top: 4px;
+}
+.gantt-line-tasks {
+    flex: 1;
+    position: relative;
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+
+/* 省略标记 */
+.dots-marker {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    color: #334155;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+/* 任务卡片 - 严格按照草图 */
+.task-card {
+    flex-shrink: 0;
+    background: white;
+    border: 2px solid #334155;
+    border-radius: 6px;
+    padding: 8px 12px;
+    min-width: 200px;
+    max-width: 260px;
+    position: relative;
+}
+.task-card.dev { border-color: #2563eb; }
+.task-card.test { border-color: #7c3aed; }
+.task-card.prod { border-color: #d97706; }
+.task-card.done { border-color: #059669; opacity: 0.9; }
+
+/* 进度条 - 草图胶囊形 */
+.task-progress {
+    width: 100%;
+    height: 18px;
+    background: #f1f5f9;
+    border-radius: 9px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    position: relative;
+    border: 1px solid #cbd5e1;
+}
+.task-progress-fill {
+    height: 100%;
+    border-radius: 9px;
+    transition: width 0.3s;
+}
+.task-card.dev .task-progress-fill { background: linear-gradient(90deg, #60a5fa, #2563eb); }
+.task-card.test .task-progress-fill { background: linear-gradient(90deg, #a78bfa, #7c3aed); }
+.task-card.prod .task-progress-fill { background: linear-gradient(90deg, #fbbf24, #d97706); }
+.task-card.done .task-progress-fill { background: linear-gradient(90deg, #34d399, #059669); }
+.task-progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10px;
+    font-weight: 700;
+    color: #1e293b;
+    text-shadow: 0 0 2px white;
+}
+
+/* 任务时间 */
+.task-time {
+    font-size: 11px;
+    color: #334155;
+    font-family: monospace;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+/* 任务内容 */
+.task-content {
+    font-size: 11px;
+    color: #475569;
+    line-height: 1.4;
+    font-weight: 500;
+}
+.task-content .task-name {
+    font-weight: 700;
+    color: #1e293b;
+    display: block;
+    margin-bottom: 2px;
+}
+
+/* 空状态 */
+.gantt-empty {
+    flex: 1;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 12px;
+    padding: 20px;
+    border: 2px dashed #cbd5e1;
+    border-radius: 6px;
+}
+
+/* 整体进度 */
+.overall-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: #f8fafc;
+    border: 2px solid #334155;
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+.overall-bar-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+    white-space: nowrap;
+}
+.overall-bar-track {
+    flex: 1;
+    height: 16px;
+    background: #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+}
+.overall-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #60a5fa, #34d399);
+    border-radius: 8px;
+}
+.overall-bar-text {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1e293b;
+    min-width: 60px;
+    text-align: right;
+}
+</style>
+
+<div class="page-nav">
+    <a href="{{ url_for('executive_dashboard') }}">← 总览</a>
+    <span class="sep">|</span>
+    <a href="{{ url_for('executive_customer') }}">用户需求交付</a>
+    <span class="sep">|</span>
+    <span class="current">{{ req.customer }} - 需求满足详情</span>
+</div>
+
+<!-- 整体进度 -->
+<div class="overall-bar">
+    <span class="overall-bar-label">整体满足进度</span>
+    <div class="overall-bar-track">
+        <div class="overall-bar-fill" style="width: {{ req.progress }}%;"></div>
+    </div>
+    <span class="overall-bar-text">{{ req.progress }}%</span>
+    <span style="font-size:11px;color:#64748b;">{{ req.measures_done|length }}/8项措施已完成</span>
+</div>
+
+<!-- ========== 第一部分：用户需求情况 ========== -->
+<div class="section-title-bar">用户需求情况</div>
+<div class="info-row">
+    <div class="info-box">
+        <div class="info-box-label">用户名称</div>
+        <div class="info-box-value">{{ req.customer or '未指定' }}</div>
+    </div>
+    <div class="info-box">
+        <div class="info-box-label">用户需求产品</div>
+        <div class="info-box-value small">{{ req.product_name or req.model or '未关联' }}</div>
+    </div>
+    <div class="info-box">
+        <div class="info-box-label">用户需求使用场景</div>
+        <div class="info-box-value small">{{ req.description or '未填写' }}</div>
+    </div>
+    <div class="info-box">
+        <div class="info-box-label">用户需求版本</div>
+        <div class="info-box-value mono">{{ req.version_no or '待规划' }}</div>
+    </div>
+    <div class="info-box">
+        <div class="info-box-label">用户需求数量</div>
+        <div class="info-box-value">{{ req.quantity or 0 }} 套</div>
+    </div>
+    <div class="info-box">
+        <div class="info-box-label">用户需求时间</div>
+        <div class="info-box-value mono">{{ req.delivery_date or '未设定' }}</div>
+    </div>
+</div>
+
+<!-- ========== 第二部分：集团约束情况 ========== -->
+<div class="section-title-bar">集团系统侧/应用侧/任务等约束情况</div>
+{% if constraints %}
+<div class="info-row">
+    {% for c in constraints %}
+    <div class="info-box constraint-box">
+        <div class="constraint-type-tag">{{ c.req_type }}</div>
+        <div class="info-box-label" style="text-align:left;">单位名称：{{ c.source_dept or '未指定' }}</div>
+        <div class="info-box-value small" style="text-align:left;">{{ c.title }}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:6px;text-align:left;">需求/约束时间要求：{{ c.delivery_date or '未设定' }}</div>
+    </div>
+    {% endfor %}
+    {% if constraints|length < 4 %}
+    {% for i in range(4 - constraints|length) %}
+    <div class="info-box constraint-box" style="opacity:0.5;">
+        <div class="info-box-label">对接人信息</div>
+        <div class="info-box-value small" style="color:#94a3b8;">待补充</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+{% else %}
+<div class="info-row">
+    <div class="info-box" style="max-width:100%;flex:1;">
+        <div class="info-box-value small" style="color:#94a3b8;">暂无关联的集团约束需求</div>
+    </div>
+</div>
+{% endif %}
+
+<!-- ========== 第三部分：用户需求满足情况（时间轴甘特图） ========== -->
+<div class="section-title-bar">用户需求满足情况</div>
+<div class="gantt-area">
+    <div class="gantt-inner">
+        <!-- 时间轴刻度 -->
+        <div class="gantt-timeline-marks">
+            {% for mark in timeline_marks %}
+            <div class="timeline-mark" style="left: {{ mark.left }}%;">{{ mark.date }}</div>
+            {% endfor %}
+        </div>
+        <!-- 时间轴蓝色横条 -->
+        <div class="gantt-timeline">时 间 轴</div>
+
+        <!-- 研发行 -->
+        <div class="gantt-line">
+            <div class="gantt-line-label">
+                产品研发情况
+                <div class="label-sub">{{ dev_tasks|length }}个任务</div>
+            </div>
+            <div class="gantt-line-tasks">
+                {% if dev_tasks %}
+                {% for t in dev_tasks %}
+                <div class="task-card dev {% if t.status=='已完成' %}done{% endif %}">
+                    <div class="task-progress">
+                        <div class="task-progress-fill" style="width: {{ t.progress }}%;"></div>
+                        <span class="task-progress-text">进度条：{{ t.progress }}%</span>
+                    </div>
+                    <div class="task-time">{{ t.start }} —— {{ t.end }}</div>
+                    <div class="task-content">
+                        <span class="task-name">具体的研发任务：</span>
+                        {{ t.name }}{% if t.desc %} - {{ t.desc }}{% endif %}
+                    </div>
+                </div>
+                {% if not loop.last %}
+                <div class="dots-marker">···</div>
+                {% endif %}
+                {% endfor %}
+                {% else %}
+                <div class="gantt-empty">暂无研发任务</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 测试行 -->
+        <div class="gantt-line">
+            <div class="gantt-line-label">
+                产品测试情况
+                <div class="label-sub">{{ test_tasks|length }}个任务</div>
+            </div>
+            <div class="gantt-line-tasks">
+                {% if test_tasks %}
+                {% for t in test_tasks %}
+                <div class="task-card test {% if t.status=='已完成' %}done{% endif %}">
+                    <div class="task-progress">
+                        <div class="task-progress-fill" style="width: {{ t.progress }}%;"></div>
+                        <span class="task-progress-text">进度条：{{ t.progress }}%</span>
+                    </div>
+                    <div class="task-time">{{ t.start }} —— {{ t.end }}</div>
+                    <div class="task-content">
+                        <span class="task-name">具体的测试任务：</span>
+                        {{ t.name }}{% if t.desc %} - {{ t.desc }}{% endif %}
+                    </div>
+                </div>
+                {% if not loop.last %}
+                <div class="dots-marker">···</div>
+                {% endif %}
+                {% endfor %}
+                {% else %}
+                <div class="gantt-empty">暂无测试任务</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 生产行 -->
+        <div class="gantt-line">
+            <div class="gantt-line-label">
+                产品生产情况
+                <div class="label-sub">{{ prod_tasks|length }}个任务</div>
+            </div>
+            <div class="gantt-line-tasks">
+                {% if prod_tasks %}
+                {% for t in prod_tasks %}
+                <div class="task-card prod {% if t.status=='已完成' %}done{% endif %}">
+                    <div class="task-progress">
+                        <div class="task-progress-fill" style="width: {{ t.progress }}%;"></div>
+                        <span class="task-progress-text">进度条：{{ t.progress }}%</span>
+                    </div>
+                    <div class="task-time">{{ t.start }} —— {{ t.end }}</div>
+                    <div class="task-content">
+                        <span class="task-name">具体的生产任务：</span>
+                        {{ t.name }}{% if t.desc %} - {{ t.desc }}{% endif %}
+                    </div>
+                </div>
+                {% if not loop.last %}
+                <div class="dots-marker">···</div>
+                {% endif %}
+                {% endfor %}
+                {% else %}
+                <div class="gantt-empty">暂无生产任务</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

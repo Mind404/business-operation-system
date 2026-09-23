@@ -1,0 +1,79 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '需求评审 - ' + requirement.title %}
+{% block header_actions %}
+<a href="/requirements" class="btn btn-outline">返回需求列表</a>
+{% endblock %}
+{% block ext_content %}
+<div class="panel">
+    <div class="detail-section">
+        <h3>需求信息</h3>
+        <div class="detail-grid">
+            <div class="detail-item"><span class="detail-label">需求标题</span><span class="detail-value">{{ requirement.title }}</span></div>
+            <div class="detail-item"><span class="detail-label">来源部门</span><span class="detail-value">{{ requirement.source_dept }}</span></div>
+            <div class="detail-item"><span class="detail-label">关联客户</span><span class="detail-value">{{ requirement.customer or '-' }}</span></div>
+            <div class="detail-item"><span class="detail-label">需求数量</span><span class="detail-value">{{ requirement.quantity }}套</span></div>
+            <div class="detail-item"><span class="detail-label">优先级</span><span class="detail-value"><span class="priority priority-{{ requirement.priority }}">{{ requirement.priority }}</span></span></div>
+            <div class="detail-item"><span class="detail-label">当前状态</span><span class="detail-value"><span class="status-tag status-{{ requirement.status }}">{{ requirement.status }}</span></span></div>
+            <div class="detail-item detail-full"><span class="detail-label">需求描述</span><span class="detail-value" style="white-space:pre-wrap;">{{ requirement.description }}</span></div>
+        </div>
+    </div>
+    {% if can_write('requirement') %}
+    <div class="detail-section">
+        <h3>新增评审记录</h3>
+        <form method="post" action="{{ url_for('ext.requirement_review_add', rid=requirement.id) }}">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>评审人</label>
+                    <input type="text" name="reviewer" value="product_b" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>评审结论 <span class="required">*</span></label>
+                    <select name="conclusion" required class="form-control">
+                        <option>待评审</option><option>通过</option><option>有条件通过</option><option>不通过</option><option>需补充信息</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>建议优先级</label>
+                    <select name="priority_suggested" class="form-control">
+                        <option value="">-- 保持原优先级 --</option>
+                        <option>高</option><option>中</option><option>低</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>建议纳入版本</label>
+                    <input type="text" name="version_suggested" class="form-control" placeholder="如：V2.3.0">
+                </div>
+                <div class="form-group form-full">
+                    <label>评审意见</label>
+                    <textarea name="opinion" rows="3" class="form-control" placeholder="详细评审意见、修改建议等"></textarea>
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <button type="submit" class="btn btn-primary">提交评审</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+    <div class="detail-section">
+        <h3>评审历史（{{ reviews|length }}条）</h3>
+        {% for r in reviews %}
+        <div class="workflow-item" style="flex-direction:column;gap:8px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span class="status-tag status-{% if r.conclusion == '通过' %}已完成{% elif r.conclusion == '不通过' %}阻塞{% else %}处理中{% endif %}">{{ r.conclusion }}</span>
+                <span style="font-weight:600;">{{ r.reviewer }}</span>
+                <span class="workflow-time">{{ r.review_date or r.created_at[:10] }}</span>
+            </div>
+            {% if r.opinion %}<p style="font-size:13px;color:#374151;margin:0;white-space:pre-wrap;">{{ r.opinion }}</p>{% endif %}
+            {% if r.priority_suggested or r.version_suggested %}
+            <div style="font-size:12px;color:#6b7280;">
+                {% if r.priority_suggested %}建议优先级：<strong>{{ r.priority_suggested }}</strong>{% endif %}
+                {% if r.version_suggested %} · 建议版本：<strong>{{ r.version_suggested }}</strong>{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <p style="color:#9ca3af;font-size:13px;">暂无评审记录</p>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

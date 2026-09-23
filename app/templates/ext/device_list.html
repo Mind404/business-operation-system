@@ -1,0 +1,68 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '设备运维监控' %}
+{% block header_actions %}
+{% if can_write('ext.device') %}<a href="{{ url_for('ext.device_add') }}" class="btn btn-primary">+ 登记设备</a>{% endif %}
+<a href="{{ url_for('ext.ota_list') }}" class="btn btn-outline">OTA版本管理</a>
+{% endblock %}
+{% block ext_content %}
+<div class="stats-row">
+    <div class="stat-mini stat-mini-blue"><div class="stat-mini-value">{{ total }}</div><div class="stat-mini-label">设备总数</div></div>
+    <div class="stat-mini stat-mini-green"><div class="stat-mini-value">{{ online }}</div><div class="stat-mini-label">在线</div></div>
+    <div class="stat-mini stat-mini-orange"><div class="stat-mini-value">{{ offline }}</div><div class="stat-mini-label">离线</div></div>
+    <div class="stat-mini stat-mini-red"><div class="stat-mini-value">{{ alerts }}</div><div class="stat-mini-label">未处理告警</div></div>
+</div>
+<div class="filter-bar">
+    <a href="{{ url_for('ext.device_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
+    <a href="{{ url_for('ext.device_list', status='在线') }}" class="filter-tag {% if current_status == '在线' %}active{% endif %}">在线</a>
+    <a href="{{ url_for('ext.device_list', status='离线') }}" class="filter-tag {% if current_status == '离线' %}active{% endif %}">离线</a>
+    <a href="{{ url_for('ext.device_list', status='未激活') }}" class="filter-tag {% if current_status == '未激活' %}active{% endif %}">未激活</a>
+</div>
+<div class="search-bar">
+    <form method="get">
+        {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+        <input type="text" name="search" class="search-input" placeholder="搜索设备SN、客户、固件版本..." value="{{ search }}">
+        <button type="submit" class="search-btn">搜索</button>
+        <span class="search-count">共 {{ total }} 台设备</span>
+    </form>
+</div>
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>设备SN</th><th>产品</th><th>客户</th><th>固件版本</th><th>状态</th><th>最后在线</th><th>位置</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for d in devices %}
+            <tr>
+                <td class="mono">{{ d.device_sn }}</td>
+                <td>{{ d.product_name or '-' }}</td>
+                <td>{{ d.customer or '-' }}</td>
+                <td>{{ d.firmware_version or '-' }}</td>
+                <td class="text-center">
+                    <span class="status-tag status-{{ d.status }}">
+                        {% if d.status == '在线' %}● {% endif %}{{ d.status }}
+                    </span>
+                </td>
+                <td style="font-size:12px;">{{ d.last_online or '-' }}</td>
+                <td>{{ d.location or '-' }}</td>
+                <td><a href="{{ url_for('ext.device_detail', did=d.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty-cell">暂无设备登记</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% if total_pages > 1 %}
+<div class="pagination">
+    <span class="page-info">第 {{ page }} / {{ total_pages }} 页</span>
+    <div class="page-buttons">
+        {% if page > 1 %}<a href="{{ url_for('ext.device_list', status=current_status, search=search, page=page-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% for p in range(1, total_pages+1) %}
+        {% if p == page %}<span class="page-btn page-active">{{ p }}</span>
+        {% elif p <= 3 or p > total_pages-3 or (p >= page-1 and p <= page+1) %}
+        <a href="{{ url_for('ext.device_list', status=current_status, search=search, page=p) }}" class="page-btn">{{ p }}</a>
+        {% elif p == 4 or p == total_pages-3 %}<span class="page-ellipsis">...</span>{% endif %}
+        {% endfor %}
+        {% if page < total_pages %}<a href="{{ url_for('ext.device_list', status=current_status, search=search, page=page+1) }}" class="page-btn">下一页</a>{% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '技术规格文档' %}
+{% block header_actions %}
+{% if can_write('ext.tech_spec') %}<a href="{{ url_for('ext.tech_spec_add') }}" class="btn btn-primary">+ 新建规格</a>{% endif %}
+{% endblock %}
+{% block ext_content %}
+<div class="filter-bar">
+    <a href="{{ url_for('ext.tech_spec_list') }}" class="filter-tag {% if not current_product %}active{% endif %}">全部产品</a>
+    {% for p in products %}
+    <a href="{{ url_for('ext.tech_spec_list', product_id=p.id) }}" class="filter-tag {% if current_product|string == p.id|string %}active{% endif %}">{{ p.name }}</a>
+    {% endfor %}
+</div>
+<div class="search-bar">
+    <form method="get">
+        {% if current_product %}<input type="hidden" name="product_id" value="{{ current_product }}">{% endif %}
+        <input type="text" name="search" class="search-input" placeholder="搜索规格名称、内容..." value="{{ search }}">
+        <button type="submit" class="search-btn">搜索</button>
+    </form>
+</div>
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>规格名称</th><th>产品</th><th>类型</th><th>状态</th><th>作者</th><th>更新时间</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for s in specs %}
+            <tr>
+                <td class="cell-bold">{{ s.spec_name }}</td>
+                <td>{{ s.product_name or '-' }}</td>
+                <td>{{ s.spec_type }}</td>
+                <td class="text-center"><span class="status-tag status-{{ s.status }}">{{ s.status }}</span></td>
+                <td>{{ s.author }}</td>
+                <td style="font-size:12px;">{{ s.updated_at[:16] }}</td>
+                <td><a href="{{ url_for('ext.tech_spec_detail', sid=s.id) }}" class="btn btn-sm btn-outline">查看</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="empty-cell">暂无技术规格文档</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

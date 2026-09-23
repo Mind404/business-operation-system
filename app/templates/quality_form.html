@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}新增检验记录 - 业务运转系统{% endblock %}
+{% block page_title %}新增检验记录{% endblock %}
+
+{% block content %}
+<div class="panel form-panel">
+    <form method="post" class="form-grid">
+        <div class="form-group">
+            <label>检验类型</label>
+            <select name="inspection_type">
+                <option value="IQC">IQC - 进料检验</option>
+                <option value="IPQC">IPQC - 生产巡检</option>
+                <option value="OQC" selected>OQC - 出货检验/回货测试</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>关联产品</label>
+            <select name="product_id">
+                <option value="">-- 请选择 --</option>
+                {% for p in products %}
+                <option value="{{ p.id }}">{{ p.name }} ({{ p.model or '' }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>关联生产订单</label>
+            <select name="production_order_id">
+                <option value="">-- 请选择 --</option>
+                {% for o in orders %}
+                <option value="{{ o.id }}">{{ o.order_no }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>检验员</label>
+            <input type="text" name="inspector" placeholder="检验员姓名">
+        </div>
+        <div class="form-group">
+            <label>抽样数量</label>
+            <input type="number" name="sample_quantity" value="0" min="0" id="sampleQty" oninput="calcRate()">
+        </div>
+        <div class="form-group">
+            <label>合格数量</label>
+            <input type="number" name="pass_quantity" value="0" min="0" id="passQty" oninput="calcRate()">
+        </div>
+        <div class="form-group">
+            <label>不合格数量（自动计算）</label>
+            <input type="text" id="failQty" value="0" readonly class="input-readonly">
+        </div>
+        <div class="form-group">
+            <label>良品率（自动计算）</label>
+            <input type="text" id="passRate" value="0%" readonly class="input-readonly">
+        </div>
+        <div class="form-group">
+            <label>检验日期</label>
+            <input type="date" name="inspection_date" value="{{ today }}">
+        </div>
+        <div class="form-group form-full">
+            <label>缺陷描述（不合格时填写）</label>
+            <textarea name="defect_description" rows="3" placeholder="描述不合格项、缺陷现象、严重程度等"></textarea>
+        </div>
+        <div class="form-actions form-full">
+            <a href="{{ url_for('quality_dashboard') }}" class="btn btn-outline">取消</a>
+            <button type="submit" class="btn btn-primary">保存检验记录</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function calcRate() {
+    const s = parseInt(document.getElementById('sampleQty').value) || 0;
+    const p = parseInt(document.getElementById('passQty').value) || 0;
+    const f = Math.max(0, s - p);
+    document.getElementById('failQty').value = f;
+    document.getElementById('passRate').value = s > 0 ? (p / s * 100).toFixed(2) + '%' : '0%';
+}
+</script>
+{% endblock %}

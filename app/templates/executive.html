@@ -1,0 +1,2296 @@
+{% extends "base.html" %}
+{% block title %}总览{% endblock %}
+{% block page_title %}总览{% endblock %}
+
+{% block content %}
+<style>
+/* 页面标题 */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+.page-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1e293b;
+    margin: 0;
+}
+.page-header .date-info {
+    font-size: 12px;
+    color: #64748b;
+}
+
+/* 阶段成果达成 - 状态徽标 */
+.cp-status-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.cp-status-已达成 { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.cp-status-进行中 { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.cp-status-受阻 { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.cp-status-未开始 { background: #f5f5f4; color: #78716c; border: 1px solid #e7e5e4; }
+.cp-dir {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.cp-dir-研发 { background: #dbeafe; color: #1d4ed8; }
+.cp-dir-测试 { background: #ede9fe; color: #6d28d9; }
+.cp-dir-生产 { background: #fef3c7; color: #b45309; }
+.cp-dir-交付 { background: #d1fae5; color: #047857; }
+.cp-row.cp-editing td { background: #fffbeb; }
+
+/* 模块独立横向滚动容器 */
+.module-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+}
+.module-scroll::-webkit-scrollbar {
+    height: 8px;
+}
+.module-scroll::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 4px;
+}
+.module-scroll::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+.module-scroll::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+.module-scroll-inner {
+    min-width: 1200px;
+    width: 100%;
+}
+
+/* 确保页面整体不横向滚动 */
+.main-content, .content-body {
+    overflow-x: hidden !important;
+    max-width: 100%;
+}
+
+/* 统计栏 - 优化放大 */
+.stats-bar {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.stat-item {
+    flex: 1;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 18px 16px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.stat-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.stat-item-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: #1e40af;
+    margin-bottom: 4px;
+    line-height: 1.2;
+}
+.stat-item-label {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 600;
+}
+
+/* 区块标题条 - 优化风格 */
+.section-title-bar {
+    background: linear-gradient(90deg, #1e40af 0%, #3b82f6 100%);
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 700;
+    color: white;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 28px;
+    margin-bottom: 16px;
+    letter-spacing: 2px;
+    box-shadow: 0 2px 8px rgba(30,64,175,0.3);
+}
+.section-actions {
+    display: flex;
+    gap: 8px;
+    letter-spacing: 0;
+}
+.section-actions .btn {
+    height: 30px;
+    padding: 4px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+}
+
+/* 需求类型标签 */
+.req-type-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.req-type-用户需求 { background: #dbeafe; color: #1e40af; }
+.req-type-集团系统侧需求 { background: #ede9fe; color: #5b21b6; }
+.req-type-集团应用侧需求 { background: #cffafe; color: #155e75; }
+.req-type-其他 { background: #fef3c7; color: #92400e; }
+
+/* 信息卡片行 - 优化紧凑布局 */
+.info-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.info-box {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 10px;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    min-width: 0;
+}
+.info-box-label {
+    font-size: 11px;
+    color: #64748b;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+.info-box-value {
+    font-size: 13px;
+    color: #0f172a;
+    font-weight: 700;
+    line-height: 1.4;
+    word-break: break-word;
+}
+.info-box-value.small { font-size: 11px; font-weight: 600; line-height: 1.5; }
+.info-box-value.mono { font-family: monospace; }
+
+/* 需求分组卡片 - 优化 */
+.req-group {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.req-group-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e40af;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #bfdbfe;
+}
+.req-group-title .priority-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-right: 8px;
+}
+.priority-high { background: #fee2e2; color: #991b1b; }
+.priority-mid { background: #fef3c7; color: #92400e; }
+.priority-low { background: #e0e7ff; color: #3730a3; }
+
+/* 约束卡片 - 优化 */
+.constraint-box {
+    text-align: left;
+    grid-column: span 2;
+}
+.constraint-type-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+}
+
+/* 用户需求表格 - 紧凑高效 */
+.req-table-wrap {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    overflow: visible;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    position: relative;
+    z-index: 10;
+}
+.req-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.req-table th {
+    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #475569;
+    border-bottom: 2px solid #e2e8f0;
+    white-space: nowrap;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+    position: relative;
+    overflow: visible;
+}
+.req-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #4b5563;
+    vertical-align: middle;
+    line-height: 1.5;
+}
+.req-table tbody tr {
+    transition: background 0.15s;
+}
+.req-table tbody tr:hover {
+    background: #f8fafc;
+}
+.req-table .cell-bold {
+    font-weight: 600;
+    color: #111827;
+}
+.req-table .cell-desc {
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.6;
+    max-width: 300px;
+}
+.req-table .mono {
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 11px;
+}
+
+/* 表头筛选功能 */
+.th-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
+}
+.filter-btn {
+    background: none;
+    border: 1px solid #cbd5e1;
+    font-size: 10px;
+    color: #64748b;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: all 0.15s;
+    line-height: 1;
+}
+.filter-btn:hover {
+    background: #e2e8f0;
+    color: #1e293b;
+    border-color: #94a3b8;
+}
+.filter-btn.active {
+    color: #2563eb;
+    background: #dbeafe;
+    border-color: #3b82f6;
+}
+.filter-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-top: none;
+    padding: 8px;
+    z-index: 9999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.filter-dropdown.show {
+    display: block !important;
+}
+.filter-dropdown select,
+.filter-dropdown input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 12px;
+    box-sizing: border-box;
+}
+.filter-dropdown select:focus,
+.filter-dropdown input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+}
+.filter-option-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.filter-option {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #334155;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+.filter-option:hover {
+    background: #eff6ff;
+    color: #2563eb;
+}
+.filter-option:active {
+    background: #dbeafe;
+}
+.req-table th {
+    position: relative;
+}
+.req-table .empty-cell {
+    text-align: center;
+    padding: 32px;
+    color: #9ca3af;
+    font-size: 13px;
+}
+.req-table .priority-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+}
+.req-table .status-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* 用户需求表单工具栏 */
+.req-form-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
+    padding: 10px 16px;
+    margin-top: 0;
+}
+.req-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.req-toolbar-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e40af;
+}
+.req-toolbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.req-tool-btn {
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #374151;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+.req-tool-btn:hover {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.req-edit-btn.active {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    border-color: #d97706;
+}
+.req-save-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    border-color: #059669;
+}
+.req-save-btn:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+}
+.req-cancel-btn {
+    background: #fef2f2;
+    color: #dc2626;
+    border-color: #fecaca;
+}
+.req-cancel-btn:hover {
+    background: #fee2e2;
+}
+
+/* 可编辑单元格 */
+.editable-cell {
+    position: relative;
+    cursor: default;
+    transition: background 0.15s;
+}
+.req-edit-mode .editable-cell {
+    cursor: pointer;
+}
+.req-edit-mode .editable-cell:hover {
+    background: #eff6ff;
+}
+.req-edit-input {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px solid #3b82f6;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: inherit;
+    box-sizing: border-box;
+    background: #fff;
+}
+.req-edit-input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+}
+.req-textarea {
+    resize: vertical;
+    min-height: 40px;
+    line-height: 1.5;
+}
+.req-num-input {
+    width: 70px;
+}
+.req-date-input {
+    width: 110px;
+}
+
+/* 保存栏 */
+.req-edit-save-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, #fffbeb, #fef3c7);
+    border: 1px solid #fcd34d;
+    border-top: none;
+    border-radius: 0 0 10px 10px;
+    padding: 8px 16px;
+    margin-bottom: 16px;
+}
+.req-save-hint {
+    font-size: 12px;
+    color: #92400e;
+    font-weight: 500;
+}
+
+/* ========== 甘特图区域 - 优化风格 ========== */
+.gantt-area {
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 24px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* 统一滚动容器 - 确保时间轴和任务行对齐 */
+.gantt-scroll-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+.gantt-scroll-container::-webkit-scrollbar {
+    height: 8px;
+}
+.gantt-scroll-container::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 4px;
+}
+.gantt-scroll-container::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+.gantt-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+.gantt-inner {
+    min-width: 1800px;
+    position: relative;
+}
+
+/* 编辑提示 */
+.gantt-edit-hint {
+    text-align: right;
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 12px;
+}
+.gantt-edit-hint span {
+    background: #eff6ff;
+    color: #2563eb;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+    border: 1px solid #bfdbfe;
+}
+
+/* 时间轴行 - 与任务行使用相同的label宽度，确保对齐 */
+.gantt-timeline-row {
+    display: flex;
+    margin-bottom: 4px;
+}
+.gantt-timeline-label {
+    width: 140px;
+    flex-shrink: 0;
+    margin-right: 18px;
+    /* 空的标签列，与任务行标签对齐 */
+}
+.gantt-timeline-content {
+    flex: 1;
+    position: relative;
+    min-width: 1640px;
+}
+
+/* 时间轴刻度 - 专业甘特图样式 */
+.gantt-timeline-marks {
+    position: relative;
+    height: 50px;
+    background: #f8fafc;
+    border-bottom: 2px solid #e2e8f0;
+}
+.timeline-mark-month {
+    position: absolute;
+    top: 0;
+    font-size: 12px;
+    color: #334155;
+    font-weight: 700;
+    text-align: center;
+    line-height: 24px;
+    border-right: 1px solid #e2e8f0;
+    background: #f1f5f9;
+}
+.timeline-mark-day {
+    position: absolute;
+    bottom: 0;
+    font-size: 10px;
+    color: #64748b;
+    transform: translateX(-50%);
+    text-align: center;
+    line-height: 26px;
+}
+.today-line {
+    position: absolute;
+    top: 0;
+    bottom: -20px;
+    width: 2px;
+    background: #ef4444;
+    z-index: 10;
+}
+.today-line::before {
+    content: '今天';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+.today-line::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 4px solid transparent;
+    border-top-color: #ef4444;
+}
+
+/* 甘特图行 */
+.gantt-line {
+    display: flex;
+    align-items: stretch;
+    margin-bottom: 12px;
+}
+.gantt-line-label {
+    width: 120px;
+    flex-shrink: 0;
+    background: linear-gradient(135deg, #1e40af, #3b82f6);
+    border: none;
+    border-radius: 8px 0 0 8px;
+    padding: 12px 8px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: white;
+    margin-right: 0;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 60px;
+    box-shadow: 0 2px 8px rgba(30,64,175,0.3);
+    /* 固定左侧，不随横向滚动移动 */
+    position: sticky;
+    left: 0;
+    z-index: 20;
+}
+.gantt-line-label .label-sub {
+    font-size: 11px;
+    color: rgba(255,255,255,0.8);
+    font-weight: 400;
+    margin-top: 4px;
+}
+.gantt-line-label .add-task-btn {
+    margin-top: 8px;
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 4px;
+    color: white;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.gantt-line-label .add-task-btn:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+/* ========== 新式甘特图布局：三列结构 ========== */
+.gantt-line-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 1640px;
+}
+.gantt-task-row {
+    display: flex;
+    align-items: center;
+    min-height: 56px;
+    border-bottom: 1px solid #f1f5f9;
+    position: relative;
+}
+.gantt-task-row:last-child {
+    border-bottom: none;
+}
+.gantt-task-row:hover {
+    background: #f8fafc;
+}
+
+/* 第二列：任务信息 */
+.gantt-task-info {
+    width: 360px;
+    flex-shrink: 0;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid #e2e8f0;
+    background: #fafbfc;
+    /* 固定第二列，不随横向滚动移动 */
+    position: sticky;
+    left: 120px;
+    z-index: 15;
+}
+.gantt-task-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.3;
+}
+.gantt-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: #64748b;
+    font-family: monospace;
+}
+.gantt-task-progress-mini {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.progress-bar-mini {
+    width: 60px;
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.progress-bar-mini-fill {
+    height: 100%;
+    border-radius: 4px;
+}
+.gantt-task-row.dev .progress-bar-mini-fill { background: linear-gradient(90deg, #60a5fa, #2563eb); }
+.gantt-task-row.test .progress-bar-mini-fill { background: linear-gradient(90deg, #a78bfa, #7c3aed); }
+.gantt-task-row.prod .progress-bar-mini-fill { background: linear-gradient(90deg, #fbbf24, #d97706); }
+.gantt-task-row.done .progress-bar-mini-fill { background: linear-gradient(90deg, #34d399, #059669); }
+.progress-text-mini {
+    font-size: 10px;
+    font-weight: 700;
+    color: #475569;
+    min-width: 32px;
+}
+
+/* 第三列：时间块区域 */
+.gantt-task-timeline {
+    flex: 1;
+    position: relative;
+    height: 56px;
+    min-width: 1280px;
+}
+
+/* 时间块：专业甘特图样式 */
+.gantt-task-blocks {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 28px;
+    display: flex;
+    gap: 2px;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: box-shadow 0.2s, transform 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.gantt-task-blocks:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    transform: translateY(-50%) scale(1.02);
+    z-index: 10;
+}
+.gantt-task-block {
+    width: 10px;
+    height: 100%;
+    flex-shrink: 0;
+}
+.gantt-task-row.dev .gantt-task-block { background: linear-gradient(180deg, #60a5fa, #3b82f6); }
+.gantt-task-row.dev .gantt-task-block.done { background: linear-gradient(180deg, #3b82f6, #2563eb); }
+.gantt-task-row.test .gantt-task-block { background: linear-gradient(180deg, #a78bfa, #8b5cf6); }
+.gantt-task-row.test .gantt-task-block.done { background: linear-gradient(180deg, #8b5cf6, #7c3aed); }
+.gantt-task-row.prod .gantt-task-block { background: linear-gradient(180deg, #fbbf24, #f59e0b); }
+.gantt-task-row.prod .gantt-task-block.done { background: linear-gradient(180deg, #f59e0b, #d97706); }
+.gantt-task-row.done .gantt-task-block { background: linear-gradient(180deg, #34d399, #10b981); }
+.gantt-task-row.done .gantt-task-block.done { background: linear-gradient(180deg, #10b981, #059669); }
+
+/* 时间块上的完成度遮罩 */
+.gantt-task-blocks-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: rgba(255,255,255,0.3);
+    pointer-events: none;
+}
+
+/* 时间轴表头 - 三列结构 */
+.gantt-header-row {
+    display: flex;
+    margin-bottom: 4px;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 4px;
+}
+.gantt-header-label {
+    width: 120px;
+    flex-shrink: 0;
+    margin-right: 0;
+    /* 固定左侧，不随横向滚动移动 */
+    position: sticky;
+    left: 0;
+    z-index: 20;
+}
+.gantt-header-info {
+    width: 360px;
+    flex-shrink: 0;
+    padding: 8px 12px;
+    background: #f1f5f9;
+    border-right: 1px solid #e2e8f0;
+    font-size: 11px;
+    font-weight: 700;
+    color: #475569;
+    display: flex;
+    align-items: center;
+    /* 固定第二列，不随横向滚动移动 */
+    position: sticky;
+    left: 120px;
+    z-index: 15;
+}
+.gantt-header-timeline {
+    flex: 1;
+    position: relative;
+    min-width: 1280px;
+    height: 32px;
+}
+
+/* 每天的网格线 */
+.daily-grid-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(148, 163, 184, 0.15);
+    pointer-events: none;
+    z-index: 1;
+}
+.daily-grid-line.weekend {
+    background: rgba(148, 163, 184, 0.25);
+}
+.daily-grid-line.month-start {
+    background: rgba(148, 163, 184, 0.4);
+    width: 2px;
+}
+.daily-grid-line.week {
+    background: rgba(148, 163, 184, 0.3);
+}
+
+/* 当天时间线 - 红色竖线 */
+.today-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ef4444;
+    z-index: 10;
+    pointer-events: none;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+}
+.today-line::before {
+    content: '今天';
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    font-weight: 600;
+}
+.today-line::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 8px;
+    height: 8px;
+    background: #ef4444;
+    border-radius: 50%;
+    border: 2px solid white;
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
+}
+
+/* ========== 新版甘特图样式 - 标准项目管理样式 ========== */
+.gantt-scroll-container {
+    overflow-x: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: white;
+}
+.gantt-inner {
+    min-width: 1400px;
+}
+
+/* 表头行 */
+.gantt-header-row {
+    display: flex;
+    border-bottom: 2px solid #e2e8f0;
+    background: #f8fafc;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+.gantt-header-task {
+    width: 280px;
+    flex-shrink: 0;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #334155;
+    border-right: 2px solid #e2e8f0;
+    position: sticky;
+    left: 0;
+    z-index: 20;
+    background: #f8fafc;
+}
+.gantt-header-timeline {
+    flex: 1;
+    position: relative;
+    height: 56px;
+}
+
+/* 时间轴刻度 */
+.gantt-timeline-marks {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+.timeline-mark-month {
+    position: absolute;
+    top: 0;
+    height: 28px;
+    font-size: 13px;
+    color: #1e293b;
+    font-weight: 700;
+    text-align: center;
+    line-height: 28px;
+    border-right: 1px solid #e2e8f0;
+    background: #f1f5f9;
+}
+.timeline-mark-day {
+    position: absolute;
+    top: 28px;
+    height: 28px;
+    font-size: 11px;
+    color: #64748b;
+    text-align: center;
+    line-height: 28px;
+    transform: translateX(-50%);
+}
+
+/* 甘特图行 */
+.gantt-row {
+    display: flex;
+    border-bottom: 1px solid #f1f5f9;
+    min-height: 36px;
+}
+.gantt-row:hover {
+    background: #f8fafc;
+}
+
+/* 分组标题行 */
+.gantt-category-row {
+    background: #f8fafc;
+    min-height: 32px;
+}
+.gantt-category-row .gantt-row-category {
+    background: #f1f5f9;
+    font-weight: 700;
+}
+
+/* 任务行 */
+.gantt-task-row-item {
+    min-height: 32px;
+}
+
+/* 任务名称列 */
+.gantt-row-taskname {
+    width: 280px;
+    flex-shrink: 0;
+    padding: 6px 16px 6px 32px;
+    font-size: 12px;
+    color: #475569;
+    border-right: 2px solid #e2e8f0;
+    position: sticky;
+    left: 0;
+    z-index: 15;
+    background: white;
+    display: flex;
+    align-items: center;
+}
+.task-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gantt-row-category {
+    width: 280px;
+    flex-shrink: 0;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1e293b;
+    border-right: 2px solid #e2e8f0;
+    position: sticky;
+    left: 0;
+    z-index: 15;
+    background: white;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.gantt-row-category .category-badge {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.gantt-row-category .add-task-btn {
+    margin-left: auto;
+    padding: 3px 8px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    color: #475569;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.gantt-row-category .add-task-btn:hover {
+    background: #e2e8f0;
+    color: #1e293b;
+}
+.gantt-row-timeline {
+    flex: 1;
+    position: relative;
+}
+
+/* 任务条 */
+.gantt-task-bar {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 20px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: box-shadow 0.2s;
+}
+.gantt-task-bar:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.gantt-task-bar.dev {
+    background: linear-gradient(180deg, #60a5fa, #3b82f6);
+}
+.gantt-task-bar.test {
+    background: linear-gradient(180deg, #a78bfa, #8b5cf6);
+}
+.gantt-task-bar.prod {
+    background: linear-gradient(180deg, #fbbf24, #f59e0b);
+}
+.gantt-task-bar.done {
+    background: linear-gradient(180deg, #34d399, #10b981);
+}
+
+/* 网格线 */
+.grid-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #e2e8f0;
+    pointer-events: none;
+    z-index: 1;
+}
+.grid-line.month {
+    background: #cbd5e1;
+}
+
+/* 当天时间线 */
+.today-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ef4444;
+    z-index: 10;
+    pointer-events: none;
+}
+.today-line::before {
+    content: '今天';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+/* 空状态 */
+.gantt-empty {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 12px;
+    color: #94a3b8;
+    padding: 16px;
+    border: 2px dashed #cbd5e1;
+    border-radius: 6px;
+}
+
+/* 统计栏 */
+.stats-bar {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+.stat-item {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 16px;
+    text-align: center;
+}
+.stat-item-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1e40af;
+}
+.stat-item-label {
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 2px;
+}
+
+/* 编辑弹窗 */
+.edit-modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+}
+.edit-modal-overlay.active { display: flex; }
+.edit-modal {
+    background: white;
+    border-radius: 8px;
+    padding: 24px;
+    width: 480px;
+    max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.edit-modal h3 {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+    color: #1e293b;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 10px;
+}
+.edit-form-group {
+    margin-bottom: 12px;
+}
+.edit-form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 4px;
+}
+.edit-form-group input, .edit-form-group select, .edit-form-group textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.edit-form-group input:focus, .edit-form-group select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+}
+.edit-modal-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    justify-content: flex-end;
+}
+.btn-save {
+    background: #2563eb;
+    color: white;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-save:hover { background: #1d4ed8; }
+.btn-cancel {
+    background: #f1f5f9;
+    color: #475569;
+    border: 1px solid #cbd5e1;
+    padding: 8px 20px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-cancel:hover { background: #e2e8f0; }
+.edit-error {
+    color: #dc2626;
+    font-size: 12px;
+    margin-top: 8px;
+    display: none;
+}
+.edit-error.show { display: block; }
+</style>
+
+<div class="page-header">
+    <h2>📊 总览 - 需求满足总览</h2>
+    <div class="date-info">{{ now_str }} · 数据实时更新</div>
+</div>
+
+<!-- 统计栏 -->
+<div class="stats-bar">
+    <div class="stat-item">
+        <div class="stat-item-value">{{ cust_stats.total }}</div>
+        <div class="stat-item-label">用户需求</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-item-value">{{ cust_stats.total_qty }}</div>
+        <div class="stat-item-label">需求套数</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-item-value">{{ cust_stats.dev_count }}</div>
+        <div class="stat-item-label">研发任务</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-item-value">{{ cust_stats.test_count }}</div>
+        <div class="stat-item-label">测试任务</div>
+    </div>
+    <div class="stat-item">
+        <div class="stat-item-value">{{ cust_stats.prod_count }}</div>
+        <div class="stat-item-label">生产任务</div>
+    </div>
+</div>
+
+<!-- ========== 需求历程全景（来源→评审→产品→版本→任务→生产→开发→测试→验收→交付→运维） ========== -->
+<div class="journey-section" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06);">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+        <div style="font-size:16px;font-weight:700;color:#1e3a5f;">🛤️ 需求历程全景</div>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:#64748b;">来源 → 评审 → 产品 → 版本 → 任务 → 生产 → 开发 → 测试 → 验收 → 交付 → 运维</span>
+        </div>
+    </div>
+    <div style="display:flex;gap:16px;margin:4px 0 14px;flex-wrap:wrap;">
+        <span class="j-legend"><span class="j-lg-dot done"></span>已达成</span>
+        <span class="j-legend"><span class="j-lg-dot in_progress"></span>进行中</span>
+        <span class="j-legend"><span class="j-lg-dot blocked"></span>受阻/待办</span>
+        <span class="j-legend"><span class="j-lg-dot pending"></span>未开始</span>
+        <span style="font-size:12px;color:#94a3b8;">悬停节点查看阶段详情</span>
+    </div>
+    {% for j in journey %}
+    <div class="journey-row" style="display:flex;align-items:center;gap:14px;padding:10px 6px;border-top:1px solid #f1f5f9;">
+        <div class="journey-req" style="flex:0 0 300px;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#1e3a5f;line-height:1.35;">{{ j.req.title }}</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+                <span class="req-type-badge {% if j.req_type == '用户需求' %}badge-user{% elif j.req_type == '集团系统侧需求' %}badge-sys{% elif j.req_type == '集团应用侧需求' %}badge-app{% else %}badge-other{% endif %}">{{ j.req_type }}</span>
+                {% if j.req.customer %}<span style="font-size:11px;color:#64748b;">{{ j.req.customer }}</span>{% endif %}
+                {% if j.req.quantity %}<span style="font-size:11px;color:#64748b;background:#f1f5f9;border-radius:8px;padding:1px 7px;">{{ j.req.quantity }}套</span>{% endif %}
+                <span style="font-size:11px;color:#0f766e;background:#ecfdf5;border-radius:8px;padding:1px 7px;">📅 {{ j.req.delivery_date or '—' }}</span>
+            </div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:3px;">已完成 {{ j.done_n }}/11 阶段</div>
+        </div>
+        <div class="journey-track" style="flex:1;display:flex;align-items:flex-start;min-width:0;">
+            {% for s in j.stages %}
+            <div class="journey-node" style="flex:1;position:relative;display:flex;flex-direction:column;align-items:center;min-width:0;">
+                {% if not loop.first %}
+                <div class="j-line {% if s.state in ('done','in_progress') and j.stages[loop.index0-1].state in ('done','in_progress') %}line-active{% else %}line-gray{% endif %}"></div>
+                {% endif %}
+                <div class="j-dot {{ s.state }}" title="">{{ s.icon }}</div>
+                <div class="j-name">{{ s.name }}</div>
+                <div class="j-tip">
+                    <div class="j-tip-title">{{ s.name }} · <span class="j-tip-state {{ s.state }}">{{ {'done':'已达成','in_progress':'进行中','blocked':'受阻/待办','pending':'未开始'}.get(s.state, s.state) }}</span></div>
+                    <div class="j-tip-line">📌 {{ s.summary }}</div>
+                    <div class="j-tip-line">👤 {{ s.owner }}</div>
+                    {% if s.time and s.time != '—' %}<div class="j-tip-line">🕐 {{ s.time }}</div>{% endif %}
+                    <div class="j-tip-detail">{{ s.detail | replace('\n', '<br>') | safe }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<style>
+.j-legend{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#475569;}
+.j-lg-dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+.j-lg-dot.done{background:#10b981;}
+.j-lg-dot.in_progress{background:#3b82f6;}
+.j-lg-dot.blocked{background:#ef4444;}
+.j-lg-dot.pending{background:#cbd5e1;}
+.journey-track{position:relative;}
+.journey-node{position:relative;padding-top:6px;}
+.j-dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;z-index:2;position:relative;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.15);}
+.j-dot.done{background:#10b981;}
+.j-dot.in_progress{background:#3b82f6;}
+.j-dot.blocked{background:#ef4444;}
+.j-dot.pending{background:#cbd5e1;color:#64748b;}
+.j-name{font-size:10px;color:#64748b;margin-top:4px;white-space:nowrap;text-align:center;}
+.j-line{position:absolute;top:17px;left:-50%;width:100%;height:2px;z-index:1;}
+.j-line.line-active{background:linear-gradient(90deg,#10b981,#3b82f6);}
+.j-line.line-gray{background:#e2e8f0;}
+.j-tip{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1e293b;color:#f1f5f9;border-radius:8px;padding:8px 10px;font-size:11px;min-width:190px;max-width:260px;z-index:100;box-shadow:0 6px 18px rgba(0,0,0,.25);white-space:normal;text-align:left;}
+.j-tip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1e293b;}
+.journey-node:hover .j-tip{display:block;}
+.j-tip-title{font-weight:700;font-size:12px;margin-bottom:4px;}
+.j-tip-state{font-weight:600;}
+.j-tip-state.done{color:#34d399;}
+.j-tip-state.in_progress{color:#60a5fa;}
+.j-tip-state.blocked{color:#f87171;}
+.j-tip-state.pending{color:#94a3b8;}
+.j-tip-line{color:#cbd5e1;margin-top:2px;line-height:1.5;}
+.j-tip-detail{margin-top:4px;border-top:1px solid #334155;padding-top:4px;color:#e2e8f0;line-height:1.5;white-space:pre-line;}
+.req-type-badge{font-size:10px;font-weight:600;border-radius:8px;padding:1px 7px;}
+.badge-user{background:#eff6ff;color:#1d4ed8;}
+.badge-sys{background:#f5f3ff;color:#6d28d9;}
+.badge-app{background:#ecfdf5;color:#047857;}
+.badge-other{background:#fffbeb;color:#b45309;}
+</style>
+
+<!-- ========== 阶段成果达成总览（记录各阶段成果是否达成，直观体现） ========== -->
+<div class="cp-section" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px 20px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.06);">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+        <div style="font-size:16px;font-weight:700;color:#1e3a5f;">🏁 阶段成果达成总览</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:12px;color:#64748b;">记录各方向成果是否达成 · 回答"什么时候具备什么状态"</span>
+            <button class="btn btn-sm btn-primary" onclick="toggleCpEdit()" id="cpEditToggle">✏️ 更新状态（管理员）</button>
+            <button class="btn btn-sm btn-primary" style="display:none;background:linear-gradient(135deg,#10b981,#059669);" onclick="saveCpChanges()" id="cpSaveBtn">💾 保存修改</button>
+            <button class="btn btn-sm btn-outline" style="display:none;" onclick="cancelCpEdit()" id="cpCancelBtn">取消</button>
+        </div>
+    </div>
+
+    <!-- 全局统计 -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+        <div style="flex:1;min-width:110px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#1e3a5f;">{{ cp_stats.total }}</div>
+            <div style="font-size:12px;color:#64748b;">成果检查点总数</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:10px 14px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#047857;">{{ cp_stats.done }}</div>
+            <div style="font-size:12px;color:#047857;">✅ 已达成</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#1d4ed8;">{{ cp_stats.doing }}</div>
+            <div style="font-size:12px;color:#1d4ed8;">⏳ 进行中</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#b91c1c;">{{ cp_stats.blocked }}</div>
+            <div style="font-size:12px;color:#b91c1c;">🔴 受阻</div>
+        </div>
+        <div style="flex:1;min-width:110px;background:#f5f5f4;border:1px solid #e7e5e4;border-radius:8px;padding:10px 14px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#57534e;">{{ cp_stats.todo }}</div>
+            <div style="font-size:12px;color:#78716c;">⬜ 未开始</div>
+        </div>
+    </div>
+
+    <!-- 按方向督促条 -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+        {% for d in ['研发', '测试', '生产', '交付'] %}
+        {% set di = cp_by_dir[d] %}
+        <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);border-radius:8px;padding:10px 14px;color:#fff;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+                <div style="font-size:13px;font-weight:600;">{{ d }}方向</div>
+                <div style="font-size:11px;opacity:.85;">达成 {{ di.done }}/{{ di.total }} · 待办 {{ di.pending }}</div>
+            </div>
+            <div style="font-size:20px;font-weight:700;">{{ (di.done * 100 // di.total) if di.total else 0 }}%</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 按需求分组的检查点卡 -->
+    {% for rid, cps in cp_groups.items() %}
+    {% set meta = cp_req_meta[rid] %}
+    <div style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:12px;overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#f1f5f9,#e2e8f0);padding:10px 16px;flex-wrap:wrap;gap:6px;">
+            <div style="font-weight:700;color:#1e3a5f;font-size:14px;">{{ meta.title }}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:#475569;">
+                <span style="background:#ede9fe;color:#5b21b6;border-radius:4px;padding:1px 8px;">{{ meta.req_type }}</span>
+                {% if meta.customer %}<span>客户：{{ meta.customer }}</span>{% endif %}
+                {% if meta.quantity %}<span>套数：{{ meta.quantity }}</span>{% endif %}
+                <span style="font-weight:600;color:#b45309;">交付节点：{{ meta.delivery }}</span>
+            </div>
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="req-table" style="margin:0;border:none;">
+                <thead>
+                    <tr>
+                        <th style="width:110px;">状态</th>
+                        <th style="width:70px;">方向</th>
+                        <th style="width:190px;">成果</th>
+                        <th>达成标准</th>
+                        <th style="width:105px;">计划达成</th>
+                        <th style="width:105px;">实际达成</th>
+                        <th style="width:180px;">卡点 / 负责人</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cp in cps %}
+                    <tr data-cp-id="{{ cp.id }}" class="cp-row">
+                        <td>
+                            <span class="cp-status-tag cp-status-{{ cp.status }}" data-cur="{{ cp.status }}">
+                                {% if cp.status=='已达成' %}✅ 已达成{% elif cp.status=='进行中' %}⏳ 进行中{% elif cp.status=='受阻' %}🔴 受阻{% else %}⬜ 未开始{% endif %}
+                            </span>
+                            <select class="cp-status-select" style="display:none;padding:2px 4px;border:1px solid #3b82f6;border-radius:4px;font-size:11px;">
+                                <option value="未开始" {% if cp.status=='未开始' %}selected{% endif %}>未开始</option>
+                                <option value="进行中" {% if cp.status=='进行中' %}selected{% endif %}>进行中</option>
+                                <option value="已达成" {% if cp.status=='已达成' %}selected{% endif %}>已达成</option>
+                                <option value="受阻" {% if cp.status=='受阻' %}selected{% endif %}>受阻</option>
+                            </select>
+                        </td>
+                        <td><span class="cp-dir cp-dir-{{ cp.direction }}">{{ cp.direction }}</span></td>
+                        <td style="font-weight:600;">{{ cp.name }}{% if cp.version_no %}<div style="font-size:11px;color:#6b7280;font-weight:400;">版本 {{ cp.version_no }}</div>{% endif %}</td>
+                        <td class="cell-desc">{{ cp.standard }}</td>
+                        <td class="mono cp-planned">{{ cp.planned_date or '—' }}</td>
+                        <td class="mono cp-actual">
+                            {% if cp.actual_date %}{{ cp.actual_date }}{% else %}—{% endif %}
+                            <input type="date" class="cp-actual-input" value="{{ cp.actual_date or '' }}" style="display:none;padding:2px 4px;border:1px solid #3b82f6;border-radius:4px;font-size:11px;width:110px;">
+                        </td>
+                        <td class="cell-desc">
+                            <span class="cp-blocker">{{ cp.blocker or '' }}</span>
+                            <input type="text" class="cp-blocker-input" value="{{ cp.blocker or '' }}" style="display:none;padding:2px 4px;border:1px solid #3b82f6;border-radius:4px;font-size:11px;width:160px;">
+                            {% if cp.owner %}<div style="font-size:11px;color:#6b7280;margin-top:2px;">👤 {{ cp.owner }}</div>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ========== 第一部分：需求总览（用户需求 + 集团约束，统一表单表格） ========== -->
+<div class="section-title-bar">
+    <span>需求总览（用户需求 + 集团约束）</span>
+    <div class="section-actions">
+        <button class="btn btn-sm btn-outline" onclick="exportReqExcel()">📥 导出Excel</button>
+        <button class="btn btn-sm btn-outline" onclick="exportReqCSV()">📄 导出CSV</button>
+        <button class="btn btn-sm btn-primary" id="reqEditToggle" onclick="toggleReqEdit()">✏️ 编辑模式</button>
+    </div>
+</div>
+<div class="req-table-wrap" id="reqTableWrap">
+    <table class="req-table" id="reqTable">
+        <thead>
+            <tr>
+                <th style="width:90px;">
+                    <div class="th-header">
+                        <span>需求类型</span>
+                        <button class="filter-btn" onclick="return toggleFilter('req_type', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-req_type">
+                        <div class="filter-option-list">
+                            <div class="filter-option" onclick="applyFilter('req_type', '')">全部</div>
+                            <div class="filter-option" onclick="applyFilter('req_type', '用户需求')">用户需求</div>
+                            <div class="filter-option" onclick="applyFilter('req_type', '集团系统侧需求')">集团系统侧需求</div>
+                            <div class="filter-option" onclick="applyFilter('req_type', '集团应用侧需求')">集团应用侧需求</div>
+                            <div class="filter-option" onclick="applyFilter('req_type', '其他')">其他</div>
+                        </div>
+                    </div>
+                </th>
+                <th style="width:160px;">
+                    <div class="th-header">
+                        <span>需求标题*</span>
+                        <button class="filter-btn" onclick="return toggleFilter('title', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-title">
+                        <input type="text" placeholder="输入关键词筛选..." oninput="applyFilter('title', this.value)">
+                    </div>
+                </th>
+                <th style="width:100px;">
+                    <div class="th-header">
+                        <span>来源部门</span>
+                        <button class="filter-btn" onclick="return toggleFilter('source_dept', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-source_dept">
+                        <input type="text" placeholder="输入关键词筛选..." oninput="applyFilter('source_dept', this.value)">
+                    </div>
+                </th>
+                <th style="width:100px;">
+                    <div class="th-header">
+                        <span>关联客户</span>
+                        <button class="filter-btn" onclick="return toggleFilter('customer', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-customer">
+                        <input type="text" placeholder="输入关键词筛选..." oninput="applyFilter('customer', this.value)">
+                    </div>
+                </th>
+                <th>
+                    <div class="th-header">
+                        <span>需求描述</span>
+                        <button class="filter-btn" onclick="return toggleFilter('description', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-description">
+                        <input type="text" placeholder="输入关键词筛选..." oninput="applyFilter('description', this.value)">
+                    </div>
+                </th>
+                <th style="width:70px;">
+                    <div class="th-header">
+                        <span>需求数量*</span>
+                        <button class="filter-btn" onclick="return toggleFilter('quantity', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-quantity">
+                        <div class="filter-option-list">
+                            <div class="filter-option" onclick="applyFilter('quantity', '')">全部</div>
+                            <div class="filter-option" onclick="applyFilter('quantity', '0')">0套</div>
+                            <div class="filter-option" onclick="applyFilter('quantity', '1-100')">1-100套</div>
+                            <div class="filter-option" onclick="applyFilter('quantity', '101-500')">101-500套</div>
+                            <div class="filter-option" onclick="applyFilter('quantity', '501-1000')">501-1000套</div>
+                            <div class="filter-option" onclick="applyFilter('quantity', '1000+')">1000套以上</div>
+                        </div>
+                    </div>
+                </th>
+                <th style="width:55px;">
+                    <div class="th-header">
+                        <span>优先级</span>
+                        <button class="filter-btn" onclick="return toggleFilter('priority', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-priority">
+                        <div class="filter-option-list">
+                            <div class="filter-option" onclick="applyFilter('priority', '')">全部</div>
+                            <div class="filter-option" onclick="applyFilter('priority', '高')">高</div>
+                            <div class="filter-option" onclick="applyFilter('priority', '中')">中</div>
+                            <div class="filter-option" onclick="applyFilter('priority', '低')">低</div>
+                        </div>
+                    </div>
+                </th>
+                <th style="width:100px;">
+                    <div class="th-header">
+                        <span>要求交付日期</span>
+                        <button class="filter-btn" onclick="return toggleFilter('delivery_date', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-delivery_date">
+                        <input type="date" oninput="applyFilter('delivery_date', this.value)">
+                    </div>
+                </th>
+                <th style="width:75px;">
+                    <div class="th-header">
+                        <span>状态</span>
+                        <button class="filter-btn" onclick="return toggleFilter('status', event)" title="筛选">▼</button>
+                    </div>
+                    <div class="filter-dropdown" id="filter-status">
+                        <div class="filter-option-list">
+                            <div class="filter-option" onclick="applyFilter('status', '')">全部</div>
+                            <div class="filter-option" onclick="applyFilter('status', '待评审')">待评审</div>
+                            <div class="filter-option" onclick="applyFilter('status', '已评审')">已评审</div>
+                            <div class="filter-option" onclick="applyFilter('status', '进行中')">进行中</div>
+                            <div class="filter-option" onclick="applyFilter('status', '已完成')">已完成</div>
+                            <div class="filter-option" onclick="applyFilter('status', '已交付')">已交付</div>
+                            <div class="filter-option" onclick="applyFilter('status', '已取消')">已取消</div>
+                        </div>
+                    </div>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in all_reqs %}
+            <tr data-req-id="{{ r.id }}">
+                <td class="editable-cell" data-field="req_type">
+                    <span class="req-type-tag req-type-{{ r.req_type }} req-display">{{ r.req_type }}</span>
+                    <select class="req-edit-input" style="display:none;">
+                        <option value="用户需求" {% if r.req_type=='用户需求' %}selected{% endif %}>用户需求</option>
+                        <option value="集团系统侧需求" {% if r.req_type=='集团系统侧需求' %}selected{% endif %}>集团系统侧需求</option>
+                        <option value="集团应用侧需求" {% if r.req_type=='集团应用侧需求' %}selected{% endif %}>集团应用侧需求</option>
+                        <option value="其他" {% if r.req_type=='其他' %}selected{% endif %}>其他</option>
+                    </select>
+                </td>
+                <td class="editable-cell cell-bold" data-field="title">
+                    <span class="req-display">{{ r.title or '未填写' }}</span>
+                    <input type="text" class="req-edit-input" value="{{ r.title or '' }}" style="display:none;">
+                </td>
+                <td class="editable-cell" data-field="source_dept">
+                    <span class="req-display">{{ r.source_dept or '—' }}</span>
+                    <input type="text" class="req-edit-input" value="{{ r.source_dept or '' }}" style="display:none;">
+                </td>
+                <td class="editable-cell" data-field="customer">
+                    <span class="req-display">{{ r.customer or '—' }}</span>
+                    <input type="text" class="req-edit-input" value="{{ r.customer or '' }}" style="display:none;">
+                </td>
+                <td class="editable-cell cell-desc" data-field="description">
+                    <span class="req-display">{{ r.description or '—' }}</span>
+                    <textarea class="req-edit-input req-textarea" rows="2" style="display:none;">{{ r.description or '' }}</textarea>
+                </td>
+                <td class="editable-cell cell-bold" data-field="quantity">
+                    <span class="req-display">{{ r.quantity or 0 }} 套</span>
+                    <input type="number" class="req-edit-input req-num-input" value="{{ r.quantity or 0 }}" style="display:none;">
+                </td>
+                <td class="editable-cell" data-field="priority">
+                    <span class="priority-tag priority-{{ r.priority }} req-display">{{ r.priority }}</span>
+                    <select class="req-edit-input" style="display:none;">
+                        <option value="高" {% if r.priority=='高' %}selected{% endif %}>高</option>
+                        <option value="中" {% if r.priority=='中' %}selected{% endif %}>中</option>
+                        <option value="低" {% if r.priority=='低' %}selected{% endif %}>低</option>
+                    </select>
+                </td>
+                <td class="editable-cell mono" data-field="delivery_date">
+                    <span class="req-display">{{ r.delivery_date or '—' }}</span>
+                    <input type="date" class="req-edit-input req-date-input" value="{{ r.delivery_date or '' }}" style="display:none;">
+                </td>
+                <td class="editable-cell" data-field="status">
+                    <span class="status-tag status-{{ r.status }} req-display">{{ r.status }}</span>
+                    <select class="req-edit-input" style="display:none;">
+                        <option value="待评审" {% if r.status=='待评审' %}selected{% endif %}>待评审</option>
+                        <option value="已评审" {% if r.status=='已评审' %}selected{% endif %}>已评审</option>
+                        <option value="进行中" {% if r.status=='进行中' %}selected{% endif %}>进行中</option>
+                        <option value="已完成" {% if r.status=='已完成' %}selected{% endif %}>已完成</option>
+                        <option value="已交付" {% if r.status=='已交付' %}selected{% endif %}>已交付</option>
+                        <option value="已取消" {% if r.status=='已取消' %}selected{% endif %}>已取消</option>
+                    </select>
+                </td>
+            </tr>
+        {% endfor %}
+        {% if not all_reqs %}
+            <tr><td colspan="9" class="empty-cell">暂无需求数据</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</div>
+<div class="req-edit-save-bar" id="reqEditSaveBar" style="display:none;">
+    <span class="req-save-hint">💡 编辑模式已开启，点击单元格可直接修改，保存后同步更新数据库（需管理员密码）</span>
+    <button class="req-tool-btn req-save-btn" onclick="saveReqEdits()">💾 保存修改</button>
+    <button class="req-tool-btn req-cancel-btn" onclick="cancelReqEdits()">❌ 取消</button>
+</div>
+
+<!-- ========== 第三部分：用户需求满足情况（专业甘特图工具 · v2.2 完全集成） ========== -->
+<div class="section-title-bar" style="display: flex; justify-content: space-between; align-items: center;">
+    <span>用户需求满足情况 · 专业甘特图工具</span>
+    <a href="/gantt-tool" target="_blank" style="padding: 6px 16px; background: #3b82f6; color: white; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500;">
+        📊 新窗口打开（更大视野）
+    </a>
+</div>
+<div class="gantt-embed-wrap" style="margin-top: 10px; border: 1px solid #e4e9f2; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 1px 3px rgba(15,23,42,.06);">
+    <iframe src="/gantt-tool" style="width: 100%; height: 860px; border: none; display: block;" title="专业甘特图工作计划工具"></iframe>
+</div>
+<div class="gantt-edit-hint" style="margin-top: 8px;">
+    <span>💡 专业甘特图工具已内嵌：支持添加/编辑/删除任务、完成状态切换、分类筛选、JSON/Excel导入导出；数据与系统数据库实时关联（研发/测试/生产任务自动同步）。</span>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="edit-modal-overlay" id="editModal">
+    <div class="edit-modal">
+        <h3>编辑任务 <span id="editTaskTypeLabel" style="font-size:12px;color:#64748b;"></span></h3>
+        <div class="edit-form-group">
+            <label>任务名称</label>
+            <input type="text" id="editTaskName">
+        </div>
+        <div class="edit-form-group" style="display:flex;gap:10px;">
+            <div style="flex:1;">
+                <label>开始时间</label>
+                <input type="date" id="editTaskStart">
+            </div>
+            <div style="flex:1;">
+                <label>结束时间</label>
+                <input type="date" id="editTaskEnd">
+            </div>
+        </div>
+        <div class="edit-form-group">
+            <label>任务状态</label>
+            <select id="editTaskStatus">
+                <option value="待开始">待开始</option>
+                <option value="进行中">进行中</option>
+                <option value="已完成">已完成</option>
+                <option value="已暂停">已暂停</option>
+            </select>
+        </div>
+        <div class="edit-form-group">
+            <label>任务描述/备注</label>
+            <textarea id="editTaskDesc" rows="2" style="resize:vertical;"></textarea>
+        </div>
+        <div class="edit-form-group">
+            <label>管理员密码（验证后可保存）</label>
+            <input type="password" id="editAdminPassword" placeholder="请输入管理员密码">
+        </div>
+        <div class="edit-error" id="editError"></div>
+        <div class="edit-modal-buttons">
+            <button class="btn-cancel" onclick="closeEditModal()">取消</button>
+            <button class="btn-save" onclick="saveTaskEdit()">保存修改</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentEditTask = null;
+
+// 点击任务条打开编辑弹窗
+document.querySelectorAll('.gantt-task-bar').forEach(bar => {
+    bar.addEventListener('click', function() {
+        currentEditTask = {
+            id: this.dataset.taskId,
+            type: this.dataset.taskType,
+            name: this.dataset.name,
+            start: this.dataset.start,
+            end: this.dataset.end,
+            status: this.dataset.status,
+            desc: this.dataset.desc
+        };
+        const typeLabels = {dev: '研发任务', test: '测试任务', prod: '生产任务'};
+        document.getElementById('editTaskTypeLabel').textContent = '（' + typeLabels[currentEditTask.type] + '）';
+        document.getElementById('editTaskName').value = currentEditTask.name;
+        document.getElementById('editTaskStart').value = currentEditTask.start;
+        document.getElementById('editTaskEnd').value = currentEditTask.end;
+        document.getElementById('editTaskStatus').value = currentEditTask.status;
+        document.getElementById('editTaskDesc').value = currentEditTask.desc;
+        document.getElementById('editAdminPassword').value = '';
+        document.getElementById('editError').classList.remove('show');
+        document.getElementById('editModal').classList.add('active');
+    });
+});
+
+// 新增任务
+function addNewTask(type) {
+    const typeLabels = {dev: '研发任务', test: '测试任务', prod: '生产任务'};
+    currentEditTask = {
+        id: null,
+        type: type,
+        isNew: true
+    };
+    document.getElementById('editTaskTypeLabel').textContent = '（新增' + typeLabels[type] + '）';
+    document.getElementById('editTaskName').value = '';
+    document.getElementById('editTaskStart').value = '';
+    document.getElementById('editTaskEnd').value = '';
+    document.getElementById('editTaskStatus').value = '待开始';
+    document.getElementById('editTaskDesc').value = '';
+    document.getElementById('editAdminPassword').value = '';
+    document.getElementById('editError').classList.remove('show');
+    document.getElementById('editModal').classList.add('active');
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').classList.remove('active');
+    currentEditTask = null;
+}
+
+// 点击遮罩关闭
+document.getElementById('editModal').addEventListener('click', function(e) {
+    if (e.target === this) closeEditModal();
+});
+
+async function saveTaskEdit() {
+    const pwd = document.getElementById('editAdminPassword').value;
+    if (!pwd) {
+        showEditError('请输入管理员密码');
+        return;
+    }
+
+    const values = {
+        name: document.getElementById('editTaskName').value,
+        start: document.getElementById('editTaskStart').value,
+        end: document.getElementById('editTaskEnd').value,
+        status: document.getElementById('editTaskStatus').value,
+        desc: document.getElementById('editTaskDesc').value
+    };
+
+    if (!values.name) {
+        showEditError('请输入任务名称');
+        return;
+    }
+    if (!values.start || !values.end) {
+        showEditError('请选择开始和结束时间');
+        return;
+    }
+
+    try {
+        let resp;
+        if (currentEditTask.isNew) {
+            // 新增任务
+            resp = await fetch('/api/add_gantt_task', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    admin_password: pwd,
+                    task_type: currentEditTask.type,
+                    ...values
+                })
+            });
+        } else {
+            // 更新任务 - 逐个字段更新
+            const fields = ['name', 'start', 'end', 'status', 'desc'];
+            for (const field of fields) {
+                resp = await fetch('/api/update_gantt_task', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        admin_password: pwd,
+                        task_type: currentEditTask.type,
+                        task_id: currentEditTask.id,
+                        field: field,
+                        value: values[field]
+                    })
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    showEditError(data.error || '保存失败');
+                    return;
+                }
+            }
+        }
+        
+        if (!currentEditTask.isNew) {
+            // 新增时上面的循环已经处理了
+        } else {
+            const data = await resp.json();
+            if (!data.success) {
+                showEditError(data.error || '保存失败');
+                return;
+            }
+        }
+    } catch (e) {
+        showEditError('网络错误：' + e.message);
+        return;
+    }
+
+    // 保存成功，刷新页面
+    alert('保存成功！页面将刷新以显示最新数据。');
+    location.reload();
+}
+
+function showEditError(msg) {
+    const el = document.getElementById('editError');
+    el.textContent = msg;
+    el.classList.add('show');
+}
+
+// 甘特图使用统一滚动容器，无需同步滚动
+
+// ========== 需求总览表格：筛选功能 ==========
+let activeFilters = {};
+
+function toggleFilter(field, event) {
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+    var dropdown = document.getElementById('filter-' + field);
+    if (!dropdown) return false;
+    
+    // 关闭其他筛选下拉框
+    var allDropdowns = document.querySelectorAll('.filter-dropdown');
+    for (var i = 0; i < allDropdowns.length; i++) {
+        if (allDropdowns[i].id !== 'filter-' + field) {
+            allDropdowns[i].style.display = 'none';
+            allDropdowns[i].classList.remove('show');
+        }
+    }
+    
+    if (dropdown.style.display === 'block') {
+        dropdown.style.display = 'none';
+        dropdown.classList.remove('show');
+    } else {
+        dropdown.style.display = 'block';
+        dropdown.classList.add('show');
+    }
+    return false;
+}
+
+function applyFilter(field, value) {
+    if (value) {
+        activeFilters[field] = value;
+    } else {
+        delete activeFilters[field];
+    }
+    filterTable();
+    // 筛选后关闭下拉菜单
+    setTimeout(function() {
+        document.querySelectorAll('.filter-dropdown').forEach(d => {
+            d.style.display = 'none';
+            d.classList.remove('show');
+        });
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    }, 100);
+}
+
+function filterTable() {
+    const rows = document.querySelectorAll('#reqTable tbody tr[data-req-id]');
+    let visibleCount = 0;
+    
+    rows.forEach(row => {
+        let show = true;
+        
+        for (const field in activeFilters) {
+            if (!activeFilters.hasOwnProperty(field)) continue;
+            const filterValue = activeFilters[field];
+            const cell = row.querySelector('td[data-field="' + field + '"]');
+            if (!cell) continue;
+            
+            const display = cell.querySelector('.req-display');
+            const cellText = display ? display.textContent.trim() : cell.textContent.trim();
+            
+            if (field === 'quantity') {
+                // 数量范围筛选
+                const qty = parseInt(cellText) || 0;
+                if (filterValue === '0' && qty !== 0) show = false;
+                else if (filterValue === '1-100' && (qty < 1 || qty > 100)) show = false;
+                else if (filterValue === '101-500' && (qty < 101 || qty > 500)) show = false;
+                else if (filterValue === '501-1000' && (qty < 501 || qty > 1000)) show = false;
+                else if (filterValue === '1000+' && qty <= 1000) show = false;
+            } else if (field === 'delivery_date') {
+                // 日期筛选
+                if (cellText !== filterValue) show = false;
+            } else {
+                // 文本模糊匹配
+                if (cellText.toLowerCase().indexOf(filterValue.toLowerCase()) === -1) {
+                    show = false;
+                }
+            }
+        }
+        
+        row.style.display = show ? '' : 'none';
+        if (show) visibleCount++;
+    });
+    
+    // 更新筛选按钮状态
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        const onclickAttr = btn.getAttribute('onclick') || '';
+        const match = onclickAttr.match(/'([^']+)'/);
+        const field = match ? match[1] : '';
+        if (field && activeFilters[field]) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+}
+
+// 点击页面其他地方关闭筛选下拉框
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.filter-dropdown') && !e.target.closest('.filter-btn')) {
+        // 使用setTimeout延迟关闭，确保select的onchange事件有时间触发
+        setTimeout(function() {
+            document.querySelectorAll('.filter-dropdown').forEach(d => {
+                d.style.display = 'none';
+                d.classList.remove('show');
+            });
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        }, 100);
+    }
+});
+
+// 筛选功能已使用按钮列表替代select，onclick直接触发applyFilter
+
+// ========== 阶段成果达成：编辑/保存 ==========
+let cpEditMode = false;
+
+function toggleCpEdit() {
+    if (!cpEditMode) {
+        const pwd = prompt('请输入管理员密码以开启成果状态编辑：');
+        if (pwd === null) return;
+        if (!pwd) { alert('密码不能为空'); return; }
+        window._cpPwd = pwd;
+        cpEditMode = true;
+        document.getElementById('cpEditToggle').style.display = 'none';
+        document.getElementById('cpSaveBtn').style.display = '';
+        document.getElementById('cpCancelBtn').style.display = '';
+        document.querySelectorAll('.cp-row').forEach(row => {
+            row.classList.add('cp-editing');
+            row.querySelector('.cp-status-tag').style.display = 'none';
+            row.querySelector('.cp-status-select').style.display = '';
+            const act = row.querySelector('.cp-actual');
+            if (act) act.style.display = 'none';
+            const inp = row.querySelector('.cp-actual-input');
+            if (inp) inp.style.display = '';
+            const blk = row.querySelector('.cp-blocker');
+            if (blk) blk.style.display = 'none';
+            const binp = row.querySelector('.cp-blocker-input');
+            if (binp) binp.style.display = '';
+        });
+    }
+}
+
+function cancelCpEdit() {
+    cpEditMode = false;
+    document.getElementById('cpEditToggle').style.display = '';
+    document.getElementById('cpSaveBtn').style.display = 'none';
+    document.getElementById('cpCancelBtn').style.display = 'none';
+    document.querySelectorAll('.cp-row').forEach(row => {
+        row.classList.remove('cp-editing');
+        row.querySelector('.cp-status-tag').style.display = '';
+        row.querySelector('.cp-status-select').style.display = 'none';
+        const act = row.querySelector('.cp-actual');
+        if (act) act.style.display = '';
+        const inp = row.querySelector('.cp-actual-input');
+        if (inp) inp.style.display = 'none';
+        const blk = row.querySelector('.cp-blocker');
+        if (blk) blk.style.display = '';
+        const binp = row.querySelector('.cp-blocker-input');
+        if (binp) binp.style.display = 'none';
+    });
+}
+
+function saveCpChanges() {
+    const updates = [];
+    document.querySelectorAll('.cp-row').forEach(row => {
+        const id = row.getAttribute('data-cp-id');
+        const status = row.querySelector('.cp-status-select').value;
+        const actual = row.querySelector('.cp-actual-input').value;
+        const blocker = row.querySelector('.cp-blocker-input').value.trim();
+        const u = { id: parseInt(id), status: status };
+        if (actual) u.actual_date = actual;
+        u.blocker = blocker;
+        updates.push(u);
+    });
+    fetch('/executive/checkpoints/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ admin_password: window._cpPwd || '', updates: updates })
+    }).then(r => r.json()).then(data => {
+        if (data.success) {
+            alert(data.msg);
+            location.reload();
+        } else {
+            alert('保存失败：' + data.error);
+            if (data.error === '管理员密码错误') { cancelCpEdit(); }
+        }
+    }).catch(() => alert('网络错误，请重试'));
+}
+
+// ========== 用户需求表格：编辑/复制/导出 ==========
+let reqEditMode = false;
+let reqAdminPassword = '';
+
+function toggleReqEdit() {
+    if (!reqEditMode) {
+        // 进入编辑模式，先验证管理员密码
+        const pwd = prompt('请输入管理员密码以开启编辑模式：');
+        if (pwd === null) return;
+        if (!pwd) {
+            alert('密码不能为空');
+            return;
+        }
+        reqAdminPassword = pwd;
+        reqEditMode = true;
+        document.getElementById('reqTableWrap').classList.add('req-edit-mode');
+        document.getElementById('reqEditToggle').classList.add('active');
+        document.getElementById('reqEditToggle').textContent = '🔒 退出编辑';
+        document.getElementById('reqEditSaveBar').style.display = 'flex';
+        // 显示所有编辑输入框
+        document.querySelectorAll('#reqTable .req-edit-input').forEach(el => {
+            el.style.display = '';
+        });
+        document.querySelectorAll('#reqTable .req-display').forEach(el => {
+            el.style.display = 'none';
+        });
+    } else {
+        // 退出编辑模式
+        cancelReqEdits();
+    }
+}
+
+function cancelReqEdits() {
+    reqEditMode = false;
+    reqAdminPassword = '';
+    document.getElementById('reqTableWrap').classList.remove('req-edit-mode');
+    document.getElementById('reqEditToggle').classList.remove('active');
+    document.getElementById('reqEditToggle').textContent = '✏️ 编辑模式';
+    document.getElementById('reqEditSaveBar').style.display = 'none';
+    // 恢复显示
+    document.querySelectorAll('#reqTable .req-edit-input').forEach(el => {
+        el.style.display = 'none';
+    });
+    document.querySelectorAll('#reqTable .req-display').forEach(el => {
+        el.style.display = '';
+    });
+    // 刷新页面恢复原始数据
+    location.reload();
+}
+
+async function saveReqEdits() {
+    if (!confirm('确定要保存所有修改吗？')) return;
+    
+    const rows = document.querySelectorAll('#reqTable tbody tr[data-req-id]');
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const row of rows) {
+        const reqId = row.dataset.reqId;
+        const cells = row.querySelectorAll('.editable-cell');
+        
+        for (const cell of cells) {
+            const field = cell.dataset.field;
+            const input = cell.querySelector('.req-edit-input');
+            if (!input) continue;
+            let value = input.value;
+            
+            // 数量字段特殊处理
+            if (field === 'quantity') {
+                value = parseInt(value) || 0;
+            }
+            
+            try {
+                const resp = await fetch('/api/update_requirement', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        admin_password: reqAdminPassword,
+                        req_id: reqId,
+                        field: field,
+                        value: value
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    successCount++;
+                } else {
+                    failCount++;
+                    console.error('保存失败:', reqId, field, data.error);
+                }
+            } catch (e) {
+                failCount++;
+                console.error('网络错误:', e);
+            }
+        }
+    }
+    
+    if (failCount === 0) {
+        alert('保存成功！共更新 ' + successCount + ' 个字段。');
+        location.reload();
+    } else {
+        alert('保存完成：成功 ' + successCount + ' 个，失败 ' + failCount + ' 个。请检查管理员密码是否正确。');
+    }
+}
+
+function copyReqTable() {
+    const table = document.getElementById('reqTable');
+    let text = '';
+    
+    // 表头
+    const headers = table.querySelectorAll('thead th');
+    text += Array.from(headers).map(h => h.textContent.trim()).join('\t') + '\n';
+    
+    // 表体
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const rowText = Array.from(cells).map(cell => {
+            const display = cell.querySelector('.req-display');
+            return display ? display.textContent.trim() : cell.textContent.trim();
+        }).join('\t');
+        text += rowText + '\n';
+    });
+    
+    // 复制到剪贴板
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            alert('表格内容已复制到剪贴板！可直接粘贴到Excel中。');
+        }).catch(() => {
+            fallbackCopy(text);
+        });
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        alert('表格内容已复制到剪贴板！可直接粘贴到Excel中。');
+    } catch (e) {
+        alert('复制失败，请手动选择表格内容复制。');
+    }
+    document.body.removeChild(textarea);
+}
+
+function exportReqCSV() {
+    const table = document.getElementById('reqTable');
+    let csv = '\uFEFF'; // BOM for Excel UTF-8
+    
+    // 表头
+    const headers = table.querySelectorAll('thead th');
+    csv += Array.from(headers).map(h => '"' + h.textContent.trim().replace(/"/g, '""') + '"').join(',') + '\n';
+    
+    // 表体
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        const rowText = Array.from(cells).map(cell => {
+            const display = cell.querySelector('.req-display');
+            const text = display ? display.textContent.trim() : cell.textContent.trim();
+            return '"' + text.replace(/"/g, '""') + '"';
+        }).join(',');
+        csv += rowText + '\n';
+    });
+    
+    // 下载
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = '需求总览清单_' + new Date().toISOString().slice(0,10) + '.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function exportReqExcel() {
+    // 使用HTML表格格式，Excel可直接打开
+    const table = document.getElementById('reqTable');
+    let html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+    html += '<head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>需求总览</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body>';
+    html += '<table border="1" style="border-collapse:collapse;font-family:Microsoft YaHei;font-size:12px;">';
+    
+    // 表头
+    html += '<tr style="background:#f1f5f9;font-weight:bold;">';
+    table.querySelectorAll('thead th').forEach(th => {
+        html += '<td style="padding:8px;border:1px solid #ccc;">' + th.textContent.trim() + '</td>';
+    });
+    html += '</tr>';
+    
+    // 表体
+    table.querySelectorAll('tbody tr').forEach(row => {
+        html += '<tr>';
+        row.querySelectorAll('td').forEach(cell => {
+            const display = cell.querySelector('.req-display');
+            const text = display ? display.textContent.trim() : cell.textContent.trim();
+            html += '<td style="padding:6px;border:1px solid #ddd;">' + text + '</td>';
+        });
+        html += '</tr>';
+    });
+    
+    html += '</table></body></html>';
+    
+    const blob = new Blob([html], {type: 'application/vnd.ms-excel;charset=utf-8;'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = '需求总览清单_' + new Date().toISOString().slice(0,10) + '.xls';
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+</script>
+
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '新建技术支持工单' %}
+{% block ext_content %}
+<div class="panel">
+    <form method="post">
+        <div class="step-indicator">
+            <div class="step-item active"><div class="step-num">1</div><div class="step-label">客户信息</div></div>
+            <div class="step-line"></div>
+            <div class="step-item"><div class="step-num">2</div><div class="step-label">问题描述</div></div>
+            <div class="step-line"></div>
+            <div class="step-item"><div class="step-num">3</div><div class="step-label">分类优先级</div></div>
+        </div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>客户名称 <span class="required">*</span></label>
+                <input type="text" name="customer" required class="form-control" placeholder="如：重庆XX科技有限公司">
+            </div>
+            <div class="form-group">
+                <label>联系人</label>
+                <input type="text" name="contact_person" class="form-control" placeholder="客户对接人姓名">
+            </div>
+            <div class="form-group">
+                <label>联系电话</label>
+                <input type="text" name="contact_phone" class="form-control" placeholder="选填">
+            </div>
+            <div class="form-group">
+                <label>涉及产品</label>
+                <select name="product_id" class="form-control">
+                    <option value="">-- 选择产品（选填）--</option>
+                    {% for p in products %}
+                    <option value="{{ p.id }}">{{ p.name }} ({{ p.model }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group form-full">
+                <label>问题标题 <span class="required">*</span></label>
+                <input type="text" name="title" required class="form-control" placeholder="一句话概括问题，如：5G模组联网后频繁掉线">
+            </div>
+            <div class="form-group form-full">
+                <label>问题详细描述 <span class="required">*</span></label>
+                <textarea name="description" rows="5" required class="form-control" placeholder="请描述：&#10;1. 问题现象（什么时候出现、频率）&#10;2. 复现步骤&#10;3. 已尝试的解决方法&#10;4. 环境信息（固件版本、硬件型号等）"></textarea>
+            </div>
+            <div class="form-group">
+                <label>问题类别</label>
+                <select name="category" class="form-control">
+                    <option>技术咨询</option><option>功能异常</option><option>性能问题</option>
+                    <option>配置问题</option><option>兼容性问题</option><option>其他</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>优先级</label>
+                <select name="priority" class="form-control">
+                    <option>高</option><option selected>中</option><option>低</option>
+                </select>
+            </div>
+        </div>
+        <div class="step-actions">
+            <button type="submit" class="btn btn-primary">提交工单</button>
+            <a href="{{ url_for('ext.ticket_list') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

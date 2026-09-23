@@ -1,0 +1,453 @@
+{% extends "base.html" %}
+{% block title %}工作台 - 业务运转系统{% endblock %}
+{% block page_title %}工作台{% endblock %}
+
+{% block content %}
+<div class="dashboard-v2">
+    <!-- 顶部：一句话欢迎 + 今日焦点 -->
+    <div class="hero-bar">
+        <div class="hero-left">
+            <div class="hero-greeting">
+                <span class="hero-role">
+                    {% if current_role == 'admin' %}管理组
+                    {% elif current_role == 'product' %}产品组
+                    {% elif current_role == 'dev_test' %}研发测试组
+                    {% elif current_role == 'quality' %}质量组
+                    {% elif current_role == 'delivery' %}交付服务组
+                    {% else %}工作台{% endif %}
+                </span>
+                <span class="hero-date">{{ now_month }}月{{ now_day }}日 {{ now_week }}</span>
+            </div>
+            <div class="hero-focus">
+                {% if current_role == 'admin' %}系统管理与决策总览 · 关注交付进度与风险
+                {% elif current_role == 'product' %}计划统筹 · 需求评审 · 版本规划 · 资源调度
+                {% elif current_role == 'dev_test' %}开发任务推进 · 测试执行 · Bug处理
+                {% elif current_role == 'quality' %}质量检测 · Bug巡检 · 质量督办闭环
+                {% elif current_role == 'delivery' %}交付计划 · 技术支持 · 运维监控
+                {% endif %}
+            </div>
+        </div>
+        <div class="hero-right">
+            <div class="hero-todo-card">
+                <div class="hero-todo-num">{{ my_tasks_count }}</div>
+                <div class="hero-todo-label">待办事项</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 核心指标：4个大数字 -->
+    <div class="kpi-row">
+        {% if current_role == 'admin' %}
+        <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">📦</div>
+            <div class="kpi-value">{{ stats.products_total }}</div>
+            <div class="kpi-label">在管产品</div>
+        </div>
+        <div class="kpi-card kpi-green">
+            <div class="kpi-icon">📋</div>
+            <div class="kpi-value">{{ stats.req_pending }}</div>
+            <div class="kpi-label">进行中需求</div>
+        </div>
+        <div class="kpi-card kpi-orange">
+            <div class="kpi-icon">🐛</div>
+            <div class="kpi-value">{{ bugs_open }}</div>
+            <div class="kpi-label">未关闭Bug</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">🚚</div>
+            <div class="kpi-value">{{ stats.deliveries_month }}</div>
+            <div class="kpi-label">本月交付</div>
+        </div>
+
+        {% elif current_role == 'product' %}
+        <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">📋</div>
+            <div class="kpi-value">{{ stats.req_pending }}</div>
+            <div class="kpi-label">待评审需求</div>
+        </div>
+        <div class="kpi-card kpi-green">
+            <div class="kpi-icon">🔖</div>
+            <div class="kpi-value">{{ stats.versions_active }}</div>
+            <div class="kpi-label">活跃版本</div>
+        </div>
+        <div class="kpi-card kpi-orange">
+            <div class="kpi-icon">📑</div>
+            <div class="kpi-value">{{ stats.dev_tasks_pending }}</div>
+            <div class="kpi-label">待开发任务</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">✅</div>
+            <div class="kpi-value">{{ my_tasks_count }}</div>
+            <div class="kpi-label">我的待办</div>
+        </div>
+
+        {% elif current_role == 'dev_test' %}
+        <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">💻</div>
+            <div class="kpi-value">{{ stats.dev_tasks_pending }}</div>
+            <div class="kpi-label">待开发任务</div>
+        </div>
+        <div class="kpi-card kpi-green">
+            <div class="kpi-icon">🧪</div>
+            <div class="kpi-value">{{ stats.test_cases_total }}</div>
+            <div class="kpi-label">测试用例库</div>
+        </div>
+        <div class="kpi-card kpi-orange">
+            <div class="kpi-icon">🐛</div>
+            <div class="kpi-value">{{ bugs_open }}</div>
+            <div class="kpi-label">待处理Bug</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">✅</div>
+            <div class="kpi-value">{{ my_tasks_count }}</div>
+            <div class="kpi-label">我的待办</div>
+        </div>
+
+        {% elif current_role == 'quality' %}
+        <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">🔍</div>
+            <div class="kpi-value">{{ bugs_open }}</div>
+            <div class="kpi-label">待巡检Bug</div>
+        </div>
+        <div class="kpi-card kpi-green">
+            <div class="kpi-icon">⚠️</div>
+            <div class="kpi-value">{{ stats.quality_issues_pending }}</div>
+            <div class="kpi-label">质量问题督办</div>
+        </div>
+        <div class="kpi-card kpi-orange">
+            <div class="kpi-icon">📦</div>
+            <div class="kpi-value">{{ stats.warehouse_pending }}</div>
+            <div class="kpi-label">待审批入库</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">✅</div>
+            <div class="kpi-value">{{ my_tasks_count }}</div>
+            <div class="kpi-label">我的待办</div>
+        </div>
+
+        {% elif current_role == 'delivery' %}
+        <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">🚚</div>
+            <div class="kpi-value">{{ stats.deliveries_month }}</div>
+            <div class="kpi-label">本月交付</div>
+        </div>
+        <div class="kpi-card kpi-green">
+            <div class="kpi-icon">🎧</div>
+            <div class="kpi-value">{{ stats.tickets_pending }}</div>
+            <div class="kpi-label">待处理工单</div>
+        </div>
+        <div class="kpi-card kpi-orange">
+            <div class="kpi-icon">💰</div>
+            <div class="kpi-value">{{ stats.revenue_pending }}</div>
+            <div class="kpi-label">待确认收入</div>
+        </div>
+        <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">📡</div>
+            <div class="kpi-value">{{ stats.device_alerts }}</div>
+            <div class="kpi-label">设备告警</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- 两栏布局：左待办 + 右常用入口 -->
+    <div class="dash-two-col">
+        <!-- 我的待办 -->
+        <div class="dash-panel">
+            <div class="panel-head">
+                <h3 class="panel-title">📋 我的待办</h3>
+                <a href="{{ url_for('ext.my_tasks') }}" class="panel-link">全部 →</a>
+            </div>
+            {% if my_tasks %}
+            <div class="todo-compact">
+                {% for t in my_tasks[:5] %}
+                <div class="todo-row {% if t.due_date and t.due_date < now_date %}todo-row-overdue{% endif %}">
+                    <span class="todo-dot dot-{{ t.priority }}"></span>
+                    <div class="todo-row-main">
+                        <div class="todo-row-title">{{ t.title }}</div>
+                        <div class="todo-row-meta">
+                            <span class="todo-tag">{{ t.module }}</span>
+                            {% if t.due_date %}
+                            <span class="todo-due {% if t.due_date < now_date %}due-red{% endif %}">{{ t.due_date }}</span>
+                            {% endif %}
+                            <span class="todo-status status-{{ t.status }}">{{ t.status }}</span>
+                        </div>
+                    </div>
+                    <a href="{{ url_for('ext.task_detail', tid=t.id) }}" class="todo-go">处理</a>
+                </div>
+                {% endfor %}
+                {% if my_tasks|length > 5 %}
+                <div class="todo-more">还有 {{ my_tasks|length - 5 }} 项待办，<a href="{{ url_for('ext.my_tasks') }}">点击查看</a></div>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="empty-box">
+                <div class="empty-icon-lg">🎉</div>
+                <div class="empty-text-lg">暂无待办，工作都已安排妥当</div>
+                <a href="{{ url_for('ext.task_add') }}" class="btn btn-primary btn-sm">+ 新建任务</a>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- 常用功能 -->
+        <div class="dash-panel">
+            <div class="panel-head">
+                <h3 class="panel-title">⚡ 常用功能</h3>
+            </div>
+            <div class="quick-grid">
+                {% if current_role == 'admin' %}
+                <a href="{{ url_for('executive_dashboard') }}" class="quick-item q-blue">
+                    <span class="qi-icon">👑</span>
+                    <span class="qi-text">总览</span>
+                </a>
+                <a href="{{ url_for('requirements_list') }}" class="quick-item q-green">
+                    <span class="qi-icon">📋</span>
+                    <span class="qi-text">需求数据库</span>
+                </a>
+                <a href="{{ url_for('version_list') }}" class="quick-item q-orange">
+                    <span class="qi-icon">🔖</span>
+                    <span class="qi-text">版本规划</span>
+                </a>
+                <a href="{{ url_for('data_management') }}" class="quick-item q-purple">
+                    <span class="qi-icon">💾</span>
+                    <span class="qi-text">数据管理</span>
+                </a>
+
+                {% elif current_role == 'product' %}
+                <a href="{{ url_for('requirements_list') }}" class="quick-item q-blue">
+                    <span class="qi-icon">📋</span>
+                    <span class="qi-text">需求评审</span>
+                </a>
+                <a href="{{ url_for('version_list') }}" class="quick-item q-green">
+                    <span class="qi-icon">🔖</span>
+                    <span class="qi-text">版本规划</span>
+                </a>
+                <a href="{{ url_for('production_dashboard') }}" class="quick-item q-orange">
+                    <span class="qi-icon">🏭</span>
+                    <span class="qi-text">生产管理</span>
+                </a>
+                <a href="{{ url_for('ext.contract_list') }}" class="quick-item q-purple">
+                    <span class="qi-icon">📄</span>
+                    <span class="qi-text">合同跟进</span>
+                </a>
+                <a href="{{ url_for('ext.resource_list') }}" class="quick-item q-cyan">
+                    <span class="qi-icon">🔀</span>
+                    <span class="qi-text">资源调度</span>
+                </a>
+                <a href="{{ url_for('ext.tech_spec_list') }}" class="quick-item q-pink">
+                    <span class="qi-icon">📑</span>
+                    <span class="qi-text">技术规格</span>
+                </a>
+
+                {% elif current_role == 'dev_test' %}
+                <a href="{{ url_for('version_list') }}" class="quick-item q-blue">
+                    <span class="qi-icon">💻</span>
+                    <span class="qi-text">开发任务</span>
+                </a>
+                <a href="{{ url_for('bug_list') }}" class="quick-item q-red">
+                    <span class="qi-icon">🐛</span>
+                    <span class="qi-text">Bug处理</span>
+                </a>
+                <a href="{{ url_for('ext.test_case_list') }}" class="quick-item q-green">
+                    <span class="qi-icon">🧪</span>
+                    <span class="qi-text">测试用例</span>
+                </a>
+                <a href="{{ url_for('ext.test_execution_list') }}" class="quick-item q-orange">
+                    <span class="qi-icon">📊</span>
+                    <span class="qi-text">测试执行</span>
+                </a>
+
+                {% elif current_role == 'quality' %}
+                <a href="{{ url_for('bug_list') }}" class="quick-item q-red">
+                    <span class="qi-icon">🐛</span>
+                    <span class="qi-text">Bug巡检</span>
+                </a>
+                <a href="{{ url_for('quality_dashboard') }}" class="quick-item q-blue">
+                    <span class="qi-icon">✅</span>
+                    <span class="qi-text">质量检测</span>
+                </a>
+                <a href="{{ url_for('delivery_dashboard') }}" class="quick-item q-green">
+                    <span class="qi-icon">📦</span>
+                    <span class="qi-text">入库审批</span>
+                </a>
+                <a href="{{ url_for('ext.test_execution_list') }}" class="quick-item q-orange">
+                    <span class="qi-icon">📊</span>
+                    <span class="qi-text">测试报告</span>
+                </a>
+
+                {% elif current_role == 'delivery' %}
+                <a href="{{ url_for('requirements_list') }}" class="quick-item q-blue">
+                    <span class="qi-icon">📋</span>
+                    <span class="qi-text">需求收集</span>
+                </a>
+                <a href="{{ url_for('ext.delivery_plan_list') }}" class="quick-item q-green">
+                    <span class="qi-icon">🚚</span>
+                    <span class="qi-text">交付计划</span>
+                </a>
+                <a href="{{ url_for('ext.ticket_list') }}" class="quick-item q-orange">
+                    <span class="qi-icon">🎧</span>
+                    <span class="qi-text">技术支持</span>
+                </a>
+                <a href="{{ url_for('ext.revenue_list') }}" class="quick-item q-purple">
+                    <span class="qi-icon">💰</span>
+                    <span class="qi-text">收入确认</span>
+                </a>
+                <a href="{{ url_for('ext.device_list') }}" class="quick-item q-cyan">
+                    <span class="qi-icon">📡</span>
+                    <span class="qi-text">设备运维</span>
+                </a>
+                <a href="{{ url_for('ext.feedback_list') }}" class="quick-item q-pink">
+                    <span class="qi-icon">💬</span>
+                    <span class="qi-text">用户反馈</span>
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- 最近动态（精简版） -->
+    <div class="dash-panel">
+        <div class="panel-head">
+            <h3 class="panel-title">📝 最近动态</h3>
+        </div>
+        <div class="activity-compact">
+            {% for log in recent_logs[:6] %}
+            <div class="activity-row">
+                <span class="activity-dot"></span>
+                <div class="activity-row-main">
+                    <span class="activity-who">{{ log.operator }}</span>
+                    <span class="activity-mod">{{ log.module }}</span>
+                    <span class="activity-what">{{ log.action }}：{{ log.detail }}</span>
+                </div>
+                <span class="activity-time">{{ log.created_at[5:16] if log.created_at else '' }}</span>
+            </div>
+            {% else %}
+            <div class="empty-box"><div class="empty-text-lg">暂无操作记录</div></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+{{ super() }}
+<style>
+.dashboard-v2 { padding: 4px; }
+
+/* 顶部Hero */
+.hero-bar {
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
+    color: #fff; border-radius: 14px; padding: 20px 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 18px; box-shadow: 0 4px 14px rgba(37,99,235,0.25);
+}
+.hero-greeting { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.hero-role { font-size: 20px; font-weight: 700; }
+.hero-date { font-size: 13px; opacity: 0.85; }
+.hero-focus { font-size: 13px; opacity: 0.9; }
+.hero-todo-card {
+    background: rgba(255,255,255,0.18); backdrop-filter: blur(4px);
+    border-radius: 12px; padding: 10px 22px; text-align: center;
+}
+.hero-todo-num { font-size: 30px; font-weight: 800; line-height: 1; }
+.hero-todo-label { font-size: 11px; opacity: 0.9; margin-top: 4px; }
+
+/* KPI卡片 */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+.kpi-card {
+    background: #fff; border-radius: 12px; padding: 18px 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06); position: relative; overflow: hidden;
+    border-top: 3px solid; transition: transform 0.15s, box-shadow 0.15s;
+}
+.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.1); }
+.kpi-blue { border-top-color: #3b82f6; }
+.kpi-green { border-top-color: #10b981; }
+.kpi-orange { border-top-color: #f59e0b; }
+.kpi-purple { border-top-color: #8b5cf6; }
+.kpi-icon { font-size: 22px; margin-bottom: 8px; }
+.kpi-value { font-size: 30px; font-weight: 800; color: #111827; line-height: 1; }
+.kpi-label { font-size: 12px; color: #6b7280; margin-top: 6px; }
+
+/* 两栏 */
+.dash-two-col { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; margin-bottom: 18px; }
+.dash-panel {
+    background: #fff; border-radius: 12px; padding: 18px 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #f3f4f6; }
+.panel-title { font-size: 15px; font-weight: 700; color: #111827; margin: 0; }
+.panel-link { font-size: 12px; color: #2563eb; text-decoration: none; }
+.panel-link:hover { text-decoration: underline; }
+
+/* 待办紧凑列表 */
+.todo-compact { display: flex; flex-direction: column; gap: 8px; }
+.todo-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    background: #f9fafb; border-radius: 8px; border-left: 3px solid #d1d5db;
+    transition: background 0.15s;
+}
+.todo-row:hover { background: #f3f4f6; }
+.todo-row-overdue { border-left-color: #ef4444; background: #fef2f2; }
+.todo-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-高 { background: #ef4444; }
+.dot-中 { background: #f59e0b; }
+.dot-低 { background: #10b981; }
+.todo-row-main { flex: 1; min-width: 0; }
+.todo-row-title { font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.todo-row-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.todo-tag { font-size: 10px; background: #eff6ff; color: #1e40af; padding: 1px 6px; border-radius: 3px; }
+.todo-due { font-size: 11px; color: #6b7280; }
+.due-red { color: #dc2626 !important; font-weight: 600; }
+.todo-status { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 500; }
+.status-待处理 { background: #fef3c7; color: #92400e; }
+.status-进行中 { background: #dbeafe; color: #1e40af; }
+.status-已完成 { background: #d1fae5; color: #065f46; }
+.todo-go { font-size: 11px; color: #2563eb; text-decoration: none; padding: 3px 10px; border: 1px solid #bfdbfe; border-radius: 5px; flex-shrink: 0; }
+.todo-go:hover { background: #eff6ff; }
+.todo-more { font-size: 12px; color: #6b7280; text-align: center; padding-top: 6px; }
+.todo-more a { color: #2563eb; text-decoration: none; }
+
+/* 空状态 */
+.empty-box { text-align: center; padding: 28px 16px; }
+.empty-icon-lg { font-size: 36px; margin-bottom: 8px; }
+.empty-text-lg { color: #6b7280; font-size: 13px; margin-bottom: 12px; }
+
+/* 常用功能网格 */
+.quick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.quick-item {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 14px 8px; border-radius: 10px; text-decoration: none;
+    border: 1px solid #e5e7eb; transition: all 0.15s;
+}
+.quick-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.qi-icon { font-size: 22px; }
+.qi-text { font-size: 12px; font-weight: 600; color: #374151; }
+.q-blue { background: #eff6ff; border-color: #bfdbfe; }
+.q-green { background: #f0fdf4; border-color: #bbf7d0; }
+.q-orange { background: #fffbeb; border-color: #fde68a; }
+.q-purple { background: #faf5ff; border-color: #e9d5ff; }
+.q-red { background: #fef2f2; border-color: #fecaca; }
+.q-cyan { background: #ecfeff; border-color: #a5f3fc; }
+.q-pink { background: #fdf2f8; border-color: #fbcfe8; }
+
+/* 最近动态紧凑 */
+.activity-compact { display: flex; flex-direction: column; }
+.activity-row {
+    display: flex; align-items: center; gap: 10px; padding: 9px 0;
+    border-bottom: 1px solid #f9fafb;
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
+.activity-row-main { flex: 1; min-width: 0; font-size: 12px; color: #374151; }
+.activity-who { font-weight: 600; color: #111827; }
+.activity-mod { font-size: 10px; background: #f3f4f6; color: #6b7280; padding: 1px 5px; border-radius: 3px; margin: 0 4px; }
+.activity-what { color: #4b5563; }
+.activity-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
+
+@media (max-width: 900px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .dash-two-col { grid-template-columns: 1fr; }
+    .quick-grid { grid-template-columns: repeat(2, 1fr); }
+    .hero-bar { flex-direction: column; gap: 12px; text-align: center; }
+}
+</style>
+{% endblock %}

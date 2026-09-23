@@ -1,0 +1,56 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '新建任务' %}
+{% block ext_content %}
+<div class="panel">
+    <form method="post">
+        <div class="step-indicator">
+            <div class="step-item active"><div class="step-num">1</div><div class="step-label">干什么</div></div>
+            <div class="step-line"></div>
+            <div class="step-item"><div class="step-num">2</div><div class="step-label">谁来干/啥时候</div></div>
+            <div class="step-line"></div>
+            <div class="step-item"><div class="step-num">3</div><div class="step-label">干完啥成果</div></div>
+        </div>
+        <div class="form-grid">
+            <div class="form-group form-full">
+                <label>任务标题 <span class="required">*</span></label>
+                <input type="text" name="title" required class="form-control" placeholder="一句话说清楚干什么，如：完成5G模组V2.3.0版本开发">
+            </div>
+            <div class="form-group form-full">
+                <label>任务描述</label>
+                <textarea name="description" rows="3" class="form-control" placeholder="详细描述任务内容、背景、要求（选填）"></textarea>
+            </div>
+            <div class="form-group">
+                <label>所属模块</label>
+                <select name="module" class="form-control">
+                    <option>需求管理</option><option>版本规划</option><option>开发任务</option>
+                    <option>测试工作</option><option>生产管理</option><option>质量检测</option>
+                    <option>交付服务</option><option>技术支持</option><option>运维监控</option>
+                    <option>合同跟进</option><option>其他</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>优先级</label>
+                <select name="priority" class="form-control">
+                    <option>高</option><option selected>中</option><option>低</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>负责人</label>
+                <input type="text" name="assignee" class="form-control" placeholder="默认分配给自己" value="{{ session.get('username', '') }}">
+            </div>
+            <div class="form-group">
+                <label>截止日期 <span class="required">*</span></label>
+                <input type="date" name="due_date" required class="form-control">
+            </div>
+            <div class="form-group form-full">
+                <label>预期成果 <span class="required">*</span> <span style="font-weight:normal;color:#9ca3af;font-size:12px;">（干完能达到什么效果？）</span></label>
+                <textarea name="expected_result" rows="3" required class="form-control" placeholder="描述完成后的可衡量成果，如：&#10;• 版本发布，包含3个新功能&#10;• 测试通过率≥95%&#10;• 客户验收通过"></textarea>
+            </div>
+        </div>
+        <div class="step-actions">
+            <button type="submit" class="btn btn-primary">创建任务</button>
+            <a href="{{ url_for('ext.my_tasks') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

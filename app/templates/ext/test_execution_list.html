@@ -1,0 +1,36 @@
+{% extends "ext/_base.html" %}
+{% set page_title = '测试执行记录' %}
+{% block header_actions %}
+{% if can_write('ext.test_execution') %}<a href="{{ url_for('ext.test_execution_add') }}" class="btn btn-primary">+ 新建执行</a>{% endif %}
+<a href="{{ url_for('ext.test_case_list') }}" class="btn btn-outline">用例库</a>
+{% endblock %}
+{% block ext_content %}
+<div class="stats-row">
+    <div class="stat-mini stat-mini-blue"><div class="stat-mini-value">{{ executions|length }}</div><div class="stat-mini-label">执行轮次</div></div>
+    <div class="stat-mini stat-mini-green"><div class="stat-mini-value">{{ executions|selectattr('status','equalto','已完成')|list|length }}</div><div class="stat-mini-label">已完成</div></div>
+    <div class="stat-mini stat-mini-orange"><div class="stat-mini-value">{{ executions|selectattr('status','equalto','进行中')|list|length }}</div><div class="stat-mini-label">进行中</div></div>
+</div>
+<div class="panel">
+    <table class="data-table">
+        <thead><tr><th>执行编号</th><th>产品</th><th>轮次</th><th>执行人</th><th>用例总数</th><th>通过</th><th>失败</th><th>通过率</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for e in executions %}
+            <tr>
+                <td class="mono">{{ e.execution_no }}</td>
+                <td>{{ e.product_name or '-' }}</td>
+                <td class="text-center">第{{ e.round_no }}轮</td>
+                <td>{{ e.executor }}</td>
+                <td class="text-center">{{ e.total_cases }}</td>
+                <td class="text-center text-success">{{ e.passed_cases }}</td>
+                <td class="text-center text-danger">{{ e.failed_cases }}</td>
+                <td class="text-center"><strong>{{ e.pass_rate }}%</strong></td>
+                <td class="text-center"><span class="status-tag status-{{ e.status }}">{{ e.status }}</span></td>
+                <td><a href="{{ url_for('ext.test_execution_detail', eid=e.id) }}" class="btn btn-sm btn-outline">执行/查看</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="empty-cell">暂无测试执行记录</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
