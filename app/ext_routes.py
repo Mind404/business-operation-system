@@ -368,7 +368,7 @@ def delivery_plan_add():
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     # 关联需求下拉：只列出用户需求（合同刚性），支持生产交付流程
     requirements = db.execute('''SELECT id, title, customer, quantity, delivery_date, status
-        FROM requirements WHERE req_type="用户需求" ORDER BY delivery_date''').fetchall()
+        FROM requirements WHERE req_type="用户需求" AND is_deleted=0 ORDER BY delivery_date''').fetchall()
     return render_template('ext/delivery_plan_form.html', products=products, requirements=requirements)
 
 @ext_bp.route('/delivery/plans/<int:plan_id>')
@@ -457,7 +457,7 @@ def revenue_confirm(rid):
 @ext_bp.route('/requirements/<int:rid>/reviews')
 def requirement_reviews(rid):
     db = get_db()
-    requirement = db.execute('SELECT * FROM requirements WHERE id=?', (rid,)).fetchone()
+    requirement = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (rid,)).fetchone()
     reviews = db.execute('SELECT * FROM requirement_reviews WHERE requirement_id=? ORDER BY created_at DESC', (rid,)).fetchall()
     return render_template('ext/requirement_reviews.html', requirement=requirement, reviews=reviews)
 
@@ -1276,7 +1276,7 @@ def sync_auto_tasks(db, current_user, current_role):
     auto_tasks = []
     # 产品组：需求评审 + 合同跟进
     if current_role in ('product', 'admin'):
-        reqs = db.execute("SELECT id, title FROM requirements WHERE status='待评审'").fetchall()
+        reqs = db.execute("SELECT id, title FROM requirements WHERE status='待评审' AND is_deleted=0").fetchall()
         for r in reqs:
             auto_tasks.append(('需求评审', f'评审需求：{r["title"]}', 'requirements', r['id'], '评审通过后纳入版本规划', 7))
     # 研发测试组：测试执行 + 开发任务

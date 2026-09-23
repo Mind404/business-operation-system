@@ -5,6 +5,7 @@ AI驱动的业务高效运转系统 - Flask Web应用
 """
 import os
 import sqlite3
+import random
 from datetime import datetime, date
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file
 from werkzeug.utils import secure_filename
@@ -237,8 +238,8 @@ def log_operation(module, action, detail, operator='系统'):
 def index():
     db = get_db()
     stats = {
-        'requirements_total': db.execute('SELECT COUNT(*) FROM requirements').fetchone()[0],
-        'requirements_pending': db.execute("SELECT COUNT(*) FROM requirements WHERE status='待评审'").fetchone()[0],
+        'requirements_total': db.execute('SELECT COUNT(*) FROM requirements WHERE is_deleted=0').fetchone()[0],
+        'requirements_pending': db.execute("SELECT COUNT(*) FROM requirements WHERE status='待评审' AND is_deleted=0").fetchone()[0],
         'products_total': db.execute('SELECT COUNT(*) FROM products').fetchone()[0],
         'inventory_items': db.execute('SELECT COUNT(*) FROM inventory').fetchone()[0],
         'production_total': db.execute('SELECT COUNT(*) FROM production_orders').fetchone()[0],
@@ -248,7 +249,7 @@ def index():
         'deliveries_month': db.execute("SELECT COUNT(*) FROM deliveries WHERE strftime('%Y-%m', delivery_date)=strftime('%Y-%m','now','localtime')").fetchone()[0],
         'versions_total': db.execute('SELECT COUNT(*) FROM software_versions').fetchone()[0],
         'versions_active': db.execute("SELECT COUNT(*) FROM software_versions WHERE status IN ('规划中','开发中','测试中')").fetchone()[0],
-        'req_pending': db.execute("SELECT COUNT(*) FROM requirements WHERE status IN ('待评审','已评审','进行中')").fetchone()[0],
+        'req_pending': db.execute("SELECT COUNT(*) FROM requirements WHERE status IN ('待评审','已评审','进行中') AND is_deleted=0").fetchone()[0],
         # 新模块统计
         'test_cases_total': db.execute('SELECT COUNT(*) FROM test_cases').fetchone()[0],
         'test_executions_active': db.execute("SELECT COUNT(*) FROM test_executions WHERE status='进行中'").fetchone()[0],
@@ -432,6 +433,7 @@ def build_journey(db):
         SELECT r.*, p.id AS pid, p.name AS product_name
         FROM requirements r
         LEFT JOIN products p ON p.model = r.product_model
+        WHERE r.is_deleted=0
         ORDER BY r.delivery_date, r.id
     """).fetchall()
     for r in reqs:
@@ -632,7 +634,7 @@ def executive_dashboard():
     # 查询所有进行中的用户需求
     customer_reqs = db.execute('''
         SELECT r.* FROM requirements r
-        WHERE r.req_type='用户需求' AND r.status IN ('已评审','进行中','待交付','已交付')
+        WHERE r.req_type='用户需求' AND r.status IN ('已评审','进行中','待交付','已交付') AND r.is_deleted=0
         ORDER BY r.priority='高' DESC, r.delivery_date ASC
     ''').fetchall()
 
@@ -640,7 +642,7 @@ def executive_dashboard():
     evolution_reqs = db.execute('''
         SELECT r.* FROM requirements r
         WHERE r.req_type IN ('集团系统侧需求','集团应用侧需求','其他')
-          AND r.status IN ('已评审','进行中','待交付','已交付')
+          AND r.status IN ('已评审','进行中','待交付','已交付') AND r.is_deleted=0
         ORDER BY r.req_type, r.delivery_date ASC
     ''').fetchall()
 
@@ -683,7 +685,7 @@ def executive_dashboard():
     # 查询所有生产任务
     all_prod_tasks = db.execute('''
         SELECT ps.* FROM production_schedules ps
-        WHERE ps.requirement_id IN (SELECT id FROM requirements WHERE req_type='用户需求')
+        WHERE ps.requirement_id IN (SELECT id FROM requirements WHERE req_type='用户需求' AND is_deleted=0)
           AND ps.plan_start IS NOT NULL AND ps.plan_finish IS NOT NULL
         ORDER BY ps.plan_start
     ''').fetchall()
@@ -1130,7 +1132,7 @@ def api_add_gantt_task():
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (execution_no, start, end, status, desc, now))
         elif task_type == 'prod':
-            schedule_no = f'PS-{datetime.now().strftime("%Y%m%d%H%M%S")}'
+            schedule_no = f'PS-{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
             db.execute("""
                 INSERT INTO production_schedules (schedule_no, plan_start, plan_finish, status, remark, created_at, quantity)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1201,7 +1203,7 @@ def executive_customer():
 
     all_reqs = db.execute('''
         SELECT r.* FROM requirements r
-        WHERE r.req_type='用户需求' AND r.status IN ('已评审','进行中','待交付','已交付')
+        WHERE r.req_type='用户需求' AND r.status IN ('已评审','进行中','待交付','已交付') AND r.is_deleted=0
         ORDER BY r.priority='高' DESC, r.delivery_date ASC
     ''').fetchall()
 
@@ -1227,7 +1229,7 @@ def executive_customer_detail(req_id):
     now_str = datetime.now().strftime('%Y-%m-%d')
 
     # 查询需求基本信息
-    req = db.execute('SELECT * FROM requirements WHERE id=?', (req_id,)).fetchone()
+    req = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not req:
         db.close()
         return '需求不存在', 404
@@ -1250,7 +1252,7 @@ def executive_customer_detail(req_id):
         constraints = db.execute('''
             SELECT r.* FROM requirements r
             JOIN version_requirements vr ON r.id = vr.requirement_id
-            WHERE vr.version_id=? AND r.req_type != '用户需求'
+            WHERE vr.version_id=? AND r.req_type != '用户需求' AND r.is_deleted=0
             ORDER BY r.req_type
         ''', (req_info['version_id'],)).fetchall()
 
@@ -1438,7 +1440,7 @@ def executive_evolution():
     all_reqs = db.execute('''
         SELECT r.* FROM requirements r
         WHERE r.req_type IN ('集团系统侧需求','集团应用侧需求','其他')
-          AND r.status IN ('已评审','进行中','待交付','已交付')
+          AND r.status IN ('已评审','进行中','待交付','已交付') AND r.is_deleted=0
         ORDER BY r.req_type, r.priority='高' DESC, r.delivery_date ASC
     ''').fetchall()
 
@@ -1472,7 +1474,7 @@ def requirements_list():
     per_page = 15
     offset = (page - 1) * per_page
 
-    where = []
+    where = ['is_deleted=0']
     params = []
     if status:
         where.append('status=?')
@@ -1490,7 +1492,7 @@ def requirements_list():
                        params + [per_page, offset]).fetchall()
     total_pages = (total + per_page - 1) // per_page
     # 统计各类型数量
-    type_stats = db.execute('''SELECT req_type, COUNT(*) as cnt FROM requirements GROUP BY req_type''').fetchall()
+    type_stats = db.execute('''SELECT req_type, COUNT(*) as cnt FROM requirements WHERE is_deleted=0 GROUP BY req_type''').fetchall()
     type_count = {t['req_type']: t['cnt'] for t in type_stats}
     db.close()
     return render_template('requirements.html', items=items, current_status=status,
@@ -1534,7 +1536,7 @@ def requirement_add():
 @app.route('/requirements/<int:req_id>/edit', methods=['GET', 'POST'])
 def requirement_edit(req_id):
     db = get_db()
-    item = db.execute('SELECT * FROM requirements WHERE id=?', (req_id,)).fetchone()
+    item = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if request.method == 'POST':
         # 输入校验
         qty, err = validate_positive_int(request.form.get('quantity', 0), '需求数量')
@@ -1570,10 +1572,16 @@ def requirement_edit(req_id):
 
 @app.route('/requirements/<int:req_id>/delete', methods=['POST'])
 def requirement_delete(req_id):
+    """软删除需求（v8.6.0）：标记 is_deleted=1，保留历史追溯，防止外键崩溃"""
     db = get_db()
-    db.execute('DELETE FROM requirements WHERE id=?', (req_id,))
+    item = db.execute('SELECT id FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
+    if not item:
+        db.close()
+        return validation_error('需求不存在或已删除')
+    db.execute('UPDATE requirements SET is_deleted=1, updated_at=datetime("now","localtime") WHERE id=?', (req_id,))
     db.commit()
-    log_operation('需求管理', '删除', f'删除需求ID: {req_id}')
+    log_operation('需求管理', '删除', f'软删除需求ID: {req_id}')
+    db.close()
     return redirect(url_for('requirements_list'))
 
 @app.route('/requirements/<int:req_id>/status', methods=['POST'])
@@ -1618,7 +1626,7 @@ def sync_requirement_status(db, req_id, new_status):
 def requirement_detail(req_id):
     """需求详情（端到端追溯：需求→版本→任务→Bug→测试→排程→订单→交付→收入）"""
     db = get_db()
-    requirement = db.execute('SELECT * FROM requirements WHERE id=?', (req_id,)).fetchone()
+    requirement = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not requirement:
         db.close()
         return validation_error('需求不存在')
@@ -1698,7 +1706,7 @@ def planning_list():
                 JOIN software_versions sv ON vr.version_id = sv.id
                 WHERE sv.product_id = p.id) as req_count,
                (SELECT COUNT(*) FROM requirements r
-                WHERE r.product_model = p.model AND r.req_type = '用户需求') as user_req_count
+                WHERE r.product_model = p.model AND r.req_type = '用户需求' AND r.is_deleted=0) as user_req_count
         FROM products p ORDER BY p.created_at DESC
     ''').fetchall()
     # 版本列表（带统计，按产品分组）
@@ -2014,7 +2022,7 @@ def inventory_edit(iid):
 def requisition_add():
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
-    requirements = db.execute('SELECT id, title FROM requirements WHERE status IN ("已评审","进行中")').fetchall()
+    requirements = db.execute('SELECT id, title FROM requirements WHERE status IN ("已评审","进行中") AND is_deleted=0').fetchall()
     inventory = db.execute('''
         SELECT material_name, 
                SUM(quantity) as total_quantity, 
@@ -2121,7 +2129,7 @@ def requisition_approve(rid):
 def production_order_add():
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
-    requirements = db.execute('SELECT id, title FROM requirements').fetchall()
+    requirements = db.execute('SELECT id, title FROM requirements WHERE is_deleted=0').fetchall()
     schedules = db.execute('SELECT id, schedule_no, product_id FROM production_schedules WHERE status IN ("规划中","已确认")').fetchall()
     if request.method == 'POST':
         # 输入校验
@@ -2572,7 +2580,7 @@ def data_dictionary():
 def api_stats():
     db = get_db()
     return jsonify({
-        'requirements': db.execute('SELECT COUNT(*) FROM requirements').fetchone()[0],
+        'requirements': db.execute('SELECT COUNT(*) FROM requirements WHERE is_deleted=0').fetchone()[0],
         'products': db.execute('SELECT COUNT(*) FROM products').fetchone()[0],
         'production_orders': db.execute('SELECT COUNT(*) FROM production_orders').fetchone()[0],
         'quality_inspections': db.execute('SELECT COUNT(*) FROM quality_inspections').fetchone()[0],
@@ -2591,7 +2599,7 @@ def api_global_search():
     # 搜索需求
     try:
         reqs = db.execute('''SELECT id, title, customer, source_dept FROM requirements
-                             WHERE title LIKE ? OR customer LIKE ? OR description LIKE ? LIMIT 10''',
+                             WHERE is_deleted=0 AND (title LIKE ? OR customer LIKE ? OR description LIKE ?) LIMIT 10''',
                           (like, like, like)).fetchall()
         for r in reqs:
             results.append({
@@ -2743,7 +2751,7 @@ def version_add():
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     requirements = db.execute('''SELECT id, title, source_dept, customer, description, quantity, priority, status, delivery_date, created_at
-                                 FROM requirements WHERE status IN ("已评审","进行中")
+                                 FROM requirements WHERE status IN ("已评审","进行中") AND is_deleted=0
                                  ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, created_at DESC''').fetchall()
     if request.method == 'POST':
         cursor = db.execute('''INSERT INTO software_versions (product_id, version_no, version_name, description, capabilities, planned_release_date, status)
@@ -2994,10 +3002,10 @@ def schedule_add():
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     # 生产排程只关联用户需求（合同刚性需求），其他三类需求只影响软件版本，不进入生产流程
-    requirements = db.execute('SELECT id, title, quantity, delivery_date FROM requirements WHERE req_type = "用户需求" AND status IN ("已评审","进行中")').fetchall()
+    requirements = db.execute('SELECT id, title, quantity, delivery_date FROM requirements WHERE req_type = "用户需求" AND status IN ("已评审","进行中") AND is_deleted=0').fetchall()
     versions = db.execute('SELECT sv.*, p.name as product_name FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id ORDER BY sv.product_id, sv.created_at').fetchall()
     if request.method == 'POST':
-        schedule_no = f"PS{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        schedule_no = f"PS{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         pid = request.form.get('product_id')
         qty = int(request.form.get('quantity', 1))
         version_id = request.form.get('version_id')
