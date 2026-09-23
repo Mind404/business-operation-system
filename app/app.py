@@ -40,25 +40,9 @@ def require_login():
     # 工作台和登录相关页面所有角色都可以访问
     if endpoint in ('index', 'logout', 'ext.my_tasks', 'ext.task_add', 'ext.task_detail', 'ext.task_update'):
         return None
-    # 甘特图工具（总览组成部分）：所有已登录用户可查看；
-    # 写操作（POST/PUT/DELETE）仅管理组(admin)和产品组(product)可执行
-    if endpoint.startswith('gantt'):
-        if request.method in ('POST', 'PUT', 'DELETE'):
-            role = session.get('user_role', '')
-            if role not in ('admin', 'product'):
-                return jsonify({'ok': False, 'error': '您没有编辑权限（仅管理组和产品组可编辑甘特图）'}), 403
-        return None
-    # 检查模块权限
-    if not has_module_access(endpoint):
-        flash('您没有权限访问该模块，请联系管理员', 'error')
-        return redirect(url_for('index'))
-    # 只读权限校验：只读模块拒绝POST/PUT/DELETE请求（修改操作）
-    if request.method in ('POST', 'PUT', 'DELETE') and is_readonly_module(endpoint):
-        # 排除一些合法的POST请求（搜索、筛选等不修改数据的操作）
-        action = request.form.get('action', '')
-        if action not in ('search', 'filter', 'export'):
-            flash('该模块为只读模式，您没有修改权限，请联系管理员', 'error')
-            return redirect(request.referrer or url_for('index'))
+    # 【权限放开】v8.5.0 起取消全部模块权限与只读限制，所有登录用户均可访问与编辑
+    # 保留登录校验；gantt/模块权限/只读拦截全部放行
+    return None
 
 @app.context_processor
 def inject_user():
@@ -149,7 +133,9 @@ def _normalize_module(name):
     return name
 
 def has_module_access(module_prefix):
-    """检查当前角色是否有权限访问指定模块"""
+    """【权限放开】v8.5.0 起所有登录用户均可访问所有模块"""
+    return True
+    # 保留原逻辑供审计参考：
     role = get_current_role()
     perms = ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS['admin'])
     if 'all' in perms['modules']:
@@ -164,14 +150,7 @@ def has_module_access(module_prefix):
     return False
 
 def is_readonly_module(module_prefix):
-    """检查当前角色对指定模块是否为只读"""
-    role = get_current_role()
-    perms = ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS['admin'])
-    module_prefix = _normalize_module(module_prefix)
-    for ro in perms['readonly_modules']:
-        ro = _normalize_module(ro)
-        if module_prefix.startswith(ro) or ro.startswith(module_prefix):
-            return True
+    """【权限放开】v8.5.0 起取消只读限制"""
     return False
 
 def can_write(module_prefix):

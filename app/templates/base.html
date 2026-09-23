@@ -31,7 +31,6 @@
                     {% if has_module_access('executive') %}
                     <a href="{{ url_for('executive_dashboard') }}" class="nav-item {% if request.endpoint == 'executive_dashboard' %}active{% endif %}">
                         <span class="nav-icon">🗺️</span> 总览
-                        {% if is_readonly_module('executive') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     <a href="{{ url_for('timeline_view') }}" class="nav-item {% if request.endpoint == 'timeline_view' %}active{% endif %}">
@@ -46,19 +45,16 @@
                     {% if has_module_access('requirement') %}
                     <a href="{{ url_for('requirements_list') }}" class="nav-item {% if request.endpoint.startswith('requirements_') %}active{% endif %}">
                         <span class="nav-icon">📋</span> 需求数据库
-                        {% if is_readonly_module('requirement') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('planning') or has_module_access('version') %}
                     <a href="{{ url_for('planning_list') }}" class="nav-item {% if request.endpoint in ['planning_list','product_add','product_edit'] or request.endpoint.startswith('version_') %}active{% endif %}">
                         <span class="nav-icon">📐</span> 产品与版本规划
-                        {% if is_readonly_module('planning') and is_readonly_module('version') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('contract') %}
                     <a href="{{ url_for('ext.contract_list') }}" class="nav-item {% if request.endpoint.startswith('ext.contract_') %}active{% endif %}">
                         <span class="nav-icon">📄</span> 合同跟进
-                        {% if is_readonly_module('contract') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                 </div>
@@ -71,25 +67,21 @@
                     {% if has_module_access('production') or has_module_access('schedule') %}
                     <a href="{{ url_for('production_dashboard') }}" class="nav-item {% if request.endpoint in ['production_dashboard','inventory_add','inventory_edit','requisition_add','production_order_add'] or request.endpoint.startswith('schedule_') %}active{% endif %}">
                         <span class="nav-icon">🏭</span> 生产管理
-                        {% if is_readonly_module('production') and is_readonly_module('schedule') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('bug') %}
                     <a href="{{ url_for('bug_list') }}" class="nav-item {% if request.endpoint.startswith('bug_') %}active{% endif %}">
                         <span class="nav-icon">🐛</span> Bug管理
-                        {% if is_readonly_module('bug') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('test_case') or has_module_access('test_execution') %}
                     <a href="{{ url_for('ext.test_case_list') }}" class="nav-item {% if request.endpoint.startswith('ext.test_') %}active{% endif %}">
                         <span class="nav-icon">🧪</span> 测试管理
-                        {% if is_readonly_module('test_case') and is_readonly_module('test_execution') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('quality') %}
                     <a href="{{ url_for('quality_dashboard') }}" class="nav-item {% if request.endpoint.startswith('quality_') or request.endpoint.startswith('defect_') %}active{% endif %}">
                         <span class="nav-icon">✅</span> 质量检测
-                        {% if is_readonly_module('quality') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                 </div>
@@ -102,19 +94,16 @@
                     {% if has_module_access('delivery_plan') %}
                     <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">
                         <span class="nav-icon">📋</span> 交付计划
-                        {% if is_readonly_module('delivery_plan') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('revenue') %}
                     <a href="{{ url_for('ext.revenue_list') }}" class="nav-item {% if request.endpoint.startswith('ext.revenue_') %}active{% endif %}">
                         <span class="nav-icon">💰</span> 收入确认
-                        {% if is_readonly_module('revenue') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                     {% if has_module_access('device') or has_module_access('ota') %}
                     <a href="{{ url_for('ext.device_center') }}" class="nav-item {% if request.endpoint.startswith('ext.device_') or request.endpoint.startswith('ext.ota_') or request.endpoint == 'ext.device_center' %}active{% endif %}">
                         <span class="nav-icon">📡</span> 设备运维与OTA
-                        {% if is_readonly_module('ext.device') and is_readonly_module('ext.ota') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                     {% endif %}
                 </div>
@@ -126,7 +115,6 @@
                     <div class="nav-group-title">系统管理</div>
                     <a href="{{ url_for('data_management') }}" class="nav-item {% if request.endpoint.startswith('data_') %}active{% endif %}">
                         <span class="nav-icon">💾</span> 数据管理
-                        {% if is_readonly_module('data') %}<span class="readonly-badge">只读</span>{% endif %}
                     </a>
                 </div>
                 {% endif %}
