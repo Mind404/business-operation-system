@@ -6,7 +6,7 @@ AI驱动的业务高效运转系统 - Flask Web应用
 import os
 import sqlite3
 import random
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file
 from werkzeug.utils import secure_filename
 import excel_utils
@@ -707,7 +707,6 @@ def executive_dashboard():
     if all_dates:
         min_date = min(all_dates)
         max_date = max(all_dates)
-        from datetime import timedelta
         min_dt = datetime.strptime(min_date, '%Y-%m-%d') - timedelta(days=3)
         max_dt = datetime.strptime(max_date, '%Y-%m-%d') + timedelta(days=3)
         min_date = min_dt.strftime('%Y-%m-%d')
@@ -1299,7 +1298,6 @@ def executive_customer_detail(req_id):
         min_date = min(all_dates)
         max_date = max(all_dates)
         # 扩展一点范围
-        from datetime import timedelta
         min_dt = datetime.strptime(min_date, '%Y-%m-%d') - timedelta(days=3)
         max_dt = datetime.strptime(max_date, '%Y-%m-%d') + timedelta(days=3)
         min_date = min_dt.strftime('%Y-%m-%d')
@@ -2198,7 +2196,7 @@ def production_order_update(oid):
 # ============================================================
 # 模块4：质量检测
 # ============================================================
-@app.route('/quality')
+# [v8.8.0 已下线] # [v8.8.0 已下线] @app.route('/quality')
 def quality_dashboard():
     db = get_db()
     tab = request.args.get('tab', 'inspections')
@@ -2224,7 +2222,7 @@ def quality_dashboard():
         }
         return render_template('quality.html', tab=tab, inspections=inspections, stats=stats)
 
-@app.route('/quality/add', methods=['GET', 'POST'])
+# [v8.8.0 已下线] # [v8.8.0 已下线] @app.route('/quality/add', methods=['GET', 'POST'])
 def quality_add():
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
@@ -2259,7 +2257,7 @@ def quality_add():
         return redirect(url_for('quality_dashboard'))
     return render_template('quality_form.html', products=products, orders=orders)
 
-@app.route('/quality/defect/<int:did>/close', methods=['POST'])
+# [v8.8.0 已下线] # [v8.8.0 已下线] @app.route('/quality/defect/<int:did>/close', methods=['POST'])
 def defect_close(did):
     db = get_db()
     db.execute('''UPDATE defect_handling SET status=?, handling_method=?, root_cause=?,
@@ -2275,21 +2273,8 @@ def defect_close(did):
 # ============================================================
 @app.route('/delivery')
 def delivery_dashboard():
-    db = get_db()
-    tab = request.args.get('tab', 'receipts')
-    if tab == 'deliveries':
-        deliveries = db.execute('''SELECT d.*, p.name as product_name, p.model
-                                    FROM deliveries d
-                                    LEFT JOIN products p ON d.product_id=p.id
-                                    ORDER BY d.created_at DESC''').fetchall()
-        return render_template('delivery.html', tab=tab, deliveries=deliveries)
-    else:
-        receipts = db.execute('''SELECT wr.*, p.name as product_name, po.order_no
-                                  FROM warehouse_receipts wr
-                                  LEFT JOIN products p ON wr.product_id=p.id
-                                  LEFT JOIN production_orders po ON wr.production_order_id=po.id
-                                  ORDER BY wr.created_at DESC''').fetchall()
-        return render_template('delivery.html', tab=tab, receipts=receipts)
+    # v8.8.0：领用交付/入库单页面并入「交付管理·交付跟踪」，此路由保留兼容重定向
+    return redirect(url_for('ext.delivery_plan_list'))
 
 @app.route('/delivery/receipt/add', methods=['GET', 'POST'])
 def receipt_add():
@@ -3696,6 +3681,11 @@ if __name__ == '__main__':
             inv_cols = [r[1] for r in db.execute('PRAGMA table_info(inventory)').fetchall()]
             if 'product_id' not in inv_cols:
                 db.execute('ALTER TABLE inventory ADD COLUMN product_id INTEGER')
+                # v8.8.0：交付管理简化——生产完成/入库完成/是否已交付
+                dp_cols = [r[1] for r in db.execute('PRAGMA table_info(delivery_plans)').fetchall()]
+                for col, ddl in [('production_date', 'TEXT'), ('stock_date', 'TEXT'), ('delivered', 'INTEGER DEFAULT 0')]:
+                    if col not in dp_cols:
+                        db.execute(f'ALTER TABLE delivery_plans ADD COLUMN {col} {ddl}')
                 print('  数据库迁移：inventory表添加字段 product_id（支持成品库存管理）')
             if 'is_product' not in inv_cols:
                 db.execute('ALTER TABLE inventory ADD COLUMN is_product INTEGER DEFAULT 0')

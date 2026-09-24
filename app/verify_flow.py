@@ -70,6 +70,12 @@ js = r.get_json() if r.is_json else {}
 record('A5 任务状态→已完成', r.status_code == 200 and js.get('status') == '已完成', f"resp={js}")
 
 # A6 生产排程（关联需求+版本）→ 自动生成物料计划+工序
+# 前置：空库时补一条 BOM（真实场景由数据管理导入），保证物料计划可生成
+if q("SELECT COUNT(*) c FROM bom_items WHERE product_id=1")[0]['c'] == 0:
+    db2 = sqlite3.connect(DB)
+    db2.execute("INSERT INTO bom_items (product_id, material_name, quantity_per_unit, unit, supplier, is_key_material) VALUES (?,?,?,?,?,?)",
+                (1, '主控芯片', 1, '颗', '验证供应商', 1))
+    db2.commit(); db2.close()
 r = client.post('/production/schedules/add', data={
     'product_id': '1', 'requirement_id': str(rid), 'version_id': str(vid_id),
     'quantity': '300', 'plan_start': '2026-10-01', 'plan_finish': '2026-10-20', 'remark': '验证排程'})
@@ -94,6 +100,11 @@ record('A8 测试执行新增', r.status_code in (200, 302) and bool(te), f"exec
 teid = te[0]['id'] if te else None
 
 # A9 测试用例结果
+if q("SELECT COUNT(*) c FROM test_cases WHERE product_id=1")[0]['c'] == 0:
+    db2 = sqlite3.connect(DB)
+    db2.execute("INSERT INTO test_cases (case_no, title, product_id, module, precondition, test_steps, expected_result, status, creator) VALUES (?,?,?,?,?,?,?,?,?)",
+                ('TC-V880-001', '流程验证用例-基础功能', 1, '功能', '无', '执行基本流程', '流程正常', '已启用', '测试组'))
+    db2.commit(); db2.close()
 tc = q("SELECT id FROM test_cases WHERE product_id=1 AND status='已启用' LIMIT 1")
 if tc and teid:
     r = client.post(f'/test/executions/{teid}/result', data={'case_id': str(tc[0]['id']), 'result': '通过'})
@@ -195,7 +206,7 @@ for pw in ['123456','product','product123']:
     rr = client.post('/login', data={'username':'product','password':pw}, follow_redirects=True)
     if '退出' in rr.get_data(as_text=True): break
 before_dp = q('SELECT COUNT(*) c FROM delivery_plans')[0]['c']
-r = client.post('/delivery/plans/add', data={'customer':'x','product_id':'1','quantity':'1'})
+r = client.post('/delivery/plans/add', data={'requirement_id': str(rid), 'product_id':'1','quantity':'1'})
 after_dp = q('SELECT COUNT(*) c FROM delivery_plans')[0]['c']
 record('C3 product 可写交付（权限放开）', after_dp > before_dp, f"前={before_dp} 后={after_dp} status={r.status_code}")
 

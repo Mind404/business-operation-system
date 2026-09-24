@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS delivery_plans (
     owner TEXT,
     remark TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime')), requirement_id INTEGER,
+    production_date TEXT,
+    stock_date TEXT,
+    delivered INTEGER DEFAULT 0,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
 CREATE TABLE IF NOT EXISTS dev_tasks (

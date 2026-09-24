@@ -59,15 +59,12 @@
                     <a href="{{ url_for('ext.test_case_list') }}" class="nav-item {% if request.endpoint.startswith('ext.test_') %}active{% endif %}">
                         <span class="nav-icon">🧪</span> 测试管理
                     </a>
-                    <a href="{{ url_for('quality_dashboard') }}" class="nav-item {% if request.endpoint.startswith('quality_') or request.endpoint.startswith('defect_') %}active{% endif %}">
-                        <span class="nav-icon">✅</span> 质量检测
-                    </a>
                 </div>
 
                 <!-- 交付与运维 -->
                 <div class="nav-group">
                     <div class="nav-group-title">交付与运维</div>
-                    <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') or request.endpoint.startswith('ext.revenue_') or request.endpoint in ['delivery_dashboard','receipt_add','deliver_add'] %}active{% endif %}">
+                    <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') or request.endpoint.startswith('ext.revenue_') %}active{% endif %}">
                         <span class="nav-icon">📦</span> 交付管理
                     </a>
                     <a href="{{ url_for('ext.device_center') }}" class="nav-item {% if request.endpoint.startswith('ext.device_') or request.endpoint.startswith('ext.ota_') or request.endpoint == 'ext.device_center' %}active{% endif %}">
@@ -85,7 +82,7 @@
             </nav>
             <div class="sidebar-footer">
                 <div class="data-flow-hint">
-                    <span class="dot dot-blue"></span> 需求 → 规划 → 生产 → 质检 → 交付
+                    <span class="dot dot-blue"></span> 需求 → 规划 → 生产 → 测试 → 交付
                     <span class="dot dot-orange"></span> 数据闭环反哺
                 </div>
             </div>

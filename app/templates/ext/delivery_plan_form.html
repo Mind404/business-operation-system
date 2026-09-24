@@ -1,52 +1,116 @@
 {% extends "ext/_base.html" %}
-{% set page_title = '新建交付计划' %}
+{% set page_title = '交付管理' %}
+{% block header_actions %}
+<a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-outline">← 返回交付列表</a>
+{% endblock %}
 {% block ext_content %}
-<div class="panel">
-    <form method="post">
-        <div class="form-grid">
-            <div class="form-group">
-                <label>客户名称 <span class="required">*</span></label>
-                <input type="text" name="customer" required class="form-control" placeholder="交付客户">
-            </div>
-            <div class="form-group">
-                <label>关联需求 <span class="required">*</span></label>
-                <select name="requirement_id" class="form-control">
-                    <option value="">-- 选择关联需求（选填） --</option>
-                    {% for r in requirements %}
-                    <option value="{{ r.id }}">{{ r.customer }}｜{{ r.title }}（{{ r.quantity }}套，{{ r.delivery_date or '未定' }}，{{ r.status }}）</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>交付产品 <span class="required">*</span></label>
-                <select name="product_id" required class="form-control">
-                    <option value="">-- 选择产品 --</option>
-                    {% for p in products %}
-                    <option value="{{ p.id }}">{{ p.name }} ({{ p.model }})</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>交付数量（套） <span class="required">*</span></label>
-                <input type="number" name="quantity" required min="1" value="1" class="form-control">
-            </div>
-            <div class="form-group">
-                <label>计划交付日期 <span class="required">*</span></label>
-                <input type="date" name="planned_date" required class="form-control">
-            </div>
-            <div class="form-group">
-                <label>负责人</label>
-                <input type="text" name="owner" value="delivery_a" class="form-control">
-            </div>
-            <div class="form-group form-full">
-                <label>备注</label>
-                <textarea name="remark" rows="2" class="form-control" placeholder="交付注意事项、特殊要求等（选填）"></textarea>
-            </div>
-        </div>
-        <div class="step-actions">
-            <button type="submit" class="btn btn-primary">创建交付计划</button>
-            <a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-secondary">取消</a>
-        </div>
-    </form>
+<div class="module-tabs">
+    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
+    <a href="{{ url_for('ext.revenue_list') }}" class="module-tab {% if request.endpoint.startswith('ext.revenue_') %}active{% endif %}">💰 收入确认</a>
 </div>
+
+{% if plan %}
+<h3 style="margin:6px 0 14px;">编辑交付记录 · <span class="mono">{{ plan.plan_no }}</span></h3>
+<form method="POST" action="{{ url_for('ext.delivery_plan_edit', plan_id=plan.id) }}" class="form-card">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:16px;">
+        <div>
+            <label class="form-label">关联需求</label>
+            <input type="text" class="form-input" value="{{ plan.req_customer or plan.customer }}｜{{ plan.req_title or '' }}" disabled>
+        </div>
+        <div>
+            <label class="form-label">产品</label>
+            <input type="text" class="form-input" value="{{ plan.product_name or '-' }}" disabled>
+        </div>
+        <div>
+            <label class="form-label">交付数量（套）</label>
+            <input type="number" name="quantity" class="form-input" value="{{ plan.quantity }}" min="1" required>
+        </div>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:16px;">
+        <div>
+            <label class="form-label">计划交付时间</label>
+            <input type="date" name="planned_date" class="form-input" value="{{ plan.planned_date or '' }}">
+        </div>
+        <div>
+            <label class="form-label">生产完成时间</label>
+            <input type="date" name="production_date" class="form-input" value="{{ plan.production_date or '' }}">
+        </div>
+        <div>
+            <label class="form-label">入库完成时间</label>
+            <input type="date" name="stock_date" class="form-input" value="{{ plan.stock_date or '' }}">
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; padding-top:26px;">
+            <input type="checkbox" name="delivered" id="delivered" value="1" {% if plan.delivered %}checked{% endif %} style="width:18px;height:18px;">
+            <label for="delivered" class="form-label" style="padding-top:0;">✓ 已交付给用户</label>
+        </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <label class="form-label">备注</label>
+        <textarea name="remark" class="form-input" rows="2" style="width:100%;">{{ plan.remark or '' }}</textarea>
+    </div>
+    <p style="font-size:12px;color:#94a3b8;margin-bottom:14px;">状态自动联动：填了生产完成时间→生产中；填了入库时间→已入库（可交付）；勾选已交付→已交付</p>
+    <button type="submit" class="btn btn-primary">保存修改</button>
+</form>
+{% else %}
+<h3 style="margin:6px 0 14px;">新增交付计划</h3>
+<form method="POST" action="{{ url_for('ext.delivery_plan_add') }}" class="form-card">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-bottom:16px;">
+        <div style="grid-column:1/-1;">
+            <label class="form-label">关联需求 <span style="color:#ef4444;">*</span></label>
+            <select name="requirement_id" class="form-input" required onchange="autoFill(this)">
+                <option value="">— 选择需求（自动带出客户/产品/数量/交付时间）—</option>
+                {% for r in requirements %}
+                <option value="{{ r.id }}" data-customer="{{ r.customer }}" data-product="{{ r.product_id or '' }}"
+                        data-quantity="{{ r.quantity }}" data-date="{{ r.delivery_date or '' }}">{{ r.customer }}｜{{ r.title }}（{{ r.quantity }}套，{{ r.delivery_date or '未定' }}）</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="form-label">客户</label>
+            <input type="text" id="f_customer" name="customer" class="form-input" readonly>
+        </div>
+        <div>
+            <label class="form-label">产品</label>
+            <select id="f_product" name="product_id" class="form-input">
+                <option value="">自动带出</option>
+                {% for pr in products %}
+                <option value="{{ pr.id }}">{{ pr.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="form-label">交付数量（套）</label>
+            <input type="number" id="f_quantity" name="quantity" class="form-input" min="1" placeholder="自动带出，可修改">
+        </div>
+        <div>
+            <label class="form-label">计划交付时间</label>
+            <input type="date" id="f_date" name="planned_date" class="form-input">
+        </div>
+        <div>
+            <label class="form-label">负责人</label>
+            <select name="owner" class="form-input">
+                <option value="delivery_a">交付服务组A</option>
+                <option value="delivery_b">交付服务组B</option>
+                <option value="delivery_c">交付服务组C</option>
+            </select>
+        </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <label class="form-label">备注</label>
+        <textarea name="remark" class="form-input" rows="2" style="width:100%;" placeholder="分批交付说明、特殊要求等"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">创建交付计划</button>
+</form>
+<script>
+function autoFill(sel) {
+    var opt = sel.options[sel.selectedIndex];
+    if (!opt.value) { return; }
+    var d = opt.dataset;
+    document.getElementById('f_customer').value = d.customer || '';
+    if (d.product) { document.getElementById('f_product').value = d.product; }
+    document.getElementById('f_quantity').value = d.quantity || '';
+    document.getElementById('f_date').value = d.date || '';
+}
+</script>
+{% endif %}
 {% endblock %}
