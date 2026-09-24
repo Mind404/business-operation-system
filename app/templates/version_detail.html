@@ -31,6 +31,24 @@
         <div class="detail-item"><span class="detail-label">实际发布</span><span class="detail-value mono">{{ version.actual_release_date or '-' }}</span></div>
         <div class="detail-item"><span class="detail-label">状态</span><span class="status-tag status-{{ version.status }}">{{ version.status }}</span></div>
     </div>
+    <div class="detail-section" style="margin-top:12px;">
+        {% if can_write('version') %}
+        <form id="versionStatusForm" method="post" action="{{ url_for('version_status_update', vid=version.id) }}" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <strong style="font-size:13px;">状态流转：</strong>
+            <select name="status" id="versionStatusSelect" class="form-control" style="width:auto; min-width:120px;">
+                <option value="规划中" {% if version.status=='规划中' %}selected{% endif %}>规划中</option>
+                <option value="开发中" {% if version.status=='开发中' %}selected{% endif %}>开发中</option>
+                <option value="测试中" {% if version.status=='测试中' %}selected{% endif %}>测试中</option>
+                <option value="已发布" {% if version.status=='已发布' %}selected{% endif %}>已发布</option>
+                <option value="已取消" {% if version.status=='已取消' %}selected{% endif %}>已取消</option>
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">保存状态</button>
+            <span class="muted" style="font-size:12px; color:#6b7280;">建议顺序：规划中→开发中→测试中→已发布（发布后自动记录实际发布时间）</span>
+        </form>
+        {% else %}
+        <span class="muted" style="font-size:12px; color:#6b7280;">当前角色对版本模块为只读，状态由产品组维护</span>
+        {% endif %}
+    </div>
     {% if version.description %}
     <div class="detail-section"><strong>版本描述：</strong>{{ version.description }}</div>
     {% endif %}
@@ -223,4 +241,27 @@
 .btn-outline { background: white; color: #2563eb; border: 1px solid #2563eb; cursor: pointer; border-radius: 6px; text-decoration: none; padding: 4px 12px; font-size: 12px; }
 .mono { font-family: monospace; }
 </style>
+{% if can_write('version') %}
+<script>
+(function(){
+    var form = document.getElementById('versionStatusForm');
+    if (!form) return;
+    form.addEventListener('submit', function(e){
+        e.preventDefault();
+        var fd = new FormData(form);
+        fetch(form.action, {method:'POST', body:fd})
+            .then(function(r){ return r.json(); })
+            .then(function(data){
+                if (data.success) {
+                    alert('状态已更新为：' + data.status);
+                    location.reload();
+                } else {
+                    alert('更新失败：' + (data.error || '未知错误'));
+                }
+            })
+            .catch(function(){ alert('网络错误，请重试'); });
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

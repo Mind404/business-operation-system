@@ -18,6 +18,12 @@
 {% endblock %}
 
 {% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('requirements_list') }}" class="module-tab {% if request.endpoint.startswith('requirements_') %}active{% endif %}">📋 需求数据库</a>
+    <a href="{{ url_for('ext.feedback_list') }}" class="module-tab {% if request.endpoint.startswith('ext.feedback_') %}active{% endif %}">💬 用户反馈</a>
+    <a href="{{ url_for('ext.ticket_list') }}" class="module-tab {% if request.endpoint.startswith('ext.ticket_') %}active{% endif %}">🎫 支持工单</a>
+</div>
+
 <!-- 业务逻辑说明：两类需求的性质区分 -->
 <div style="background: linear-gradient(135deg, #f0f9ff 0%, #faf5ff 100%); border: 1px solid #bae6fd; border-radius: 10px; padding: 14px 18px; margin-bottom: 14px;">
     <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">

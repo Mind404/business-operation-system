@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}数据管理 - 业务高效运转系统{% endblock %}
 {% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('data_management') }}" class="module-tab {% if request.endpoint.startswith('data_') %}active{% endif %}">💾 数据管理</a>
+    <a href="{{ url_for('logs') }}" class="module-tab {% if request.endpoint == 'logs' %}active{% endif %}">📜 操作日志</a>
+</div>
+
 <div class="page-header">
     <h1>数据管理</h1>
     <p class="page-desc">数据沉淀、导出导入、数据字典 — 用于AI训练与数据分析</p>

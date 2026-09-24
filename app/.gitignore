@@ -1,0 +1,59 @@
+# ============ 业务运转系统 Git 版本管理 ============
+# 本文件定义哪些内容进入版本管理，哪些不进入
+
+# --- 运行时数据（不纳入版本管理，避免数据变更污染历史） ---
+# 数据库为运行时业务数据，通过"便携版zip交付"和"定期快照"保存，
+# 版本演进记录见 CHANGELOG.md
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+backup/
+备份*/
+
+# --- Python 缓存与编译产物 ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# --- 构建/打包产物（每次交付的zip另有记录） ---
+*.zip
+*.tar.gz
+*.7z
+*.rar
+dist/
+build/
+release/
+
+# --- 打包便携版产物目录（构建副本，不入库） ---
+业务系统/
+业务系统便携版*/
+业务系统完整项目*/
+2款产品虚拟数据*/
+
+# --- 编辑器与系统文件 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- 临时文件 ---
+*.log
+/tmp/
+scratch/
+socket/
+.nohup*
+nohup.out
+
+# --- 敏感信息兜底（如有） ---
+.env
+*.key
+*.pem

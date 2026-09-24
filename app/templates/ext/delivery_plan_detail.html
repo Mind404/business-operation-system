@@ -30,6 +30,10 @@
                     <value>{{ plan.product_name or '-' }}{% if plan.product_model %}（{{ plan.product_model }}）{% endif %}</value>
                 </div>
                 <div class="detail-item">
+                    <label>关联需求</label>
+                    <value>{% if plan.req_title %}{{ plan.req_customer or plan.customer }}｜{{ plan.req_title }}（{{ plan.req_quantity }}套，{{ plan.req_delivery_date or '未定' }}）{% else %}-{% endif %}</value>
+                </div>
+                <div class="detail-item">
                     <label>数量</label>
                     <value>{{ plan.quantity }}套</value>
                 </div>

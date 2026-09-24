@@ -2877,7 +2877,7 @@ def bug_add():
     products = db.execute('SELECT id, name FROM products').fetchall()
     versions = db.execute('SELECT id, version_no, product_id FROM software_versions').fetchall()
     if request.method == 'POST':
-        bug_no = f"BUG{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        bug_no = f"BUG{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         cursor = db.execute('''INSERT INTO bug_records (bug_no, product_id, version_id, title, description,
                               bug_type, severity, priority, status, reporter, assignee, discovered_at)
                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',

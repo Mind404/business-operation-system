@@ -20,6 +20,12 @@
 {% endblock %}
 
 {% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付计划</a>
+    <a href="{{ url_for('delivery_dashboard') }}" class="module-tab {% if request.endpoint in ['delivery_dashboard','receipt_add','deliver_add'] %}active{% endif %}">🏬 领用交付</a>
+    <a href="{{ url_for('ext.revenue_list') }}" class="module-tab {% if request.endpoint.startswith('ext.revenue_') %}active{% endif %}">💰 收入确认</a>
+</div>
+
 <div class="tab-bar">
     <a href="{{ url_for('delivery_dashboard', tab='receipts') }}" class="tab-item {% if tab == 'receipts' %}active{% endif %}">📥 入库管理</a>
     <a href="{{ url_for('delivery_dashboard', tab='deliveries') }}" class="tab-item {% if tab == 'deliveries' %}active{% endif %}">📤 领用交付</a>

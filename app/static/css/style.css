@@ -87,6 +87,56 @@ ul, ol { list-style: none; }
     font-weight: 600;
 }
 .nav-icon { font-size: 16px; }
+
+/* ===== 模块内子页切换 Tab（v8.7.0 归口收敛） ===== */
+.module-tabs {
+    display: flex;
+    gap: 4px;
+    margin: -6px 0 16px;
+    padding: 0 2px;
+    border-bottom: 1px solid #e2e8f0;
+    flex-wrap: wrap;
+}
+.module-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #64748b;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+    position: relative;
+    top: 1px;
+}
+.module-tab:hover { color: #2563eb; background: #f1f5f9; }
+.module-tab.active {
+    color: #2563eb;
+    font-weight: 600;
+    background: #fff;
+    border-color: #e2e8f0;
+    box-shadow: 0 -2px 6px rgba(37,99,235,.06);
+}
+.module-tab.active::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: #2563eb;
+}
+.module-tab .tab-count {
+    font-size: 11px;
+    background: #e2e8f0;
+    color: #475569;
+    border-radius: 10px;
+    padding: 1px 7px;
+    line-height: 1.5;
+}
 .readonly-badge {
     font-size: 10px;
     background: rgba(251,191,36,0.2);

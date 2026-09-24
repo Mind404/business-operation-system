@@ -9,6 +9,15 @@
                 <input type="text" name="customer" required class="form-control" placeholder="交付客户">
             </div>
             <div class="form-group">
+                <label>关联需求 <span class="required">*</span></label>
+                <select name="requirement_id" class="form-control">
+                    <option value="">-- 选择关联需求（选填） --</option>
+                    {% for r in requirements %}
+                    <option value="{{ r.id }}">{{ r.customer }}｜{{ r.title }}（{{ r.quantity }}套，{{ r.delivery_date or '未定' }}，{{ r.status }}）</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
                 <label>交付产品 <span class="required">*</span></label>
                 <select name="product_id" required class="form-control">
                     <option value="">-- 选择产品 --</option>

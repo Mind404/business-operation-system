@@ -11,6 +11,11 @@
 {% endblock %}
 
 {% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('production_dashboard') }}" class="module-tab {% if request.endpoint in ['production_dashboard','inventory_add','inventory_edit','requisition_add','production_order_add'] or request.endpoint.startswith('schedule_') %}active{% endif %}">🏭 生产管理</a>
+    <a href="{{ url_for('ext.resource_list') }}" class="module-tab {% if request.endpoint.startswith('ext.resource_') %}active{% endif %}">🧑‍🤝‍🧑 资源调度</a>
+</div>
+
 <style>
 /* ===== 生产管理看板样式（参考溯源平台看板风格） ===== */
 .pm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 22px; }
