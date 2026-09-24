@@ -120,12 +120,9 @@
                 </td>
                 <td class="cell-bold">{{ item.title }}</td>
                 <td>
-                    <div style="font-size: 12px;">
-                        <div>{{ item.source_dept or '-' }}</div>
-                        <div style="color: #6b7280;">{{ item.customer or '-' }}</div>
-                    </div>
+                    <div style="font-size: 12px; color: #374151;">{{ item.customer or '-' }}</div>
                 </td>
-                <td style="font-size: 12px; max-width: 200px;">
+                <td style="font-size: 12px; max-width: 220px;">
                     {% if item.req_type == '用户需求' %}
                         <div><strong>型号：</strong>{{ item.product_model or '-' }}</div>
                         <div><strong>数量：</strong>{{ item.quantity }}套 | <strong>分批：</strong>{{ item.batch_delivery or '否' }}</div>
@@ -235,7 +232,7 @@
 .col-filter {
     display: block;
     width: 100%;
-    margin-top: 5px;
+    margin-top: 4px;
     padding: 3px 4px;
     border: 1px solid #e2e8f0;
     border-radius: 4px;
@@ -243,7 +240,7 @@
     color: #64748b;
     background: #f8fafc;
     cursor: pointer;
-    max-width: 120px;
+    max-width: 100%;
 }
 .col-filter:focus { border-color: #3b82f6; outline: none; background: #eff6ff; }
 /* 操作栏：flex 横向排列，不换行 */
@@ -255,24 +252,27 @@
     white-space: nowrap;
 }
 .action-cell .btn-sm {
-    padding: 4px 9px;
-    height: 26px;
-    font-size: 12px;
-    line-height: 18px;
+    padding: 3px 5px;
+    height: 23px;
+    font-size: 11px;
+    line-height: 17px;
     white-space: nowrap;
 }
-/* 表格列宽优化 */
-#requirementsTable th:nth-child(1) { width: 50px; }
-#requirementsTable th:nth-child(2) { width: 120px; }
-#requirementsTable th:nth-child(3) { width: 20%; }
-#requirementsTable th:nth-child(4) { width: 135px; }
-#requirementsTable th:nth-child(5) { width: 26%; }
-#requirementsTable th:nth-child(6) { width: 80px; }
-#requirementsTable th:nth-child(7) { width: 100px; }
-#requirementsTable th:nth-child(8) { width: 90px; }
-#requirementsTable th:nth-child(9) { width: 150px; }
-#requirementsTable th { vertical-align: bottom; }
-#requirementsTable td { vertical-align: middle; }
+/* 表格紧凑布局：fixed精确控宽，列宽总和≤容器704px */
+#requirementsTable { width: 100%; table-layout: fixed; }
+#requirementsTable th:nth-child(1) { width: 28px; }
+#requirementsTable th:nth-child(2) { width: 82px; }
+#requirementsTable th:nth-child(3) { width: 150px; }
+#requirementsTable th:nth-child(4) { width: 54px; }
+#requirementsTable th:nth-child(5) { width: 100px; }
+#requirementsTable th:nth-child(6) { width: 42px; }
+#requirementsTable th:nth-child(7) { width: 68px; }
+#requirementsTable th:nth-child(8) { width: 68px; }
+#requirementsTable th:nth-child(9) { width: 110px; }
+#requirementsTable th { vertical-align: bottom; padding: 8px 6px; }
+#requirementsTable td { vertical-align: middle; padding: 7px 6px; line-height: 1.45; overflow-wrap: break-word; }
+#requirementsTable td.cell-bold { font-weight: 600; color: #1e293b; }
+#requirementsTable .col-filter { max-width: 100%; }
 .pagination {
     display: flex;
     justify-content: center;

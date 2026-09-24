@@ -166,6 +166,8 @@ ul, ol { list-style: none; }
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    min-width: 0;
+    overflow-x: hidden;
 }
 .page-header {
     background: #fff;
@@ -434,6 +436,8 @@ ul, ol { list-style: none; }
     margin-bottom: 20px;
     overflow: hidden;
     border: 1px solid #f1f5f9;
+    max-width: 100%;
+    min-width: 0;
 }
 .panel-header {
     padding: 16px 24px;
