@@ -3,6 +3,10 @@
 {% block page_title %}系统操作日志{% endblock %}
 
 {% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('data_management') }}" class="module-tab">💾 数据管理</a>
+    <a href="{{ url_for('logs') }}" class="module-tab active">📜 操作日志</a>
+</div>
 <div class="panel">
     <table class="data-table">
         <thead>

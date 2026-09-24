@@ -4,6 +4,10 @@
 {% if can_write('ext.tech_spec') %}<a href="{{ url_for('ext.tech_spec_add') }}" class="btn btn-primary">+ 新建规格</a>{% endif %}
 {% endblock %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('planning_list') }}" class="module-tab">📐 产品与版本规划</a>
+    <a href="{{ url_for('ext.tech_spec_list') }}" class="module-tab active">📄 技术规格</a>
+</div>
 <div class="filter-bar">
     <a href="{{ url_for('ext.tech_spec_list') }}" class="filter-tag {% if not current_product %}active{% endif %}">全部产品</a>
     {% for p in products %}

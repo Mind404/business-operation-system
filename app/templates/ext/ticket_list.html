@@ -5,6 +5,11 @@
 <a href="{{ url_for('ext.feedback_list') }}" class="btn btn-outline">用户反馈库</a>
 {% endblock %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('requirements_list') }}" class="module-tab">📋 需求数据库</a>
+    <a href="{{ url_for('ext.feedback_list') }}" class="module-tab">💬 用户反馈</a>
+    <a href="{{ url_for('ext.ticket_list') }}" class="module-tab">🎫 支持工单</a>
+</div>
 <div class="filter-bar">
     <a href="{{ url_for('ext.ticket_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
     <a href="{{ url_for('ext.ticket_list', status='待处理') }}" class="filter-tag {% if current_status == '待处理' %}active{% endif %}">待处理</a>

@@ -1,6 +1,10 @@
 {% extends "ext/_base.html" %}
 {% set page_title = '新增收入确认' %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab">📦 交付跟踪</a>
+    <a href="{{ url_for('ext.revenue_list') }}" class="module-tab active">💰 收入确认</a>
+</div>
 <div class="panel">
     <form method="post">
         <div class="form-grid">

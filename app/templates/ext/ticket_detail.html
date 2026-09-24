@@ -1,6 +1,11 @@
 {% extends "ext/_base.html" %}
 {% set page_title = '工单详情 - ' + ticket.ticket_no %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('requirements_list') }}" class="module-tab">📋 需求数据库</a>
+    <a href="{{ url_for('ext.feedback_list') }}" class="module-tab">💬 用户反馈</a>
+    <a href="{{ url_for('ext.ticket_list') }}" class="module-tab">🎫 支持工单</a>
+</div>
 <div class="panel">
     <div class="detail-section">
         <h3>工单信息</h3>

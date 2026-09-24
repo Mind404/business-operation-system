@@ -5,6 +5,11 @@
 <a href="{{ url_for('ext.ota_list') }}" class="btn btn-outline">OTA版本管理</a>
 {% endblock %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('ext.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
+    <a href="{{ url_for('ext.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
+    <a href="{{ url_for('ext.ota_list') }}" class="module-tab">📦 OTA版本</a>
+</div>
 <div class="stats-row">
     <div class="stat-mini stat-mini-blue"><div class="stat-mini-value">{{ total }}</div><div class="stat-mini-label">设备总数</div></div>
     <div class="stat-mini stat-mini-green"><div class="stat-mini-value">{{ online }}</div><div class="stat-mini-label">在线</div></div>

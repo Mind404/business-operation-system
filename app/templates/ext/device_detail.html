@@ -1,6 +1,11 @@
 {% extends "ext/_base.html" %}
 {% set page_title = '设备详情 - ' + device.device_sn %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('ext.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
+    <a href="{{ url_for('ext.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
+    <a href="{{ url_for('ext.ota_list') }}" class="module-tab">📦 OTA版本</a>
+</div>
 <style>
 .dc-form-inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 0; }
 .dc-form-inline select, .dc-form-inline input[type=text] { padding:6px 10px; border:1px solid #d1d5db; border-radius:6px; font-size:12.5px; }

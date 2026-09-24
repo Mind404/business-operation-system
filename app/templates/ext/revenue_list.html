@@ -7,6 +7,10 @@
 <a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-outline">交付计划</a>
 {% endblock %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab">📦 交付跟踪</a>
+    <a href="{{ url_for('ext.revenue_list') }}" class="module-tab active">💰 收入确认</a>
+</div>
 <div class="stats-row">
     <div class="stat-mini stat-mini-blue"><div class="stat-mini-value">¥{{ '%.0f'|format(total_amount) }}</div><div class="stat-mini-label">合同总金额</div></div>
     <div class="stat-mini stat-mini-green"><div class="stat-mini-value">¥{{ '%.0f'|format(confirmed_amount) }}</div><div class="stat-mini-label">已确认收入</div></div>

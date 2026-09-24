@@ -5,6 +5,10 @@
 <a href="{{ url_for('ext.contract_list') }}" class="btn btn-outline">合同跟进</a>
 {% endblock %}
 {% block ext_content %}
+<div class="module-tabs">
+    <a href="{{ url_for('production_dashboard') }}" class="module-tab">🏭 生产管理</a>
+    <a href="{{ url_for('ext.resource_list') }}" class="module-tab active">🔧 资源调度</a>
+</div>
 <div class="filter-bar">
     <a href="{{ url_for('ext.resource_list') }}" class="filter-tag {% if not current_type %}active{% endif %}">全部</a>
     <a href="{{ url_for('ext.resource_list', type='人力资源') }}" class="filter-tag {% if current_type == '人力资源' %}active{% endif %}">人力资源</a>

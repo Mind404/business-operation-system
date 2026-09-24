@@ -2619,7 +2619,7 @@ def api_global_search():
                 'type': 'task',
                 'title': t['task_name'],
                 'subtitle': t['assignee'] or t['status'] or '',
-                'url': '#task-' + str(t['id'])
+                'url': '/my-tasks/' + str(t['id'])
             })
     except Exception:
         pass
@@ -2633,7 +2633,7 @@ def api_global_search():
                 'type': 'contract',
                 'title': f'{c["contract_no"]} - {c["supplier"]}',
                 'subtitle': c['contract_type'] or '',
-                'url': '/ext/contracts'
+                'url': '/contracts'
             })
     except Exception:
         pass
@@ -2647,7 +2647,7 @@ def api_global_search():
                 'type': 'device',
                 'title': f'{d["device_sn"]} - {d["customer"]}',
                 'subtitle': d['status'] or '',
-                'url': '/ext/devices'
+                'url': '/device-center'
             })
     except Exception:
         pass
