@@ -19,6 +19,12 @@
                 </div>
             </div>
             <nav class="nav-menu">
+                <!-- 总览（置顶首位） -->
+                <div class="nav-group">
+                    <a href="{{ url_for('executive_dashboard') }}" class="nav-item nav-item-top {% if request.endpoint == 'executive_dashboard' %}active{% endif %}">
+                        <span class="nav-icon">🗺️</span> 总览
+                    </a>
+                </div>
                 <!-- 工作台 -->
                 <div class="nav-group">
                     <div class="nav-group-title">工作台</div>
@@ -27,9 +33,6 @@
                     </a>
                     <a href="{{ url_for('ext.my_tasks') }}" class="nav-item {% if request.endpoint in ['ext.my_tasks','ext.task_add','ext.task_detail','ext.task_update'] %}active{% endif %}">
                         <span class="nav-icon">✅</span> 我的任务
-                    </a>
-                    <a href="{{ url_for('executive_dashboard') }}" class="nav-item {% if request.endpoint == 'executive_dashboard' %}active{% endif %}">
-                        <span class="nav-icon">🗺️</span> 总览
                     </a>
                 </div>
 

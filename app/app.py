@@ -1125,7 +1125,7 @@ def api_add_gantt_task():
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (name, desc, status, start, end, now, '中'))
         elif task_type == 'test':
-            execution_no = f'TE-{datetime.now().strftime("%Y%m%d%H%M%S")}'
+            execution_no = f'TE-{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
             db.execute("""
                 INSERT INTO test_executions (execution_no, start_date, end_date, status, summary, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -2047,7 +2047,7 @@ def requisition_add():
         if err:
             return validation_error(err)
 
-        req_no = f"RL{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        req_no = f"RL{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         cursor = db.execute('''INSERT INTO material_requisitions (requisition_no, product_id, requirement_id, applicant, status, total_quantity)
                       VALUES (?,?,?,?,?,?)''',
                    (req_no, request.form.get('product_id') or None,
@@ -2170,7 +2170,7 @@ def production_order_add():
             plan_start = request.form.get('plan_start','')
             plan_finish = request.form.get('plan_finish','')
 
-        order_no = f"PO{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        order_no = f"PO{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         db.execute('''INSERT INTO production_orders (order_no, product_id, requirement_id, schedule_id, supplier, quantity,
                       plan_start, plan_finish, status, remark)
                       VALUES (?,?,?,?,?,?,?,?,?,?)''',
@@ -2238,7 +2238,7 @@ def quality_add():
         if passed > sample:
             return validation_error(f'合格数量({passed})不能大于抽样数量({sample})')
 
-        insp_no = f"QI{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        insp_no = f"QI{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         failed = sample - passed
         rate = round(passed / sample * 100, 2) if sample > 0 else 0
         result = '合格' if rate >= 95 else '不合格'
@@ -2287,7 +2287,7 @@ def receipt_add():
         if err:
             return validation_error(err)
 
-        receipt_no = f"WR{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        receipt_no = f"WR{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         db.execute('''INSERT INTO warehouse_receipts (receipt_no, production_order_id, product_id, quantity,
                       quality_status, approver, status)
                       VALUES (?,?,?,?,?,?,?)''',
@@ -2351,7 +2351,7 @@ def deliver_add():
                 product_name = product['name'] if product else '该产品'
                 return validation_error(f'成品库存不足：{product_name}当前库存{current_qty}套，需交付{qty}套，请先入库')
 
-        delivery_no = f"DL{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        delivery_no = f"DL{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
         db.execute('''INSERT INTO deliveries (delivery_no, product_id, market_team, quantity, customer,
                       purpose, delivery_date, status, feedback)
                       VALUES (?,?,?,?,?,?,?,?,?)''',
@@ -2793,11 +2793,10 @@ def version_status_update(vid):
         return jsonify({'success': False, 'error': '版本不存在'}), 404
     old_status = cur['status']
     if new_status == '已发布' and old_status != '已发布':
-        db.execute('''UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime'),
-                      updated_at=datetime('now','localtime') WHERE id=?''', (new_status, vid))
+        db.execute('''UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime')
+                      WHERE id=?''', (new_status, vid))
     else:
-        db.execute('''UPDATE software_versions SET status=?, updated_at=datetime('now','localtime') WHERE id=?''',
-                   (new_status, vid))
+        db.execute('UPDATE software_versions SET status=? WHERE id=?', (new_status, vid))
     db.commit()
     log_operation('版本规划', '状态流转', f'版本ID {vid} 状态 {old_status} → {new_status}')
     db.close()

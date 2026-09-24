@@ -5,7 +5,7 @@
 """
 from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash
 from datetime import datetime
-import io, os, json
+import io, os, json, random
 
 ext_bp = Blueprint('ext', __name__)
 
@@ -77,7 +77,7 @@ def test_case_add():
         priority = request.form.get('priority', '中')
         case_type = request.form.get('case_type', '功能测试')
         if not case_no:
-            case_no = f'TC{datetime.now().strftime("%Y%m%d%H%M%S")}'
+            case_no = f'TC{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
         db.execute('''INSERT INTO test_cases (case_no, product_id, title, module, precondition,
             test_steps, expected_result, priority, case_type, creator)
             VALUES (?,?,?,?,?,?,?,?,?,?)''',
@@ -113,7 +113,7 @@ def test_execution_add():
         version_id = request.form.get('version_id')
         round_no = int(request.form.get('round_no', 1))
         executor = request.form.get('executor', 'tester')
-        execution_no = f'TE{datetime.now().strftime("%Y%m%d%H%M%S")}'
+        execution_no = f'TE{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
         # 统计该产品的用例数
         total = db.execute('SELECT COUNT(*) FROM test_cases WHERE product_id=? AND status="已启用"', (product_id,)).fetchone()[0]
         db.execute('''INSERT INTO test_executions (execution_no, product_id, version_id, round_no,
@@ -206,7 +206,7 @@ def ticket_add():
         description = request.form.get('description', '')
         category = request.form.get('category', '技术咨询')
         priority = request.form.get('priority', '中')
-        ticket_no = f'TS{datetime.now().strftime("%Y%m%d%H%M%S")}'
+        ticket_no = f'TS{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
         db.execute('''INSERT INTO tech_support_tickets (ticket_no, customer, contact_person, contact_phone,
             product_id, title, description, category, priority, status, handler)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
@@ -378,7 +378,7 @@ def delivery_plan_add():
         planned_date = request.form.get('planned_date') or req['delivery_date'] or ''
         owner = request.form.get('owner', 'delivery_a')
         remark = request.form.get('remark', '')
-        plan_no = 'DP{}'.format(datetime.now().strftime('%Y%m%d%H%M%S'))
+        plan_no = 'DP{}'.format(datetime.now().strftime('%Y%m%d%H%M%S')) + str(random.randint(100,999))
         db.execute('''INSERT INTO delivery_plans (plan_no, customer, product_id, quantity, planned_date,
             status, owner, remark, requirement_id) VALUES (?,?,?,?,?,?,?,?,?)''',
             (plan_no, customer, product_id, quantity, planned_date, '计划中', owner, remark, requirement_id))
@@ -485,7 +485,7 @@ def revenue_add():
         period = request.form.get('period', '')
         handler = request.form.get('handler', 'delivery_a')
         remark = request.form.get('remark', '')
-        confirm_no = f'RC{datetime.now().strftime("%Y%m%d%H%M%S")}'
+        confirm_no = f'RC{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
         db.execute('''INSERT INTO revenue_confirmations (confirm_no, customer, contract_no, product_id,
             amount, period, status, handler, remark) VALUES (?,?,?,?,?,?,?,?,?)''',
             (confirm_no, customer, contract_no, product_id, amount, period, '待确认', handler, remark))
@@ -622,7 +622,7 @@ def contract_list():
 def contract_add():
     db = get_db()
     if request.method == 'POST':
-        contract_no = request.form.get('contract_no', f'CT{datetime.now().strftime("%Y%m%d%H%M%S")}')
+        contract_no = request.form.get('contract_no', f'CT{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}')
         contract_type = request.form.get('contract_type', '生产合同')
         supplier = request.form.get('supplier', '')
         product_id = request.form.get('product_id')
@@ -1389,7 +1389,7 @@ def task_add():
         priority = request.form.get('priority', '中')
         due_date = request.form.get('due_date', '')
         expected_result = request.form.get('expected_result', '')
-        task_no = f'TASK{datetime.now().strftime("%Y%m%d%H%M%S")}'
+        task_no = f'TASK{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}'
         db.execute('''INSERT INTO tasks (task_no, title, description, module, assignee, creator,
             priority, status, due_date, expected_result) VALUES (?,?,?,?,?,?,?,?,?,?)''',
             (task_no, title, description, module, assignee, session.get('username', 'admin'), priority, '待处理', due_date, expected_result))

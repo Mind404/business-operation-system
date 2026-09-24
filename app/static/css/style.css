@@ -79,6 +79,12 @@ ul, ol { list-style: none; }
     transition: all 0.2s;
     border-left: 3px solid transparent;
 }
+.nav-item-top {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    background: rgba(255,255,255,0.04);
+}
 .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .nav-item.active {
     background: rgba(255,255,255,0.12);
@@ -101,32 +107,29 @@ ul, ol { list-style: none; }
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 16px;
+    padding: 10px 18px;
     font-size: 13px;
     color: #64748b;
-    border: 1px solid transparent;
-    border-bottom: none;
-    border-radius: 8px 8px 0 0;
+    border: none;
+    border-radius: 0;
     background: transparent;
     cursor: pointer;
     transition: all 0.15s;
     text-decoration: none;
     position: relative;
-    top: 1px;
+    font-weight: 500;
 }
-.module-tab:hover { color: #2563eb; background: #f1f5f9; }
+.module-tab:hover { color: #2563eb; background: #eff6ff; }
 .module-tab.active {
-    color: #2563eb;
+    color: #1d4ed8;
     font-weight: 600;
-    background: #fff;
-    border-color: #e2e8f0;
-    box-shadow: 0 -2px 6px rgba(37,99,235,.06);
+    background: #eff6ff;
 }
 .module-tab.active::after {
     content: '';
     position: absolute;
-    left: 0; right: 0; bottom: -1px;
-    height: 2px;
+    left: 0; right: 0; bottom: 0;
+    height: 3px;
     background: #2563eb;
 }
 .module-tab .tab-count {
@@ -195,7 +198,7 @@ ul, ol { list-style: none; }
     gap: 6px;
     padding: 8px 18px;
     height: 36px;
-    border-radius: 8px;
+    border-radius: 6px;
     font-size: 13px;
     font-weight: 500;
     line-height: 1;
@@ -228,8 +231,9 @@ ul, ol { list-style: none; }
 }
 .btn-outline {
     background: #fff;
-    color: #374151;
-    border-color: #d1d5db;
+    color: #1f2937;
+    border-color: #cbd5e1;
+    border-width: 1.5px;
 }
 .btn-outline:hover {
     background: #f9fafb;
@@ -281,13 +285,13 @@ ul, ol { list-style: none; }
     padding: 5px 12px;
     height: 30px;
     font-size: 12px;
-    border-radius: 6px;
+    border-radius: 4px;
 }
 .btn-lg {
     padding: 12px 28px;
     height: 46px;
     font-size: 15px;
-    border-radius: 10px;
+    border-radius: 8px;
 }
 .btn-group {
     display: inline-flex;
@@ -579,25 +583,27 @@ ul, ol { list-style: none; }
 }
 .filter-tag {
     padding: 7px 16px;
-    border-radius: 20px;
+    border-radius: 6px;
     font-size: 12px;
     background: #fff;
     color: #64748b;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #d1d9e6;
     cursor: pointer;
     transition: all 0.2s;
     font-weight: 500;
+    text-decoration: none;
+    line-height: 1.6;
 }
 .filter-tag:hover {
-    border-color: #3b82f6;
-    color: #3b82f6;
-    background: #f0f7ff;
+    border-color: #2563eb;
+    color: #2563eb;
+    background: #eff6ff;
 }
 .filter-tag.active {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    background: #2563eb;
     color: #fff;
     border-color: #2563eb;
-    box-shadow: 0 2px 8px rgba(37,99,235,0.3);
+    box-shadow: 0 2px 8px rgba(37,99,235,0.35);
 }
 
 /* ===== Tab栏 ===== */
