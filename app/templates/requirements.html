@@ -56,27 +56,28 @@
     <a href="{{ url_for('requirements_list', req_type='其他', status=current_status, search=search) }}" class="filter-tag {% if current_type == '其他' %}active{% endif %}" style="border-left: 3px solid #f59e0b;">📌 其他 ({{ type_count.get('其他', 0) }})</a>
 </div>
 
-<!-- 状态筛选 -->
-<div class="filter-bar">
-    <a href="{{ url_for('requirements_list', req_type=current_type, search=search) }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
-    <a href="{{ url_for('requirements_list', req_type=current_type, status='待评审', search=search) }}" class="filter-tag {% if current_status == '待评审' %}active{% endif %}">待评审</a>
-    <a href="{{ url_for('requirements_list', req_type=current_type, status='已评审', search=search) }}" class="filter-tag {% if current_status == '已评审' %}active{% endif %}">已评审</a>
-    <a href="{{ url_for('requirements_list', req_type=current_type, status='进行中', search=search) }}" class="filter-tag {% if current_status == '进行中' %}active{% endif %}">进行中</a>
-    <a href="{{ url_for('requirements_list', req_type=current_type, status='已完成', search=search) }}" class="filter-tag {% if current_status == '已完成' %}active{% endif %}">已完成</a>
-</div>
-
-<!-- 搜索框 -->
-<div class="search-bar">
-    <form method="get" action="{{ url_for('requirements_list') }}">
-        {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
-        {% if current_type %}<input type="hidden" name="req_type" value="{{ current_type }}">{% endif %}
-        <input type="text" name="search" class="search-input" placeholder="搜索需求标题、客户、来源部门、产品型号、描述..." value="{{ search }}">
-        <button type="submit" class="search-btn">搜索</button>
-        {% if search %}
-        <a href="{{ url_for('requirements_list', status=current_status, req_type=current_type) }}" class="search-clear">清除</a>
-        {% endif %}
+<!-- 搜索 + 状态筛选 同一行（搜索在前，状态在后） -->
+<div class="toolbar-row">
+    <div class="search-bar">
+        <form method="get" action="{{ url_for('requirements_list') }}">
+            {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+            {% if current_type %}<input type="hidden" name="req_type" value="{{ current_type }}">{% endif %}
+            <input type="text" name="search" class="search-input" placeholder="搜索需求标题、客户、来源部门、产品型号、描述..." value="{{ search }}">
+            <button type="submit" class="search-btn">搜索</button>
+            {% if search %}
+            <a href="{{ url_for('requirements_list', status=current_status, req_type=current_type) }}" class="search-clear">清除</a>
+            {% endif %}
+        </form>
+    </div>
+    <div class="filter-bar status-filter">
+        <span class="status-filter-label">状态：</span>
+        <a href="{{ url_for('requirements_list', req_type=current_type, search=search) }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
+        <a href="{{ url_for('requirements_list', req_type=current_type, status='待评审', search=search) }}" class="filter-tag {% if current_status == '待评审' %}active{% endif %}">待评审</a>
+        <a href="{{ url_for('requirements_list', req_type=current_type, status='已评审', search=search) }}" class="filter-tag {% if current_status == '已评审' %}active{% endif %}">已评审</a>
+        <a href="{{ url_for('requirements_list', req_type=current_type, status='进行中', search=search) }}" class="filter-tag {% if current_status == '进行中' %}active{% endif %}">进行中</a>
+        <a href="{{ url_for('requirements_list', req_type=current_type, status='已完成', search=search) }}" class="filter-tag {% if current_status == '已完成' %}active{% endif %}">已完成</a>
         <span class="search-count">共 {{ total }} 条</span>
-    </form>
+    </div>
 </div>
 
 <div class="panel">
@@ -84,13 +85,13 @@
         <thead>
             <tr>
                 <th>ID</th>
-                <th>需求类型</th>
+                <th>需求类型<select class="col-filter" data-col="1"><option value="">全部类型</option></select></th>
                 <th>需求标题</th>
-                <th>来源/客户</th>
+                <th>来源/客户<select class="col-filter" data-col="3"><option value="">全部来源</option></select></th>
                 <th>关键信息</th>
-                <th>优先级</th>
-                <th>交付节点</th>
-                <th>状态</th>
+                <th>优先级<select class="col-filter" data-col="5"><option value="">全部优先级</option></select></th>
+                <th>交付节点<select class="col-filter" data-col="6"><option value="">全部日期</option></select></th>
+                <th>状态<select class="col-filter" data-col="7"><option value="">全部状态</option></select></th>
                 <th>操作</th>
             </tr>
         </thead>
@@ -207,26 +208,70 @@
     font-weight: 600;
     white-space: nowrap;
 }
+/* 搜索 + 状态筛选 同行布局 */
+.toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.toolbar-row .search-bar { flex: 1; min-width: 320px; margin-bottom: 0; }
+.toolbar-row .search-bar form { display: flex; align-items: center; gap: 8px; }
+.toolbar-row .status-filter { margin-bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+.status-filter-label { font-size: 13px; color: #6b7280; font-weight: 500; }
+.toolbar-row .search-count { color: #9ca3af; font-size: 13px; margin-left: 2px; }
 /* 搜索框优化 */
 .search-bar { margin-bottom: 14px; }
 .search-bar form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.search-input { flex: 1; min-width: 300px; max-width: 600px; padding: 8px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+.search-input { flex: 1; min-width: 260px; max-width: 480px; padding: 8px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
 .search-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
 .search-btn { padding: 8px 18px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.15s; }
 .search-btn:hover { background: #2563eb; }
 .search-clear { color: #6b7280; text-decoration: none; font-size: 13px; }
 .search-clear:hover { color: #3b82f6; }
 .search-count { color: #9ca3af; font-size: 13px; margin-left: auto; }
+/* 表头下拉筛选 */
+.col-filter {
+    display: block;
+    width: 100%;
+    margin-top: 5px;
+    padding: 3px 4px;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #64748b;
+    background: #f8fafc;
+    cursor: pointer;
+    max-width: 120px;
+}
+.col-filter:focus { border-color: #3b82f6; outline: none; background: #eff6ff; }
+/* 操作栏：flex 横向排列，不换行 */
+.action-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+}
+.action-cell .btn-sm {
+    padding: 4px 9px;
+    height: 26px;
+    font-size: 12px;
+    line-height: 18px;
+    white-space: nowrap;
+}
 /* 表格列宽优化 */
 #requirementsTable th:nth-child(1) { width: 50px; }
-#requirementsTable th:nth-child(2) { width: 110px; }
-#requirementsTable th:nth-child(3) { width: 22%; }
-#requirementsTable th:nth-child(4) { width: 130px; }
-#requirementsTable th:nth-child(5) { width: 28%; }
-#requirementsTable th:nth-child(6) { width: 60px; }
-#requirementsTable th:nth-child(7) { width: 95px; }
-#requirementsTable th:nth-child(8) { width: 80px; }
-#requirementsTable th:nth-child(9) { width: 130px; }
+#requirementsTable th:nth-child(2) { width: 120px; }
+#requirementsTable th:nth-child(3) { width: 20%; }
+#requirementsTable th:nth-child(4) { width: 135px; }
+#requirementsTable th:nth-child(5) { width: 26%; }
+#requirementsTable th:nth-child(6) { width: 80px; }
+#requirementsTable th:nth-child(7) { width: 100px; }
+#requirementsTable th:nth-child(8) { width: 90px; }
+#requirementsTable th:nth-child(9) { width: 150px; }
+#requirementsTable th { vertical-align: bottom; }
 #requirementsTable td { vertical-align: middle; }
 .pagination {
     display: flex;
@@ -270,8 +315,72 @@ function updateStatus(select) {
     });
 }
 
+// 表头下拉筛选：多列可叠加，过滤表格行并更新计数
+function initColFilters(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    const selects = Array.from(table.querySelectorAll('thead select.col-filter'));
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const countEl = document.querySelector('.toolbar-row .search-count');
+
+    // 提取单元格文本（状态列取 select 值，徽章列取徽章文字）
+    function cellText(row, col) {
+        const td = row.cells[col];
+        if (!td) return '';
+        const sel = td.querySelector('select.status-select');
+        if (sel) return sel.value;
+        const badge = td.querySelector('.req-type-badge, .priority');
+        if (badge) return badge.textContent.trim();
+        return td.textContent.replace(/\s+/g, ' ').trim();
+    }
+
+    // 动态生成每列选项（当前页数据去重）
+    selects.forEach(sel => {
+        const col = parseInt(sel.dataset.col);
+        const values = new Set(rows.map(r => cellText(r, col)).filter(v => v && v !== ''));
+        Array.from(values).sort().forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            sel.appendChild(opt);
+        });
+    });
+
+    // 过滤：所有筛选列条件同时满足才显示
+    function applyFilter() {
+        let visible = 0;
+        rows.forEach(row => {
+            let show = true;
+            selects.forEach(sel => {
+                const val = sel.value;
+                if (!val) return;
+                if (cellText(row, parseInt(sel.dataset.col)) !== val) show = false;
+            });
+            row.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        if (countEl) countEl.textContent = '共 ' + visible + ' 条';
+        // 空态行
+        let empty = tbody.querySelector('tr.colfilter-empty');
+        if (visible === 0) {
+            if (!empty) {
+                empty = document.createElement('tr');
+                empty.className = 'colfilter-empty';
+                empty.innerHTML = '<td colspan="9" class="empty-cell">无匹配筛选条件的数据</td>';
+                tbody.appendChild(empty);
+            }
+            empty.style.display = '';
+        } else if (empty) {
+            empty.style.display = 'none';
+        }
+    }
+    selects.forEach(sel => sel.addEventListener('change', applyFilter));
+}
+
 // 初始化列设置功能
 document.addEventListener('DOMContentLoaded', function() {
+    initColFilters('requirementsTable');
     setTimeout(function() {
         if (window.ColumnSettings) {
             ColumnSettings.init('requirementsTable', 'requirements_columns_v2');
