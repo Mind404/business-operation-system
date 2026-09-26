@@ -8,6 +8,7 @@
 <div class="module-tabs">
     <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
     <a href="{{ url_for('ext.revenue_list') }}" class="module-tab {% if request.endpoint.startswith('ext.revenue_') %}active{% endif %}">💰 收入确认</a>
+    <a href="{{ url_for('ext.user_contract_list') }}" class="module-tab {% if request.endpoint.startswith('ext.user_contract_') %}active{% endif %}">📋 用户合同</a>
 </div>
 
 <!-- 概览统计 -->

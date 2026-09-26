@@ -592,6 +592,11 @@ def tech_spec_detail(sid):
 # ============================================================
 # 产品总体组A：合同跟进
 # ============================================================
+# 合同跟进：仅关联生产合同与物料采购合同（用户合同已整合至交付管理）
+# ============================================================
+CONTRACT_TYPES_PROD = ['生产合同', '物料合同']
+CONTRACT_TYPES_USER = ['用户合同']
+
 @ext_bp.route('/contracts')
 def contract_list():
     db = get_db()
@@ -600,16 +605,16 @@ def contract_list():
     page = max(1, int(request.args.get('page', 1)))
     per_page = 15
     offset = (page - 1) * per_page
-    where = []
+    where = ["c.contract_type IN ('生产合同','物料合同')"]
     params = []
     if status:
-        where.append('status=?')
+        where.append('c.status=?')
         params.append(status)
     if search:
-        where.append('(supplier LIKE ? OR contract_no LIKE ?)')
+        where.append('(c.supplier LIKE ? OR c.contract_no LIKE ?)')
         params.extend([f'%{search}%']*2)
-    where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-    total = db.execute(f'SELECT COUNT(*) FROM contracts{where_sql}', params).fetchone()[0]
+    where_sql = ' WHERE ' + ' AND '.join(where)
+    total = db.execute(f'SELECT COUNT(*) FROM contracts c{where_sql}', params).fetchone()[0]
     contracts = db.execute(f'''SELECT c.*, p.name as product_name FROM contracts c
         LEFT JOIN products p ON c.product_id=p.id
         {where_sql} ORDER BY c.created_at DESC LIMIT ? OFFSET ?''',
@@ -618,12 +623,46 @@ def contract_list():
     return render_template('ext/contract_list.html', contracts=contracts, current_status=status,
                            search=search, page=page, total_pages=total_pages, total=total)
 
+# ============================================================
+# 用户合同（交付管理板块）：contract_type 固定为 '用户合同'
+# ============================================================
+@ext_bp.route('/user-contracts')
+def user_contract_list():
+    """用户合同（销售合同）列表：整合在交付管理板块"""
+    db = get_db()
+    status = request.args.get('status', '')
+    search = request.args.get('search', '').strip()
+    where = ["c.contract_type='用户合同'"]
+    params = []
+    if status:
+        where.append('c.status=?')
+        params.append(status)
+    if search:
+        where.append('(c.supplier LIKE ? OR c.contract_no LIKE ?)')
+        params.extend([f'%{search}%']*2)
+    where_sql = ' WHERE ' + ' AND '.join(where)
+    contracts = db.execute(f'''SELECT c.*, p.name as product_name,
+        (SELECT COUNT(*) FROM contract_payments cp WHERE cp.contract_id=c.id) as node_count
+        FROM contracts c LEFT JOIN products p ON c.product_id=p.id
+        {where_sql} ORDER BY c.created_at DESC''', params).fetchall()
+    total_amount = sum(c['amount'] for c in contracts)
+    paid_amount = sum(c['paid_amount'] or 0 for c in contracts)
+    db.close()
+    return render_template('ext/user_contract_list.html', contracts=contracts,
+                           current_status=status, search=search, total=len(contracts),
+                           total_amount=total_amount, paid_amount=paid_amount)
+
 @ext_bp.route('/contracts/add', methods=['GET', 'POST'])
 def contract_add():
+    """新建合同：type=user 为交付板块用户合同，否则为生产/物料合同"""
     db = get_db()
+    ctype = request.args.get('type', 'prod')
+    is_user = (ctype == 'user')
+    contract_types = CONTRACT_TYPES_USER if is_user else CONTRACT_TYPES_PROD
+    back_url = url_for('ext.user_contract_list') if is_user else url_for('ext.contract_list')
     if request.method == 'POST':
         contract_no = request.form.get('contract_no', f'CT{datetime.now().strftime("%Y%m%d%H%M%S")}{random.randint(100,999)}')
-        contract_type = request.form.get('contract_type', '生产合同')
+        contract_type = '用户合同' if is_user else request.form.get('contract_type', '生产合同')
         supplier = request.form.get('supplier', '')
         product_id = request.form.get('product_id')
         amount = float(request.form.get('amount', 0))
@@ -638,20 +677,27 @@ def contract_add():
             (contract_no, contract_type, supplier, product_id, amount, sign_date, delivery_date, '执行中', owner, progress, '未付款', remark))
         db.commit()
         log_operation('合同', '新增', f'{contract_no}: {supplier} {amount}元', owner)
-        return redirect(url_for('ext.contract_list'))
+        return redirect(back_url)
     products = db.execute('SELECT id, name, model FROM products').fetchall()
-    return render_template('ext/contract_form.html', products=products, contract=None)
+    return render_template('ext/contract_form.html', products=products, contract=None,
+                           contract_types=contract_types, back_url=back_url, ctype=ctype)
 
 @ext_bp.route('/contracts/<int:cid>/edit', methods=['GET', 'POST'])
 def contract_edit(cid):
-    """编辑合同（所有字段可修改）"""
+    """编辑合同（所有字段可修改）；type=user 为交付板块用户合同"""
     db = get_db()
     contract = db.execute('SELECT * FROM contracts WHERE id=?', (cid,)).fetchone()
     if not contract:
         db.close()
         return '合同不存在', 404
+    ctype = request.args.get('type', '')
+    if not ctype and contract['contract_type'] == '用户合同':
+        ctype = 'user'
+    is_user = (ctype == 'user')
+    contract_types = CONTRACT_TYPES_USER if is_user else CONTRACT_TYPES_PROD
+    back_url = url_for('ext.user_contract_list') if is_user else url_for('ext.contract_list')
     if request.method == 'POST':
-        contract_type = request.form.get('contract_type', contract['contract_type'])
+        contract_type = '用户合同' if is_user else request.form.get('contract_type', contract['contract_type'])
         supplier = request.form.get('supplier', contract['supplier'])
         product_id = request.form.get('product_id') or contract['product_id']
         amount = float(request.form.get('amount', contract['amount']))
@@ -676,11 +722,12 @@ def contract_edit(cid):
         db.commit()
         log_operation('合同', '编辑', f'{contract["contract_no"]}: 更新合同信息，已付{paid_amount}元')
         db.close()
-        return redirect(url_for('ext.contract_edit', cid=cid))
+        return redirect(url_for('ext.contract_edit', cid=cid, type=ctype))
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     payments = db.execute('SELECT * FROM contract_payments WHERE contract_id=? ORDER BY plan_date', (cid,)).fetchall()
     db.close()
-    return render_template('ext/contract_form.html', products=products, contract=contract, payments=payments)
+    return render_template('ext/contract_form.html', products=products, contract=contract,
+                           payments=payments, contract_types=contract_types, back_url=back_url, ctype=ctype)
 
 @ext_bp.route('/contracts/<int:cid>/payments/add', methods=['POST'])
 def contract_payment_add(cid):

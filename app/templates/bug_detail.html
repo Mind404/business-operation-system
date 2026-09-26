@@ -3,7 +3,8 @@
 {% block page_title %}{{ bug.bug_no }} {{ bug.title }}{% endblock %}
 
 {% block header_actions %}
-<a href="{{ url_for('bug_list') }}" class="btn btn-secondary">返回列表</a>
+<a href="javascript:history.back()" class="btn btn-secondary">← 返回上一页</a>
+<a href="{{ url_for('bug_list') }}" class="btn btn-outline">Bug列表</a>
 {% endblock %}
 
 {% block content %}

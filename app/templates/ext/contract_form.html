@@ -11,14 +11,15 @@
             </div>
             <div class="form-group">
                 <label>合同类型 <span class="required">*</span></label>
-                <select name="contract_type" class="form-control" required>
-                    <option value="生产合同" {% if contract and contract.contract_type == '生产合同' %}selected{% endif %}>生产合同</option>
-                    <option value="物料合同" {% if contract and contract.contract_type == '物料合同' %}selected{% endif %}>物料合同</option>
-                    <option value="用户合同" {% if contract and contract.contract_type == '用户合同' %}selected{% endif %}>用户合同（销售合同）</option>
-                    <option value="服务合同" {% if contract and contract.contract_type == '服务合同' %}selected{% endif %}>服务合同</option>
-                    <option value="技术合作" {% if contract and contract.contract_type == '技术合作' %}selected{% endif %}>技术合作</option>
-                    <option value="其他" {% if contract and contract.contract_type == '其他' %}selected{% endif %}>其他</option>
+                <select name="contract_type" class="form-control" required {% if contract_types|length == 1 %}disabled{% endif %}>
+                    {% for ct in contract_types %}
+                    <option value="{{ ct }}" {% if contract and contract.contract_type == ct %}selected{% endif %}>{{ ct }}{% if ct == '用户合同' %}（销售合同）{% endif %}</option>
+                    {% endfor %}
                 </select>
+                {% if contract_types|length == 1 %}
+                <input type="hidden" name="contract_type" value="{{ contract_types[0] }}">
+                <small class="form-hint">此合同类型固定为「{{ contract_types[0] }}」</small>
+                {% endif %}
             </div>
             <div class="form-group">
                 <label>供应商/合作方/客户 <span class="required">*</span></label>
@@ -82,7 +83,7 @@
         </div>
         <div class="step-actions">
             <button type="submit" class="btn btn-primary">{% if contract %}保存修改{% else %}创建合同{% endif %}</button>
-            <a href="{{ url_for('ext.contract_list') }}" class="btn btn-secondary">返回列表</a>
+            <a href="{{ back_url }}" class="btn btn-secondary">返回列表</a>
         </div>
     </form>
 </div>

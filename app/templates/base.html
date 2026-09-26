@@ -67,7 +67,7 @@
                 <!-- 交付与运维 -->
                 <div class="nav-group">
                     <div class="nav-group-title">交付与运维</div>
-                    <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') or request.endpoint.startswith('ext.revenue_') %}active{% endif %}">
+                    <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') or request.endpoint.startswith('ext.revenue_') or request.endpoint.startswith('ext.user_contract_') %}active{% endif %}">
                         <span class="nav-icon">📦</span> 交付管理
                     </a>
                     <a href="{{ url_for('ext.device_center') }}" class="nav-item {% if request.endpoint.startswith('ext.device_') or request.endpoint.startswith('ext.ota_') or request.endpoint == 'ext.device_center' %}active{% endif %}">
