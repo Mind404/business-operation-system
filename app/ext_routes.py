@@ -375,15 +375,34 @@ def delivery_plan_add():
             flash('请选择交付产品', 'error')
             return redirect(url_for('ext.delivery_plan_add'))
         quantity = int(request.form.get('quantity') or req['quantity'] or 1)
+        # 校验：累计交付数量不得超过需求数量（分批交付总量守恒）
+        if req['quantity']:
+            done = db.execute('SELECT COALESCE(SUM(quantity),0) s FROM delivery_plans WHERE requirement_id=?', (requirement_id,)).fetchone()['s']
+            if done + quantity > req['quantity']:
+                flash(f'交付数量超出需求总量：已有{done}套，本次{quantity}套，需求总量{req["quantity"]}套', 'error')
+                return redirect(url_for('ext.delivery_plan_add'))
         planned_date = request.form.get('planned_date') or req['delivery_date'] or ''
         owner = request.form.get('owner', 'delivery_a')
         remark = request.form.get('remark', '')
+        production_date = request.form.get('production_date', '') or ''
+        stock_date = request.form.get('stock_date', '') or ''
+        delivered = 1 if request.form.get('delivered') else 0
+        if delivered:
+            status = '已交付'
+        elif stock_date:
+            status = '已入库'
+        elif production_date:
+            status = '生产中'
+        else:
+            status = '计划中'
         plan_no = 'DP{}'.format(datetime.now().strftime('%Y%m%d%H%M%S')) + str(random.randint(100,999))
         db.execute('''INSERT INTO delivery_plans (plan_no, customer, product_id, quantity, planned_date,
-            status, owner, remark, requirement_id) VALUES (?,?,?,?,?,?,?,?,?)''',
-            (plan_no, customer, product_id, quantity, planned_date, '计划中', owner, remark, requirement_id))
+            production_date, stock_date, delivered, status, owner, remark, requirement_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (plan_no, customer, product_id, quantity, planned_date, production_date, stock_date,
+             delivered, status, owner, remark, requirement_id))
         db.commit()
-        log_operation('交付管理', '新增交付', '{}: {} {}套'.format(plan_no, customer, quantity), owner)
+        log_operation('交付管理', '新增交付', '{}: {} {}套 状态={}'.format(plan_no, customer, quantity, status), owner)
         flash('交付计划已创建（关联需求：{}）'.format(req['title']), 'success')
         return redirect(url_for('ext.delivery_plan_list'))
     products = db.execute('SELECT id, name, model FROM products').fetchall()
@@ -405,6 +424,14 @@ def delivery_plan_edit(plan_id):
         return redirect(url_for('ext.delivery_plan_list'))
     if request.method == 'POST':
         quantity = int(request.form.get('quantity', plan['quantity']))
+        # 校验：累计交付数量不得超过需求数量（编辑时排除自身）
+        if plan['requirement_id']:
+            req_q = db.execute('SELECT quantity FROM requirements WHERE id=?', (plan['requirement_id'],)).fetchone()
+            if req_q and req_q['quantity']:
+                done = db.execute('SELECT COALESCE(SUM(quantity),0) s FROM delivery_plans WHERE requirement_id=? AND id!=?', (plan['requirement_id'], plan_id)).fetchone()['s']
+                if done + quantity > req_q['quantity']:
+                    flash(f'交付数量超出需求总量：已有{done}套，本次{quantity}套，需求总量{req_q["quantity"]}套', 'error')
+                    return redirect(url_for('ext.delivery_plan_edit', plan_id=plan_id))
         planned_date = request.form.get('planned_date', '') or plan['planned_date']
         production_date = request.form.get('production_date', '') or plan['production_date']
         stock_date = request.form.get('stock_date', '') or plan['stock_date']
@@ -501,6 +528,13 @@ def revenue_confirm(rid):
     confirmed_amount = float(request.form.get('confirmed_amount', 0))
     confirm_date = request.form.get('confirm_date', datetime.now().strftime('%Y-%m-%d'))
     voucher = request.form.get('voucher', '')
+    rec = db.execute('SELECT amount FROM revenue_confirmations WHERE id=?', (rid,)).fetchone()
+    if not rec:
+        db.close()
+        return '收入确认记录不存在', 404
+    if confirmed_amount < 0 or confirmed_amount > rec['amount']:
+        db.close()
+        return f'确认金额无效：应在 0 ~ {rec["amount"]:.2f} 元之间', 400
     db.execute('UPDATE revenue_confirmations SET status="已确认", confirmed_amount=?, confirm_date=?, voucher=? WHERE id=?',
                (confirmed_amount, confirm_date, voucher, rid))
     db.commit()
