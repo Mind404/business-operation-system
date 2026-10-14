@@ -3,7 +3,7 @@
 扩展模块路由：测试组、交付服务组、产品总体组、质量组强化、研发组
 每个模块遵循认知负荷优化原则：列表简洁、表单分步、必填优先
 """
-from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash, session
+from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash, session, send_from_directory
 from datetime import datetime
 import io, os, json, random
 
@@ -1713,39 +1713,60 @@ def wbs_project_detail(pid):
     return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases)
 
 
+def _save_upload(file_storage, subdir='wbs'):
+    """保存上传文件到 uploads/<subdir>/，返回相对路径"""
+    if not file_storage or not file_storage.filename:
+        return ''
+    import os, time
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', subdir)
+    os.makedirs(upload_dir, exist_ok=True)
+    fname = time.strftime('%Y%m%d%H%M%S_') + os.path.basename(file_storage.filename)
+    safe = ''.join(c for c in fname if c.isalnum() or c in '._-（）')
+    file_storage.save(os.path.join(upload_dir, safe))
+    return f'{subdir}/{safe}'
+
+
 @ext_bp.route('/wbs/<int:pid>/task/add', methods=['POST'])
 def wbs_task_add(pid):
     db = get_db()
     parent_id = request.form.get('parent_id', 0) or 0
+    attach = _save_upload(request.files.get('attachment'), 'wbs')
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
-         plan_start, plan_end, deliverable, status, progress)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+         plan_start, plan_end, deliverable, priority, attachment_path, status, progress)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, request.form.get('wbs_code',''), parent_id, request.form.get('name',''),
          request.form.get('work_content',''), request.form.get('owner',''), request.form.get('collaborators',''),
          request.form.get('plan_start',''), request.form.get('plan_end',''),
-         request.form.get('deliverable',''), request.form.get('status','未开始'),
-         int(request.form.get('progress',0))))
+         request.form.get('deliverable',''), request.form.get('priority','P2中'),
+         attach, request.form.get('status','未开始'), int(request.form.get('progress',0))))
     db.commit()
     log_operation('WBS', '新增任务', f'P{pid} {request.form.get("name","")}', session.get('username','admin'))
     return redirect(url_for('ext.wbs_project_detail', pid=pid))
 
 
-@ext_bp.route('/wbs/task/<int:tid>/edit', methods=['POST'])
+@ext_bp.route('/wbs/task/<int:tid>/edit', methods=['GET', 'POST'])
 def wbs_task_edit(tid):
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return redirect(url_for('ext.wbs_projects'))
-    db.execute('''UPDATE wbs_tasks SET wbs_code=?, name=?, work_content=?, owner=?, collaborators=?,
-        plan_start=?, plan_end=?, deliverable=?, status=?, progress=? WHERE id=?''',
-        (request.form.get('wbs_code',t['wbs_code']), request.form.get('name',t['name']),
-         request.form.get('work_content',t['work_content']), request.form.get('owner',t['owner']),
-         request.form.get('collaborators',t['collaborators']), request.form.get('plan_start',t['plan_start']),
-         request.form.get('plan_end',t['plan_end']), request.form.get('deliverable',t['deliverable']),
-         request.form.get('status',t['status']), int(request.form.get('progress',t['progress'])), tid))
-    db.commit()
-    return redirect(url_for('ext.wbs_project_detail', pid=t['project_id']))
+    if request.method == 'POST':
+        attach = _save_upload(request.files.get('attachment'), 'wbs') or t['attachment_path']
+        db.execute('''UPDATE wbs_tasks SET wbs_code=?, name=?, work_content=?, owner=?, collaborators=?,
+            plan_start=?, plan_end=?, deliverable=?, priority=?, attachment_path=?, status=?, progress=? WHERE id=?''',
+            (request.form.get('wbs_code',t['wbs_code']), request.form.get('name',t['name']),
+             request.form.get('work_content',t['work_content']), request.form.get('owner',t['owner']),
+             request.form.get('collaborators',t['collaborators']), request.form.get('plan_start',t['plan_start']),
+             request.form.get('plan_end',t['plan_end']), request.form.get('deliverable',t['deliverable']),
+             request.form.get('priority',t['priority']), attach,
+             request.form.get('status',t['status']), int(request.form.get('progress',t['progress'])), tid))
+        db.commit()
+        return redirect(url_for('ext.wbs_project_detail', pid=t['project_id']))
+    # GET：渲染编辑表单
+    phases = db.execute('SELECT * FROM wbs_tasks WHERE project_id=? AND parent_id=0 ORDER BY wbs_code',
+                        (t['project_id'],)).fetchall()
+    return render_template('ext/wbs_task_form.html', t=t, phases=phases)
 
 
 @ext_bp.route('/wbs/task/<int:tid>/delete', methods=['POST'])
@@ -1756,6 +1777,13 @@ def wbs_task_delete(tid):
         db.execute('DELETE FROM wbs_tasks WHERE id=? OR parent_id=?', (tid, tid))
         db.commit()
     return redirect(url_for('ext.wbs_project_detail', pid=t['project_id'] if t else 0))
+
+
+@ext_bp.route('/wbs/download/<path:filename>')
+def wbs_download(filename):
+    import os
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+    return send_from_directory(upload_dir, filename)
 
 
 @ext_bp.route('/wbs/<int:pid>/import', methods=['POST'])

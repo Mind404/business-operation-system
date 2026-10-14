@@ -16,33 +16,42 @@
 {% endwith %}
 
 <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-    <button onclick="document.getElementById('addTaskForm').style.display='block'" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">+ 添加任务</button>
+    <button onclick="document.getElementById('addTaskForm').style.display='block'" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">+ 添加任务/阶段</button>
     <form method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;">
         <input type="file" name="file" accept=".xlsx,.xls" style="font-size:13px;">
-        <button type="submit" style="padding:8px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">📥 Excel导入（WBS格式）</button>
+        <button type="submit" style="padding:8px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">📥 Excel导入</button>
     </form>
 </div>
 
-<!-- 添加任务表单（默认隐藏） -->
+<!-- 添加任务表单 -->
 <div id="addTaskForm" style="display:none;background:#f5f7fa;padding:16px;border-radius:8px;margin-bottom:16px;">
-    <form method="post" action="{{ url_for('ext.wbs_task_add', pid=p.id) }}">
-        <div style="display:grid;grid-template-columns:80px 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+    <form method="post" action="{{ url_for('ext.wbs_task_add', pid=p.id) }}" enctype="multipart/form-data">
+        <div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
             <input name="wbs_code" placeholder="WBS号" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="name" placeholder="阶段/任务名称" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="owner" placeholder="负责人" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="collaborators" placeholder="协作/支撑" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input name="name" placeholder="阶段/任务名称 *" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input name="owner" placeholder="责任人" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input name="collaborators" placeholder="参与人" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
             <input type="date" name="plan_start" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
             <input type="date" name="plan_end" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="deliverable" placeholder="交付物/判定标准" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <select name="priority" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+                <option value="P0紧急">P0 紧急</option>
+                <option value="P1高">P1 高</option>
+                <option value="P2中" selected>P2 中</option>
+                <option value="P3低">P3 低</option>
+            </select>
             <select name="parent_id" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
                 <option value="0">作为阶段（父任务）</option>
                 {% for ph in phases %}<option value="{{ ph.id }}">子任务（挂到阶段 {{ ph.wbs_code }}）</option>{% endfor %}
             </select>
-            <input name="work_content" placeholder="工作内容" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input name="deliverable" placeholder="交付物/判定标准" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
         </div>
-        <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">保存任务</button>
+        <div style="display:flex;gap:10px;align-items:center;">
+            <input name="work_content" placeholder="工作内容描述" style="flex:1;padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input type="file" name="attachment" style="font-size:13px;">
+            <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">保存</button>
+        </div>
     </form>
 </div>
 
@@ -50,14 +59,15 @@
 <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
     <thead>
         <tr style="background:#f5f7fa;text-align:left;">
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:60px;">WBS</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:55px;">WBS</th>
             <th style="padding:8px;border-bottom:2px solid #e0e4ea;">阶段/任务</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">负责人</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">协作/支撑</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">计划开始</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">计划结束</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">交付物/判定标准</th>
-            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">进度</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:70px;">等级</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:80px;">责任人</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:90px;">参与人</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">计划时间</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;">交付物</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:80px;">进度</th>
+            <th style="padding:8px;border-bottom:2px solid #e0e4ea;width:60px;">操作</th>
         </tr>
     </thead>
     <tbody>
@@ -66,31 +76,51 @@
         <tr style="background:#eef3fb;font-weight:600;">
             <td style="padding:8px;">{{ t.wbs_code }}</td>
             <td style="padding:8px;">{{ t.name }}</td>
-            <td style="padding:8px;">{{ t.owner or '' }}</td>
+            <td style="padding:8px;">
+                {% if t.priority=='P0紧急' %}<span style="color:#c0392b;">🔴 {{ t.priority }}</span>
+                {% elif t.priority=='P1高' %}<span style="color:#e67e22;">🟠 {{ t.priority }}</span>
+                {% else %}{{ t.priority or '' }}{% endif %}
+            </td>
+            <td style="padding:8px;font-weight:400;">{{ t.owner or '' }}</td>
             <td style="padding:8px;color:#666;font-weight:400;">{{ t.collaborators or '' }}</td>
-            <td style="padding:8px;color:#666;font-weight:400;">{{ t.plan_start or '' }}</td>
-            <td style="padding:8px;color:#666;font-weight:400;">{{ t.plan_end or '' }}</td>
-            <td style="padding:8px;color:#666;font-weight:400;">{{ t.deliverable or '' }}</td>
+            <td style="padding:8px;color:#666;font-weight:400;font-size:12px;">{{ t.plan_start or '' }}~{{ t.plan_end or '' }}</td>
+            <td style="padding:8px;font-weight:400;">
+                {{ t.deliverable or '' }}
+                {% if t.attachment_path %}<br>📎 <a href="{{ url_for('ext.wbs_download', filename=t.attachment_path) }}" style="color:#2563eb;font-size:12px;">附件</a>{% endif %}
+            </td>
             <td style="padding:8px;">{{ t.progress }}%</td>
+            <td style="padding:8px;">
+                <a href="{{ url_for('ext.wbs_task_edit', tid=t.id) }}" style="color:#2563eb;font-size:12px;">编辑</a>
+            </td>
         </tr>
         {% else %}
         <tr style="border-bottom:1px solid #eef;">
-            <td style="padding:6px 8px 6px 30px;color:#888;">{{ t.wbs_code }}</td>
+            <td style="padding:6px 8px 6px 28px;color:#888;">{{ t.wbs_code }}</td>
             <td style="padding:6px 8px;">{{ t.name }}</td>
+            <td style="padding:6px 8px;font-size:12px;">
+                {% if t.priority=='P0紧急' %}<span style="color:#c0392b;">P0</span>
+                {% elif t.priority=='P1高' %}<span style="color:#e67e22;">P1</span>
+                {% else %}<span style="color:#999;">{{ t.priority or '' }}</span>{% endif %}
+            </td>
             <td style="padding:6px 8px;">{{ t.owner or '' }}</td>
             <td style="padding:6px 8px;color:#666;">{{ t.collaborators or '' }}</td>
-            <td style="padding:6px 8px;color:#666;">{{ t.plan_start or '' }}</td>
-            <td style="padding:6px 8px;color:#666;">{{ t.plan_end or '' }}</td>
-            <td style="padding:6px 8px;color:#666;">{{ t.deliverable or '' }}</td>
+            <td style="padding:6px 8px;color:#666;font-size:12px;">{{ t.plan_start or '' }}~{{ t.plan_end or '' }}</td>
+            <td style="padding:6px 8px;color:#666;font-size:12px;">
+                {{ t.deliverable or '' }}
+                {% if t.attachment_path %}<br>📎 <a href="{{ url_for('ext.wbs_download', filename=t.attachment_path) }}" style="color:#2563eb;">下载</a>{% endif %}
+            </td>
             <td style="padding:6px 8px;">
                 <div style="background:#e0e4ea;border-radius:4px;height:8px;width:60px;">
                     <div style="background:#2563eb;height:8px;border-radius:4px;width:{{ t.progress }}%;"></div>
                 </div>
             </td>
+            <td style="padding:6px 8px;">
+                <a href="{{ url_for('ext.wbs_task_edit', tid=t.id) }}" style="color:#2563eb;font-size:12px;">编辑</a>
+            </td>
         </tr>
         {% endif %}
     {% else %}
-        <tr><td colspan="8" style="padding:30px;text-align:center;color:#999;">暂无任务，点击"添加任务"或"Excel导入"WBS格式开始</td></tr>
+        <tr><td colspan="9" style="padding:30px;text-align:center;color:#999;">暂无任务，点击"添加任务/阶段"开始拆解</td></tr>
     {% endfor %}
     </tbody>
 </table>

@@ -90,9 +90,16 @@ def init_plugin_tables():
         project_id INTEGER, wbs_code TEXT, parent_id INTEGER DEFAULT 0,
         name TEXT, work_content TEXT, owner TEXT, collaborators TEXT,
         plan_start TEXT, plan_end TEXT, deliverable TEXT,
+        priority TEXT DEFAULT 'P2中', attachment_path TEXT,
         status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
         sort_order INTEGER DEFAULT 0,
         FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE)''')
+    # 幂等加列（老库升级）
+    for col, ddl in [('priority', "TEXT DEFAULT 'P2中'"), ('attachment_path', 'TEXT')]:
+        try:
+            db.execute(f'ALTER TABLE wbs_tasks ADD COLUMN {col} {ddl}')
+        except Exception:
+            pass
     for p in PLUGINS:
         db.execute('''INSERT OR IGNORE INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint) VALUES (?,?,?,?,?,?,?)''',
