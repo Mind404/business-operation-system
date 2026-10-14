@@ -58,6 +58,11 @@ def login():
     return r.status_code in (200, 302)
 LOGIN_OK = login()
 clean_business_data()  # 幂等重置，保证每次从干净态开始
+# 压测环境：给 admin 全订阅业务插件，绕过插件守卫
+_conn = sqlite3.connect(DB)
+for _pid in ['workbench','requirements','tech_req','wbs','planning','production','bug','test','delivery','device','contract','data_mgmt']:
+    _conn.execute('INSERT OR IGNORE INTO user_plugins (user_id,plugin_id,subscribed_at) VALUES (1,?,?)', (_pid,'2026-10-14 18:00'))
+_conn.commit(); _conn.close()
 
 # ============================================================
 # 阶段1：注入虚拟数据（真实业务场景，VT-前缀可辨识）

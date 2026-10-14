@@ -26,10 +26,11 @@ def tojson_filter(value, indent=None, ensure_ascii=False):
 from ext_routes import ext_bp
 app.register_blueprint(ext_bp)
 
-# 插件化基底：建表 + 注册插件
+# 插件化基底：建表 + 注册插件 + 路由守卫
 import plugin_system
 with app.app_context():
     plugin_system.init_plugin_tables()
+plugin_system.register_plugin_guard(app)
 
 # ============================================================
 # 用户认证
@@ -108,6 +109,29 @@ def plugin_toggle(plugin_id):
     else:
         flash(msg, 'success')
     return redirect(url_for('plugin_center'))
+
+
+# ============================================================
+# 个人中心（核心插件）：用户信息 + 我的订阅
+# ============================================================
+@app.route('/profile')
+def profile():
+    db = get_db()
+    user_id = session.get('user_id')
+    subscribed = plugin_system.get_user_plugin_ids(user_id)
+    # 我的待办（未完成任务数）
+    todo_count = 0
+    try:
+        todo_count = db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE assignee_id=? AND status NOT IN ('已完成','已关闭')",
+            (user_id,)).fetchone()[0]
+    except Exception:
+        pass
+    my_plugins = [p for p in plugin_system.PLUGINS if p['id'] in subscribed]
+    return render_template('profile.html',
+                           todo_count=todo_count,
+                           my_plugins=my_plugins,
+                           subscribed_count=len(subscribed))
 
 # ============================================================
 # 角色权限管理

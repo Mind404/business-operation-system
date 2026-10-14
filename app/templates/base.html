@@ -19,19 +19,9 @@
                 </div>
             </div>
             <nav class="nav-menu">
-                {# 核心插件：总览置顶 + 工作台/需求库 #}
-                {% for p in nav_core %}
-                {% if p.id == 'overview' %}
+                {# 核心插件：总览看板 + 个人中心（常驻） #}
                 <div class="nav-group">
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item nav-item-top {% if request.path.startswith(p.nav_path) %}active{% endif %}">
-                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
-                    </a>
-                </div>
-                {% endif %}
-                {% endfor %}
-                <div class="nav-group">
-                    <div class="nav-group-title">核心</div>
-                    {% for p in nav_core if p.id != 'overview' %}
+                    {% for p in nav_core %}
                     <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if request.path.startswith(p.nav_path) %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>

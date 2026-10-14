@@ -1,28 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-插件化基底：插件注册表 + 用户订阅 + 动态导航
-每个业务模块是一个插件；核心插件常驻，业务插件按用户订阅显示。
+插件化基底：插件注册表 + 用户订阅 + 动态导航 + 路由守卫
+核心插件（总览看板/个人中心）常驻；其余全部业务插件，未订阅不显示也不可访问。
 """
 import sqlite3
-from flask import g, session, current_app
+from datetime import datetime
+from flask import g, session, current_app, redirect, url_for, request, flash
 
 # ============================================================
-# 插件清单（注册到 plugin_registry）
-# core=True 表示常驻核心，不可取消订阅
+# 插件清单
+# core=1 常驻不可关；core=0 业务插件，用户自行订阅
 # ============================================================
 PLUGINS = [
-    # --- 核心常驻 ---
+    # --- 核心常驻（基底只看这两个） ---
     {'id': 'overview',    'name': '总览看板',         'icon': '🗺️', 'group': '核心', 'core': 1,
      'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive'},
-    {'id': 'workbench',   'name': '我的工作台',       'icon': '📊', 'group': '核心', 'core': 1,
+    {'id': 'profile',      'name': '个人中心',         'icon': '👤', 'group': '核心', 'core': 1,
+     'desc': '我的信息、我的待办、我的插件订阅', 'endpoint': 'profile', 'nav_path': '/profile'},
+
+    # --- 业务插件（默认不订阅，去插件中心开启） ---
+    {'id': 'workbench',   'name': '我的工作台',       'icon': '📊', 'group': '业务', 'core': 0,
      'desc': '个人待办与快捷入口', 'endpoint': 'index', 'nav_path': '/'},
-    {'id': 'requirements','name': '需求数据库',       'icon': '📋', 'group': '核心', 'core': 1,
+    {'id': 'requirements','name': '需求数据库',       'icon': '📋', 'group': '业务', 'core': 0,
      'desc': '用户需求/集团系统侧/应用侧/领导任务，全流程源头', 'endpoint': 'requirements_list', 'nav_path': '/requirements'},
-    # --- 业务插件（可订阅） ---
     {'id': 'tech_req',    'name': '外部技术需求统计', 'icon': '🔬', 'group': '业务', 'core': 0,
      'desc': '集团系统侧技术特性跟踪：问题项 + 每日进展日志 + 版本响应要求', 'endpoint': 'ext.tech_req_list', 'nav_path': '/tech-reqs'},
     {'id': 'wbs',         'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
-     'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物、甘特视图', 'endpoint': 'ext.wbs_projects', 'nav_path': '/wbs'},
+     'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物', 'endpoint': 'ext.wbs_projects', 'nav_path': '/wbs'},
     {'id': 'planning',    'name': '产品与版本规划',   'icon': '📐', 'group': '业务', 'core': 0,
      'desc': '产品定义、软件版本规划、开发任务分解、技术规格', 'endpoint': 'planning_list', 'nav_path': '/planning'},
     {'id': 'production',  'name': '研发生产',         'icon': '🏭', 'group': '业务', 'core': 0,
@@ -40,6 +44,11 @@ PLUGINS = [
     {'id': 'data_mgmt',   'name': '数据管理',         'icon': '💾', 'group': '业务', 'core': 0,
      'desc': 'Excel导入导出、操作日志查询', 'endpoint': 'data_management', 'nav_path': '/data'},
 ]
+
+# 业务插件 endpoint → plugin_id 映射（用于路由守卫）
+_BIZ_ENDPOINTS = {p['endpoint']: p['id'] for p in PLUGINS if not p['core']}
+# 免守卫路径（登录、静态、插件中心本身、个人中心、总览）
+_WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/executive', '/logout')
 
 
 def get_db():
@@ -84,7 +93,6 @@ def init_plugin_tables():
         status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
         sort_order INTEGER DEFAULT 0,
         FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE)''')
-    # 注册插件
     for p in PLUGINS:
         db.execute('''INSERT OR IGNORE INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint) VALUES (?,?,?,?,?,?,?)''',
@@ -93,34 +101,51 @@ def init_plugin_tables():
 
 
 def get_user_plugin_ids(user_id):
-    """返回用户订阅的插件id集合；未订阅过任何插件时默认全选（平滑过渡）"""
+    """返回用户订阅的业务插件id集合；首次使用只给核心，不自动订阅任何业务插件。"""
     db = get_db()
     rows = db.execute('SELECT plugin_id FROM user_plugins WHERE user_id=?', (user_id,)).fetchall()
-    if not rows:
-        # 首次使用：默认订阅全部非核心插件（保持现有界面不突变）
-        all_biz = [p['id'] for p in PLUGINS]
-        for pid in all_biz:
-            db.execute('INSERT OR IGNORE INTO user_plugins (user_id, plugin_id, subscribed_at) VALUES (?,?,?)',
-                       (user_id, pid, datetime.now().strftime('%Y-%m-%d %H:%M')))
-        db.commit()
-        return set(all_biz)
     return {r['plugin_id'] for r in rows}
 
 
 def inject_nav_context():
-    """注入模板导航上下文：核心插件 + 用户订阅的业务插件（仅含路由已注册的）"""
-    from flask import current_app
+    """注入模板导航：核心2个 + 用户订阅的业务插件（仅含路由已注册的）"""
     user_id = session.get('user_id')
     if not user_id:
         return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
     subscribed = get_user_plugin_ids(user_id)
-    # 只保留路由已注册的插件（未开发完的不在导航里显示）
     registered = set(current_app.view_functions.keys())
     available = [p for p in PLUGINS if p['endpoint'] in registered]
     core_plugins = [p for p in available if p['core']]
     biz_plugins = [p for p in available if not p['core'] and p['id'] in subscribed]
     return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
             'nav_all_plugins': available, 'user_subscribed': subscribed}
+
+
+def register_plugin_guard(app):
+    """路由守卫：未订阅的业务插件路由直接跳插件中心，不进视图。"""
+    @app.before_request
+    def _guard():
+        if request.path.startswith(_WHITELIST_PREFIX):
+            return None
+        # 静态资源、POST 表单提交里的 toggle 等放行
+        ep = request.endpoint
+        if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
+                            'executive_dashboard', 'login', 'logout'):
+            return None
+        # 该 endpoint 属于某个业务插件？
+        pid = _BIZ_ENDPOINTS.get(ep)
+        if not pid:
+            return None
+        # 核心插件 endpoint 放行
+        if pid in ('overview', 'profile'):
+            return None
+        user_id = session.get('user_id')
+        if not user_id:
+            return redirect(url_for('login'))
+        if pid not in get_user_plugin_ids(user_id):
+            flash('请先在插件中心开启该功能', 'info')
+            return redirect(url_for('plugin_center'))
+        return None
 
 
 def toggle_plugin(user_id, plugin_id):
@@ -142,6 +167,3 @@ def toggle_plugin(user_id, plugin_id):
         msg = f'已订阅 {p["name"]}'
     db.commit()
     return True, msg
-
-
-from datetime import datetime
