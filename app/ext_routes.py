@@ -3,7 +3,7 @@
 扩展模块路由：测试组、交付服务组、产品总体组、质量组强化、研发组
 每个模块遵循认知负荷优化原则：列表简洁、表单分步、必填优先
 """
-from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash
+from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash, session
 from datetime import datetime
 import io, os, json, random
 
@@ -1515,3 +1515,287 @@ def task_update(tid):
     db.commit()
     log_operation('任务', '更新', f'#{tid} 状态改为 {status or task["status"]}', session.get('username', 'admin'))
     return redirect(url_for('ext.my_tasks'))
+
+
+# ============================================================
+# 插件A：外部技术需求统计（集团系统侧技术特性跟踪）
+# 字段：阶段/类型分组/事项/计划完成时间/问题描述/版本响应要求
+# 进展：滚动日志子表（tech_req_logs），每条带日期+记录人
+# ============================================================
+@ext_bp.route('/tech-reqs')
+def tech_req_list():
+    db = get_db()
+    stage = request.args.get('stage', '')
+    status = request.args.get('status', '')
+    q = request.args.get('q', '')
+    sql = 'SELECT t.*, (SELECT COUNT(*) FROM tech_req_logs l WHERE l.tech_req_id=t.id) AS log_count FROM tech_requirements t WHERE 1=1'
+    params = []
+    if stage:
+        sql += ' AND t.stage=?'
+        params.append(stage)
+    if status:
+        sql += ' AND t.status=?'
+        params.append(status)
+    if q:
+        sql += ' AND (t.item LIKE ? OR t.description LIKE ? OR t.category LIKE ?)'
+        params.extend([f'%{q}%']*3)
+    sql += ' ORDER BY t.sort_order, t.id'
+    rows = db.execute(sql, params).fetchall()
+    stages = [r['stage'] for r in db.execute('SELECT DISTINCT stage FROM tech_requirements WHERE stage IS NOT NULL AND stage!=""').fetchall()]
+    return render_template('ext/tech_req_list.html', rows=rows, stages=stages,
+                           stage=stage, status=status, q=q)
+
+
+@ext_bp.route('/tech-reqs/add', methods=['GET', 'POST'])
+def tech_req_add():
+    db = get_db()
+    if request.method == 'POST':
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.execute('''INSERT INTO tech_requirements
+            (stage, category, item, planned_date, description, version_response, product_id, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (request.form.get('stage',''), request.form.get('category',''), request.form.get('item',''),
+             request.form.get('planned_date',''), request.form.get('description',''),
+             request.form.get('version_response',''), request.form.get('product_id',1),
+             request.form.get('status','进行中'), now, now))
+        db.commit()
+        log_operation('外部技术需求', '新增', request.form.get('item',''), session.get('username','admin'))
+        return redirect(url_for('ext.tech_req_list'))
+    return render_template('ext/tech_req_form.html', r=None)
+
+
+@ext_bp.route('/tech-reqs/<int:rid>/edit', methods=['GET', 'POST'])
+def tech_req_edit(rid):
+    db = get_db()
+    r = db.execute('SELECT * FROM tech_requirements WHERE id=?', (rid,)).fetchone()
+    if not r:
+        return redirect(url_for('ext.tech_req_list'))
+    if request.method == 'POST':
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.execute('''UPDATE tech_requirements SET stage=?, category=?, item=?, planned_date=?,
+            description=?, version_response=?, status=?, updated_at=? WHERE id=?''',
+            (request.form.get('stage',''), request.form.get('category',''), request.form.get('item',''),
+             request.form.get('planned_date',''), request.form.get('description',''),
+             request.form.get('version_response',''), request.form.get('status','进行中'), now, rid))
+        db.commit()
+        log_operation('外部技术需求', '编辑', f'#{rid} {request.form.get("item","")}', session.get('username','admin'))
+        return redirect(url_for('ext.tech_req_detail', rid=rid))
+    return render_template('ext/tech_req_form.html', r=r)
+
+
+@ext_bp.route('/tech-reqs/<int:rid>')
+def tech_req_detail(rid):
+    db = get_db()
+    r = db.execute('SELECT * FROM tech_requirements WHERE id=?', (rid,)).fetchone()
+    if not r:
+        return redirect(url_for('ext.tech_req_list'))
+    logs = db.execute('SELECT * FROM tech_req_logs WHERE tech_req_id=? ORDER BY log_date DESC, id DESC', (rid,)).fetchall()
+    return render_template('ext/tech_req_detail.html', r=r, logs=logs)
+
+
+@ext_bp.route('/tech-reqs/<int:rid>/log', methods=['POST'])
+def tech_req_add_log(rid):
+    db = get_db()
+    content = request.form.get('content','').strip()
+    log_date = request.form.get('log_date','') or datetime.now().strftime('%Y-%m-%d')
+    if content:
+        db.execute('''INSERT INTO tech_req_logs (tech_req_id, log_date, content, author, created_at)
+            VALUES (?,?,?,?,?)''',
+            (rid, log_date, content, session.get('user_name','admin'),
+             datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        db.execute('UPDATE tech_requirements SET updated_at=? WHERE id=?',
+                   (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), rid))
+        db.commit()
+        log_operation('外部技术需求', '进展', f'#{rid} 追加进展', session.get('username','admin'))
+    return redirect(url_for('ext.tech_req_detail', rid=rid))
+
+
+@ext_bp.route('/tech-reqs/<int:rid>/delete', methods=['POST'])
+def tech_req_delete(rid):
+    db = get_db()
+    db.execute('DELETE FROM tech_req_logs WHERE tech_req_id=?', (rid,))
+    db.execute('DELETE FROM tech_requirements WHERE id=?', (rid,))
+    db.commit()
+    log_operation('外部技术需求', '删除', f'#{rid}', session.get('username','admin'))
+    return redirect(url_for('ext.tech_req_list'))
+
+
+@ext_bp.route('/tech-reqs/import', methods=['POST'])
+def tech_req_import():
+    """按图1格式导入：序号|类型|事项|计划完成时间|描述|优化事项及进展|版本响应要求"""
+    f = request.files.get('file')
+    if not f:
+        flash('请选择文件', 'error')
+        return redirect(url_for('ext.tech_req_list'))
+    import openpyxl
+    wb = openpyxl.load_workbook(f, data_only=True)
+    ws = wb.active
+    db = get_db()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    count = 0
+    current_category = ''
+    for row in ws.iter_rows(min_row=3, values_only=True):  # 第1行标题，第2行表头
+        if not row or not row[2]:  # 事项列为空跳过
+            continue
+        # 类型分组列（B列）合并单元格，空则继承上一个
+        cat = str(row[1] or '').strip() if row[1] else ''
+        if cat:
+            current_category = cat
+        item = str(row[2] or '').strip()
+        if not item:
+            continue
+        planned = str(row[3] or '').strip() if row[3] else ''
+        desc = str(row[4] or '').strip() if row[4] else ''
+        progress = str(row[5] or '').strip() if row[5] else ''
+        version_resp = str(row[6] or '').strip() if row[6] else ''
+        stage = str(row[0] or '').strip() if row[0] else ''
+        # stage 可能在标题行，用第一行A1
+        if not stage:
+            stage = str(ws.cell(1,1).value or '').strip()
+        db.execute('''INSERT INTO tech_requirements
+            (stage, category, item, planned_date, description, version_response, product_id, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+            (stage, current_category, item, planned, desc, version_resp, 1, '进行中', now, now))
+        rid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+        # 进展列拆成多条日志（按换行或日期分段）
+        if progress:
+            for line in progress.split('\n'):
+                line = line.strip()
+                if line:
+                    db.execute('''INSERT INTO tech_req_logs (tech_req_id, log_date, content, author, created_at)
+                        VALUES (?,?,?,?,?)''', (rid, now[:10], line, '导入', now))
+        count += 1
+    db.commit()
+    flash(f'成功导入 {count} 条技术需求', 'success')
+    return redirect(url_for('ext.tech_req_list'))
+
+
+# ============================================================
+# 插件B：WBS计划管理（项目工作分解结构）
+# 字段：WBS编号|阶段/任务|工作内容|负责人|协作支撑|计划开始|计划结束|交付物
+# ============================================================
+@ext_bp.route('/wbs')
+def wbs_projects():
+    db = get_db()
+    rows = db.execute('''SELECT p.*,
+        (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id) AS task_count,
+        (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id AND t.parent_id=0) AS phase_count
+        FROM wbs_projects p ORDER BY p.id DESC''').fetchall()
+    return render_template('ext/wbs_projects.html', rows=rows)
+
+
+@ext_bp.route('/wbs/add', methods=['GET', 'POST'])
+def wbs_project_add():
+    db = get_db()
+    if request.method == 'POST':
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.execute('''INSERT INTO wbs_projects (name, description, owner, start_date, end_date, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?)''',
+            (request.form.get('name',''), request.form.get('description',''), request.form.get('owner',''),
+             request.form.get('start_date',''), request.form.get('end_date',''),
+             request.form.get('status','进行中'), now, now))
+        pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+        db.commit()
+        log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
+        return redirect(url_for('ext.wbs_project_detail', pid=pid))
+    return render_template('ext/wbs_project_form.html', p=None)
+
+
+@ext_bp.route('/wbs/<int:pid>')
+def wbs_project_detail(pid):
+    db = get_db()
+    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return redirect(url_for('ext.wbs_projects'))
+    tasks = db.execute('''SELECT * FROM wbs_tasks WHERE project_id=? ORDER BY wbs_code, id''', (pid,)).fetchall()
+    # 分组：父任务（阶段）和子任务
+    phases = [t for t in tasks if t['parent_id'] == 0]
+    return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases)
+
+
+@ext_bp.route('/wbs/<int:pid>/task/add', methods=['POST'])
+def wbs_task_add(pid):
+    db = get_db()
+    parent_id = request.form.get('parent_id', 0) or 0
+    db.execute('''INSERT INTO wbs_tasks
+        (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
+         plan_start, plan_end, deliverable, status, progress)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (pid, request.form.get('wbs_code',''), parent_id, request.form.get('name',''),
+         request.form.get('work_content',''), request.form.get('owner',''), request.form.get('collaborators',''),
+         request.form.get('plan_start',''), request.form.get('plan_end',''),
+         request.form.get('deliverable',''), request.form.get('status','未开始'),
+         int(request.form.get('progress',0))))
+    db.commit()
+    log_operation('WBS', '新增任务', f'P{pid} {request.form.get("name","")}', session.get('username','admin'))
+    return redirect(url_for('ext.wbs_project_detail', pid=pid))
+
+
+@ext_bp.route('/wbs/task/<int:tid>/edit', methods=['POST'])
+def wbs_task_edit(tid):
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return redirect(url_for('ext.wbs_projects'))
+    db.execute('''UPDATE wbs_tasks SET wbs_code=?, name=?, work_content=?, owner=?, collaborators=?,
+        plan_start=?, plan_end=?, deliverable=?, status=?, progress=? WHERE id=?''',
+        (request.form.get('wbs_code',t['wbs_code']), request.form.get('name',t['name']),
+         request.form.get('work_content',t['work_content']), request.form.get('owner',t['owner']),
+         request.form.get('collaborators',t['collaborators']), request.form.get('plan_start',t['plan_start']),
+         request.form.get('plan_end',t['plan_end']), request.form.get('deliverable',t['deliverable']),
+         request.form.get('status',t['status']), int(request.form.get('progress',t['progress'])), tid))
+    db.commit()
+    return redirect(url_for('ext.wbs_project_detail', pid=t['project_id']))
+
+
+@ext_bp.route('/wbs/task/<int:tid>/delete', methods=['POST'])
+def wbs_task_delete(tid):
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if t:
+        db.execute('DELETE FROM wbs_tasks WHERE id=? OR parent_id=?', (tid, tid))
+        db.commit()
+    return redirect(url_for('ext.wbs_project_detail', pid=t['project_id'] if t else 0))
+
+
+@ext_bp.route('/wbs/<int:pid>/import', methods=['POST'])
+def wbs_import(pid):
+    """按图2格式导入：WBS编号|阶段/任务|工作内容|负责人|协作支撑|计划开始|计划结束|交付物"""
+    f = request.files.get('file')
+    if not f:
+        flash('请选择文件', 'error')
+        return redirect(url_for('ext.wbs_project_detail', pid=pid))
+    import openpyxl
+    wb = openpyxl.load_workbook(f, data_only=True)
+    ws = wb.active
+    db = get_db()
+    count = 0
+    for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
+        if not row or not row[0]:
+            continue
+        code = str(row[0]).strip()
+        name = str(row[1] or '').strip()
+        if not name:
+            continue
+        # 判断是否为阶段（父任务）：wbs_code 不含小数点
+        is_phase = '.' not in code
+        parent_id = 0
+        if not is_phase:
+            # 找父任务（wbs_code 前缀，如 1.1 的父是 1）
+            parent_code = code.split('.')[0]
+            parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
+                                (pid, parent_code)).fetchone()
+            if parent:
+                parent_id = parent['id']
+        db.execute('''INSERT INTO wbs_tasks
+            (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
+             plan_start, plan_end, deliverable, status, progress)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (pid, code, parent_id, name,
+             str(row[2] or '').strip(), str(row[3] or '').strip(), str(row[4] or '').strip(),
+             str(row[5] or '').strip(), str(row[6] or '').strip(), str(row[7] or '').strip(),
+             '未开始', 0))
+        count += 1
+    db.commit()
+    flash(f'成功导入 {count} 条WBS任务', 'success')
+    return redirect(url_for('ext.wbs_project_detail', pid=pid))

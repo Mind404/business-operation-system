@@ -19,67 +19,41 @@
                 </div>
             </div>
             <nav class="nav-menu">
-                <!-- 总览（置顶首位） -->
+                {# 核心插件：总览置顶 + 工作台/需求库 #}
+                {% for p in nav_core %}
+                {% if p.id == 'overview' %}
                 <div class="nav-group">
-                    <a href="{{ url_for('executive_dashboard') }}" class="nav-item nav-item-top {% if request.endpoint == 'executive_dashboard' %}active{% endif %}">
-                        <span class="nav-icon">🗺️</span> 总览
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item nav-item-top {% if request.path.startswith(p.nav_path) %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                 </div>
-                <!-- 工作台 -->
+                {% endif %}
+                {% endfor %}
                 <div class="nav-group">
-                    <div class="nav-group-title">工作台</div>
-                    <a href="{{ url_for('index') }}" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}">
-                        <span class="nav-icon">📊</span> 我的工作台
+                    <div class="nav-group-title">核心</div>
+                    {% for p in nav_core if p.id != 'overview' %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if request.path.startswith(p.nav_path) %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
-                    <a href="{{ url_for('ext.my_tasks') }}" class="nav-item {% if request.endpoint in ['ext.my_tasks','ext.task_add','ext.task_detail','ext.task_update'] %}active{% endif %}">
-                        <span class="nav-icon">✅</span> 我的任务
-                    </a>
-                </div>
-
-                <!-- 需求与规划 -->
-                <div class="nav-group">
-                    <div class="nav-group-title">需求与规划</div>
-                    <a href="{{ url_for('requirements_list') }}" class="nav-item {% if request.endpoint.startswith('requirements_') or request.endpoint.startswith('ext.feedback_') or request.endpoint.startswith('ext.ticket_') %}active{% endif %}">
-                        <span class="nav-icon">📋</span> 需求数据库
-                    </a>
-                    <a href="{{ url_for('planning_list') }}" class="nav-item {% if request.endpoint in ['planning_list','product_add','product_edit'] or request.endpoint.startswith('version_') or request.endpoint.startswith('ext.tech_spec') %}active{% endif %}">
-                        <span class="nav-icon">📐</span> 产品与版本规划
-                    </a>
-                    <a href="{{ url_for('ext.contract_list') }}" class="nav-item {% if request.endpoint.startswith('ext.contract_') %}active{% endif %}">
-                        <span class="nav-icon">📄</span> 合同跟进
-                    </a>
+                    {% endfor %}
                 </div>
 
-                <!-- 研发与生产 -->
+                {# 业务插件：按用户订阅动态显示 #}
+                {% if nav_biz %}
                 <div class="nav-group">
-                    <div class="nav-group-title">研发与生产</div>
-                    <a href="{{ url_for('production_dashboard') }}" class="nav-item {% if request.endpoint in ['production_dashboard','inventory_add','inventory_edit','requisition_add','production_order_add','ext.resource_list','ext.resource_add'] or request.endpoint.startswith('schedule_') %}active{% endif %}">
-                        <span class="nav-icon">🏭</span> 生产管理
+                    <div class="nav-group-title">我的工作</div>
+                    {% for p in nav_biz %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if request.path.startswith(p.nav_path) %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
-                    <a href="{{ url_for('bug_list') }}" class="nav-item {% if request.endpoint.startswith('bug_') %}active{% endif %}">
-                        <span class="nav-icon">🐛</span> Bug管理
-                    </a>
-                    <a href="{{ url_for('ext.test_case_list') }}" class="nav-item {% if request.endpoint.startswith('ext.test_') %}active{% endif %}">
-                        <span class="nav-icon">🧪</span> 测试管理
-                    </a>
+                    {% endfor %}
                 </div>
+                {% endif %}
 
-                <!-- 交付与运维 -->
+                {# 插件中心 #}
                 <div class="nav-group">
-                    <div class="nav-group-title">交付与运维</div>
-                    <a href="{{ url_for('ext.delivery_plan_list') }}" class="nav-item {% if request.endpoint.startswith('ext.delivery_plan_') or request.endpoint.startswith('ext.revenue_') or request.endpoint.startswith('ext.user_contract_') %}active{% endif %}">
-                        <span class="nav-icon">📦</span> 交付管理
-                    </a>
-                    <a href="{{ url_for('ext.device_center') }}" class="nav-item {% if request.endpoint.startswith('ext.device_') or request.endpoint.startswith('ext.ota_') or request.endpoint == 'ext.device_center' %}active{% endif %}">
-                        <span class="nav-icon">📡</span> 设备运维与OTA
-                    </a>
-                </div>
-
-                <!-- 系统管理 -->
-                <div class="nav-group">
-                    <div class="nav-group-title">系统管理</div>
-                    <a href="{{ url_for('data_management') }}" class="nav-item {% if request.endpoint.startswith('data_') or request.endpoint == 'logs' %}active{% endif %}">
-                        <span class="nav-icon">💾</span> 数据管理
+                    <a href="{{ url_for('plugin_center') }}" class="nav-item {% if request.endpoint == 'plugin_center' %}active{% endif %}">
+                        <span class="nav-icon">🧩</span> 插件中心
                     </a>
                 </div>
             </nav>

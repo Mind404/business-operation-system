@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}WBS计划管理 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🗓️ WBS计划管理</h1>
+    <p class="page-desc">项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物</p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('ext.wbs_project_add') }}" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;text-decoration:none;font-size:13px;">+ 新建项目</a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, msg in messages %}
+  <div style="padding:10px 16px;margin:8px 0;border-radius:6px;{% if category=='success' %}background:#e6f7e6;color:#2a7a2a;{% else %}background:#fde6e6;color:#a33;{% endif %}">{{ msg }}</div>
+  {% endfor %}
+{% endwith %}
+
+<table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
+    <thead>
+        <tr style="background:#f5f7fa;text-align:left;">
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">项目名称</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">负责人</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">时间范围</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">阶段数</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">任务数</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">状态</th>
+            <th style="padding:10px;border-bottom:2px solid #e0e4ea;">操作</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+        <tr style="border-bottom:1px solid #eef;">
+            <td style="padding:10px;"><a href="{{ url_for('ext.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;font-weight:500;">{{ r.name }}</a></td>
+            <td style="padding:10px;">{{ r.owner or '' }}</td>
+            <td style="padding:10px;color:#666;font-size:12px;">{{ r.start_date or '' }} ~ {{ r.end_date or '' }}</td>
+            <td style="padding:10px;">{{ r.phase_count }}</td>
+            <td style="padding:10px;">{{ r.task_count }}</td>
+            <td style="padding:10px;">{{ r.status }}</td>
+            <td style="padding:10px;">
+                <a href="{{ url_for('ext.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;">进入 →</a>
+            </td>
+        </tr>
+    {% else %}
+        <tr><td colspan="7" style="padding:30px;text-align:center;color:#999;">暂无项目，点击"新建项目"开始</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

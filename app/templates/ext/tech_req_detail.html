@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ r.item }} - 技术需求详情{% endblock %}
+{% block content %}
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('ext.tech_req_list') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回列表</a>
+</div>
+
+<div class="page-header">
+    <h1>🔬 {{ r.item }}</h1>
+    <p style="color:#666;font-size:13px;">{{ r.stage }} · {{ r.category }} · 计划完成：{{ r.planned_date or '/' }} · 状态：{{ r.status }}</p>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+    <div style="background:#fff;padding:16px;border-radius:8px;border:1px solid #e0e4ea;">
+        <h3 style="margin:0 0 8px;font-size:14px;color:#333;">问题描述</h3>
+        <p style="margin:0;font-size:13px;color:#555;line-height:1.6;">{{ r.description or '（无）' }}</p>
+    </div>
+    <div style="background:#fff8e6;padding:16px;border-radius:8px;border:1px solid #f0d89a;">
+        <h3 style="margin:0 0 8px;font-size:14px;color:#8a6d00;">版本响应要求</h3>
+        <p style="margin:0;font-size:13px;color:#6b5500;line-height:1.6;">{{ r.version_response or '（无）' }}</p>
+    </div>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <h2 style="font-size:16px;margin:0;">📋 优化事项及进展（{{ logs|length }}条）</h2>
+    <a href="{{ url_for('ext.tech_req_edit', rid=r.id) }}" style="padding:6px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑基本信息</a>
+</div>
+
+<!-- 追加进展表单 -->
+<form method="post" action="{{ url_for('ext.tech_req_add_log', rid=r.id) }}" style="background:#f5f7fa;padding:14px;border-radius:8px;margin-bottom:16px;">
+    <div style="display:flex;gap:10px;align-items:flex-start;">
+        <input type="date" name="log_date" value="{{ '' }}" style="padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+        <textarea name="content" rows="2" placeholder="记录今日进展，如：9.24日晚在轨已更新参数配置..." style="flex:1;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;" required></textarea>
+        <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">追加进展</button>
+    </div>
+</form>
+
+<!-- 进展时间线 -->
+<div style="background:#fff;border:1px solid #e0e4ea;border-radius:8px;overflow:hidden;">
+    {% for log in logs %}
+    <div style="display:flex;gap:14px;padding:14px 16px;border-bottom:1px solid #eef;">
+        <div style="min-width:90px;text-align:center;">
+            <div style="font-size:12px;color:#2563eb;font-weight:600;">{{ log.log_date }}</div>
+            <div style="font-size:11px;color:#999;margin-top:2px;">{{ log.author }}</div>
+        </div>
+        <div style="width:2px;background:#e0e4ea;"></div>
+        <div style="flex:1;font-size:13px;color:#444;line-height:1.6;">{{ log.content }}</div>
+    </div>
+    {% else %}
+    <div style="padding:30px;text-align:center;color:#999;font-size:13px;">暂无进展记录，在上方追加第一条</div>
+    {% endfor %}
+</div>
+{% endblock %}

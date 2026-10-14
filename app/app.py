@@ -26,6 +26,11 @@ def tojson_filter(value, indent=None, ensure_ascii=False):
 from ext_routes import ext_bp
 app.register_blueprint(ext_bp)
 
+# 插件化基底：建表 + 注册插件
+import plugin_system
+with app.app_context():
+    plugin_system.init_plugin_tables()
+
 # ============================================================
 # 用户认证
 # ============================================================
@@ -47,8 +52,13 @@ def require_login():
 
 @app.context_processor
 def inject_user():
-    """所有模板可访问当前用户"""
-    return {'current_user': session.get('user_name'), 'current_role': session.get('user_role')}
+    """所有模板可访问当前用户 + 插件导航上下文"""
+    ctx = {'current_user': session.get('user_name'), 'current_role': session.get('user_role')}
+    try:
+        ctx.update(plugin_system.inject_nav_context())
+    except Exception:
+        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set()})
+    return ctx
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -77,6 +87,27 @@ def logout():
     log_operation('系统', '登出', f'{username} 退出系统', username)
     session.clear()
     return redirect(url_for('login'))
+
+# ============================================================
+# 插件中心：浏览与订阅业务插件
+# ============================================================
+@app.route('/plugins')
+def plugin_center():
+    db = get_db()
+    user_id = session.get('user_id')
+    subscribed = plugin_system.get_user_plugin_ids(user_id)
+    plugins = db.execute('SELECT * FROM plugin_registry ORDER BY core DESC, id').fetchall()
+    return render_template('plugin_center.html', plugins=plugins, subscribed=subscribed)
+
+@app.route('/plugins/toggle/<plugin_id>', methods=['POST'])
+def plugin_toggle(plugin_id):
+    user_id = session.get('user_id')
+    ok, msg = plugin_system.toggle_plugin(user_id, plugin_id)
+    if not ok:
+        flash(msg, 'error')
+    else:
+        flash(msg, 'success')
+    return redirect(url_for('plugin_center'))
 
 # ============================================================
 # 角色权限管理

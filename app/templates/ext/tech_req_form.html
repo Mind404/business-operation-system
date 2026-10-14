@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑' if r else '新增' }}技术需求 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{% if r %}✏️ 编辑技术需求{% else %}➕ 新增技术需求{% endif %}</h1>
+</div>
+
+<form method="post" style="max-width:780px;background:#fff;padding:24px;border-radius:8px;border:1px solid #e0e4ea;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div>
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">所属阶段</label>
+            <input type="text" name="stage" value="{{ r.stage if r else '' }}" placeholder="如：窄带增强一阶段" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+        </div>
+        <div>
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">类型分组</label>
+            <input type="text" name="category" value="{{ r.category if r else '' }}" placeholder="如：窄带基本业务性能提升" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+        </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">事项名称 *</label>
+        <input type="text" name="item" value="{{ r.item if r else '' }}" required style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div>
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">计划完成时间</label>
+            <input type="text" name="planned_date" value="{{ r.planned_date if r else '' }}" placeholder="如：9.30 或 2026-10-15" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+        </div>
+        <div>
+            <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">状态</label>
+            <select name="status" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+                {% for st in ['进行中','已完成','阻塞','暂缓'] %}
+                <option value="{{ st }}" {% if r and r.status==st %}selected{% endif %}>{{ st }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">问题描述</label>
+        <textarea name="description" rows="3" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">{{ r.description if r else '' }}</textarea>
+    </div>
+    <div style="margin-bottom:20px;">
+        <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">版本响应要求</label>
+        <textarea name="version_response" rows="2" placeholder="如：暂定10.15前完成开发，10.30前在轨验证，11月发布该特性" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">{{ r.version_response if r else '' }}</textarea>
+    </div>
+    <div style="display:flex;gap:10px;">
+        <button type="submit" style="padding:9px 24px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">保存</button>
+        <a href="{{ url_for('ext.tech_req_list') }}" style="padding:9px 24px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:14px;">取消</a>
+    </div>
+</form>
+{% endblock %}

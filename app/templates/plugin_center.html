@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}插件中心 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🧩 插件中心</h1>
+    <p class="page-desc">按需订阅你的工作模块，未订阅的模块不会出现在左侧导航。取消订阅只隐藏入口，数据保留不删。</p>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, msg in messages %}
+    <div class="alert alert-{{ category }}" style="padding:10px 16px;margin:12px 0;border-radius:6px;{% if category=='success' %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#fde6e6;color:#a33;border:1px solid #f0b2b2;{% endif %}">{{ msg }}</div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+<div class="stats-grid" style="margin-bottom:20px;">
+    <div class="stat-card"><div class="stat-value">{{ plugins|length }}</div><div class="stat-label">可用插件</div></div>
+    <div class="stat-card"><div class="stat-value">{{ subscribed|length }}</div><div class="stat-label">已订阅</div></div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;">
+{% for p in plugins %}
+  <div style="border:1px solid #e0e4ea;border-radius:8px;padding:18px;background:#fff;{% if p.core %}opacity:0.85;{% endif %}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+      <div>
+        <div style="font-size:20px;margin-bottom:4px;">{{ p.icon }} {{ p.name }}</div>
+        <div style="font-size:12px;color:#888;">
+          {% if p.core %}<span style="background:#eef2f7;padding:2px 8px;border-radius:10px;">核心常驻</span>
+          {% else %}<span style="background:#f5f5f5;padding:2px 8px;border-radius:10px;">业务插件</span>{% endif %}
+        </div>
+      </div>
+      {% if p.core %}
+        <span style="font-size:12px;color:#999;">常驻</span>
+      {% else %}
+        <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
+          <button type="submit" style="padding:6px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;
+            {% if p.id in subscribed %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#eef2f7;color:#333;border:1px solid #ccd;{% endif %}">
+            {% if p.id in subscribed %}✓ 已订阅 · 点击取消{% else %}+ 订阅{% endif %}
+          </button>
+        </form>
+      {% endif %}
+    </div>
+    <p style="font-size:13px;color:#555;line-height:1.5;margin:8px 0 0;">{{ p.description }}</p>
+  </div>
+{% endfor %}
+</div>
+{% endblock %}
