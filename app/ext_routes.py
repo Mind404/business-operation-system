@@ -1747,6 +1747,9 @@ def wbs_task_add(pid):
 
 @ext_bp.route('/wbs/task/<int:tid>/edit', methods=['GET', 'POST'])
 def wbs_task_edit(tid):
+    if session.get('user_role') != 'admin':
+        flash('只有管理员可以修改任务，如需调整请联系管理员', 'error')
+        return redirect(request.referrer or url_for('ext.wbs_projects'))
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
@@ -1771,6 +1774,9 @@ def wbs_task_edit(tid):
 
 @ext_bp.route('/wbs/task/<int:tid>/delete', methods=['POST'])
 def wbs_task_delete(tid):
+    if session.get('user_role') != 'admin':
+        flash('只有管理员可以删除任务', 'error')
+        return redirect(request.referrer or url_for('ext.wbs_projects'))
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if t:
