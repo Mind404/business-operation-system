@@ -1888,6 +1888,34 @@ def wbs_task_inline(tid):
     return jsonify({'ok': True, 'value': value})
 
 
+@ext_bp.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
+def wbs_task_quickadd(pid):
+    """Excel风格快速新建：按WBS编号自动判断父子层级"""
+    db = get_db()
+    code = (request.form.get('wbs_code') or '').strip()
+    name = (request.form.get('name') or '').strip()
+    if not code or not name:
+        return jsonify({'ok': False, 'msg': 'WBS号和任务名必填'}), 400
+    parent_id = 0
+    if '.' in code:
+        parent_code = code.split('.')[0]
+        parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
+                            (pid, parent_code)).fetchone()
+        if parent:
+            parent_id = parent['id']
+    db.execute('''INSERT INTO wbs_tasks
+        (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
+         plan_start, plan_end, deliverable, status, progress)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (pid, code, parent_id, name,
+         request.form.get('work_content',''), request.form.get('owner',''),
+         request.form.get('collaborators',''), request.form.get('plan_start',''),
+         request.form.get('plan_end',''), request.form.get('deliverable',''),
+         '未开始', 0))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @ext_bp.route('/wbs/task/<int:tid>/notes_data')
 def wbs_task_notes_data(tid):
     import json

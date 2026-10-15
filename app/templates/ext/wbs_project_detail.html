@@ -16,7 +16,6 @@
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
         {% if current_role == 'admin' %}
         <a href="{{ url_for('ext.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
-        <button onclick="addRow()" style="padding:7px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">+ 添加任务</button>
         {% endif %}
         <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">📥 下载模板</a>
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">📤 导出Excel</a>
@@ -30,39 +29,10 @@
 {% endwith %}
 
 {% if current_role == 'admin' %}
-<form id="importForm" method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
+<form method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
     <input type="file" name="file" accept=".xlsx,.xls" style="font-size:13px;">
     <button type="submit" style="padding:6px 12px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
 </form>
-{% endif %}
-
-<!-- 添加任务表单（仅admin） -->
-{% if current_role == 'admin' %}
-<div id="addForm" style="display:none;background:#f5f7fa;padding:16px;border-radius:8px;margin-bottom:16px;">
-    <form method="post" action="{{ url_for('ext.wbs_task_add', pid=p.id) }}">
-        <div style="display:grid;grid-template-columns:80px 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
-            <input name="wbs_code" placeholder="WBS号" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="name" placeholder="任务名称 *" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="owner" placeholder="负责人" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="collaborators" placeholder="协作/支撑" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
-            <input type="date" name="plan_start" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input type="date" name="plan_end" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <select name="parent_id" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-                <option value="0">作为阶段（一级）</option>
-                {% for ph in tasks if ph.parent_id == 0 %}
-                <option value="{{ ph.id }}">挂到阶段 {{ ph.wbs_code }} {{ ph.name }}</option>
-                {% endfor %}
-            </select>
-            <input name="deliverable" placeholder="交付物/判定标准" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-        </div>
-        <div style="display:flex;gap:10px;align-items:center;">
-            <input name="work_content" placeholder="工作内容描述" style="flex:1;padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">保存</button>
-        </div>
-    </form>
-</div>
 {% endif %}
 
 <!-- WBS表格 -->
@@ -166,9 +136,44 @@
             </td>
             {% endif %}
         </tr>
-    {% else %}
-        <tr><td colspan="13" style="padding:30px;text-align:center;color:#999;">暂无任务，点击"添加任务"开始拆解</td></tr>
     {% endfor %}
+
+    <!-- 新建行（Excel风格空行） -->
+    {% if current_role == 'admin' %}
+    <tr id="newRow" style="background:#fafbfc;">
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
+            <input id="nr_wbs" placeholder="如2" style="width:100%;border:none;background:transparent;text-align:center;font-size:13px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_name" placeholder="任务名称（回车保存）" style="width:100%;border:none;background:transparent;font-size:13px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_work" placeholder="工作内容" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_owner" placeholder="负责人" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_collab" placeholder="协作" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input type="date" id="nr_start" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input type="date" id="nr_end" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_deliv" placeholder="交付物" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;color:#999;font-size:12px;text-align:center;">—</td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;color:#999;font-size:12px;text-align:center;">0%</td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
+            <button onclick="saveNewRow()" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✓</button>
+        </td>
+    </tr>
+    {% endif %}
     </tbody>
 </table>
 
@@ -187,14 +192,10 @@
 
 <script>
 const IS_ADMIN = {{ 'true' if current_role == 'admin' else 'false' }};
+const PID = {{ p.id }};
 let currentTid = null;
 
-function addRow() {
-    document.getElementById('addForm').style.display = 'block';
-    document.getElementById('addForm').scrollIntoView({behavior:'smooth'});
-}
-
-// 行内编辑：点击单元格变 input
+// 行内编辑已有任务
 document.querySelectorAll('.cell').forEach(el => {
     el.addEventListener('click', () => {
         if (!IS_ADMIN || el.dataset.editing) return;
@@ -218,6 +219,33 @@ document.querySelectorAll('.cell').forEach(el => {
         };
         input.onblur = save;
         input.onkeydown = e => { if(e.key==='Enter') input.blur(); };
+    });
+});
+
+// 新建行：回车保存
+function saveNewRow() {
+    const code = document.getElementById('nr_wbs').value.trim();
+    const name = document.getElementById('nr_name').value.trim();
+    if (!code || !name) { alert('WBS号和任务名必填'); return; }
+    const fd = new FormData();
+    fd.append('wbs_code', code);
+    fd.append('name', name);
+    fd.append('work_content', document.getElementById('nr_work').value);
+    fd.append('owner', document.getElementById('nr_owner').value);
+    fd.append('collaborators', document.getElementById('nr_collab').value);
+    fd.append('plan_start', document.getElementById('nr_start').value);
+    fd.append('plan_end', document.getElementById('nr_end').value);
+    fd.append('deliverable', document.getElementById('nr_deliv').value);
+    fetch(`/wbs/${PID}/task/quickadd`, {method:'POST', body:fd})
+    .then(r=>r.json()).then(res => {
+        if (res.ok) location.reload();
+        else alert(res.msg||'保存失败');
+    });
+}
+// 回车触发
+['nr_wbs','nr_name','nr_work','nr_owner','nr_collab','nr_deliv'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => {
+        if (e.key === 'Enter') saveNewRow();
     });
 });
 
