@@ -22,6 +22,17 @@ def tojson_filter(value, indent=None, ensure_ascii=False):
     """自定义JSON序列化过滤器，支持ensure_ascii参数"""
     return json.dumps(value, indent=indent, ensure_ascii=ensure_ascii, default=str)
 
+
+@app.template_filter('from_json')
+def from_json_filter(value):
+    """JSON字符串转对象"""
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except Exception:
+        return []
+
 # 注册扩展模块路由蓝图
 from ext_routes import ext_bp
 app.register_blueprint(ext_bp)

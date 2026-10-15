@@ -1689,9 +1689,10 @@ def wbs_project_add():
     db = get_db()
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        db.execute('''INSERT INTO wbs_projects (name, description, owner, start_date, end_date, status, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?)''',
+        db.execute('''INSERT INTO wbs_projects (name, description, owner, participants, start_date, end_date, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
             (request.form.get('name',''), request.form.get('description',''), request.form.get('owner',''),
+             request.form.get('participants',''),
              request.form.get('start_date',''), request.form.get('end_date',''),
              request.form.get('status','进行中'), now, now))
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -1699,6 +1700,25 @@ def wbs_project_add():
         log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
         return redirect(url_for('ext.wbs_project_detail', pid=pid))
     return render_template('ext/wbs_project_form.html', p=None)
+
+
+@ext_bp.route('/wbs/<int:pid>/edit', methods=['GET', 'POST'])
+def wbs_project_edit(pid):
+    db = get_db()
+    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return redirect(url_for('ext.wbs_projects'))
+    if request.method == 'POST':
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.execute('''UPDATE wbs_projects SET name=?, description=?, owner=?, participants=?,
+            start_date=?, end_date=?, updated_at=? WHERE id=?''',
+            (request.form.get('name',p['name']), request.form.get('description',p['description']),
+             request.form.get('owner',p['owner']), request.form.get('participants',p['participants'] or ''),
+             request.form.get('start_date',p['start_date']), request.form.get('end_date',p['end_date']),
+             now, pid))
+        db.commit()
+        return redirect(url_for('ext.wbs_project_detail', pid=pid))
+    return render_template('ext/wbs_project_form.html', p=p)
 
 
 @ext_bp.route('/wbs/<int:pid>')
@@ -1833,3 +1853,187 @@ def wbs_import(pid):
     db.commit()
     flash(f'成功导入 {count} 条WBS任务', 'success')
     return redirect(url_for('ext.wbs_project_detail', pid=pid))
+
+
+# ============ v9.4 行内编辑 AJAX 接口 ============
+
+@ext_bp.route('/wbs/task/<int:tid>/inline', methods=['POST'])
+def wbs_task_inline(tid):
+    """单元格行内保存。admin 可改全部字段；普通用户只能改 status/progress"""
+    import json
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    data = request.get_json(force=True)
+    field = data.get('field')
+    value = data.get('value', '')
+    admin = session.get('user_role') == 'admin'
+    editable_admin = {'wbs_code','name','work_content','owner','collaborators',
+                      'plan_start','plan_end','deliverable','status','progress'}
+    editable_user = {'status','progress'}
+    if admin:
+        allowed = editable_admin
+    else:
+        allowed = editable_user
+    if field not in allowed:
+        return jsonify({'ok': False, 'msg': '无权限修改此字段'}), 403
+    if field == 'progress':
+        try:
+            value = max(0, min(100, int(value)))
+        except Exception:
+            value = 0
+    db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
+    db.commit()
+    return jsonify({'ok': True, 'value': value})
+
+
+@ext_bp.route('/wbs/task/<int:tid>/notes_data')
+def wbs_task_notes_data(tid):
+    import json
+    db = get_db()
+    t = db.execute('SELECT notes FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'notes': []})
+    try:
+        notes = json.loads(t['notes']) if t['notes'] else []
+    except Exception:
+        notes = []
+    return jsonify({'notes': notes})
+
+
+@ext_bp.route('/wbs/task/<int:tid>/note', methods=['POST'])
+def wbs_task_add_note(tid):
+    """追加进展流水，不覆盖历史"""
+    import json
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    data = request.get_json(force=True)
+    content = (data.get('content') or '').strip()
+    if not content:
+        return jsonify({'ok': False, 'msg': '内容为空'}), 400
+    notes = []
+    try:
+        notes = json.loads(t['notes']) if t['notes'] else []
+    except Exception:
+        notes = []
+    notes.append({
+        'date': datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'author': session.get('username', '未登录'),
+        'content': content,
+    })
+    db.execute('UPDATE wbs_tasks SET notes=? WHERE id=?', (json.dumps(notes, ensure_ascii=False), tid))
+    db.commit()
+    return jsonify({'ok': True, 'count': len(notes), 'last': notes[-1]})
+
+
+@ext_bp.route('/wbs/task/<int:tid>/upload', methods=['POST'])
+def wbs_task_upload(tid):
+    """上传产出物文件，追加到 attachment_path（多个用分号分隔）"""
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    attach = _save_upload(request.files.get('file'), 'wbs')
+    if not attach:
+        return jsonify({'ok': False, 'msg': '未收到文件'}), 400
+    old = t['attachment_path'] or ''
+    new_path = (old + ';' + attach) if old else attach
+    db.execute('UPDATE wbs_tasks SET attachment_path=? WHERE id=?', (new_path, tid))
+    db.commit()
+    fname = attach.split('/')[-1]
+    return jsonify({'ok': True, 'path': attach, 'name': fname})
+
+
+@ext_bp.route('/wbs/template')
+def wbs_template():
+    """下载 Excel 导入模板（与截图同格式）"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from io import BytesIO
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'WBS计划'
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准']
+    header_fill = PatternFill('solid', fgColor='2B579A')
+    header_font = Font(color='FFFFFF', bold=True, size=11)
+    thin = Side(style='thin', color='D0D7E5')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.fill = header_fill; c.font = header_font
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        c.border = border
+    widths = [10, 22, 30, 10, 16, 12, 12, 22]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # 示例行
+    samples = [
+        [1, '阶段一·资源诉求（输入梳理）', '汇总各渠道输入，为问题定位提供基线', '', '', '2026-10-12', '2026-10-16', ''],
+        ['1.1', '在轨测试情况', '统计切换性能的比对情况（切换失败率、切换时延）', '余丽莎', '谭富元、李雪', '2026-10-12', '2026-10-16', '数据统计表/比对报告'],
+        ['1.2', '质量测试情况', '实验室入网性能/切换性能的测试结果收集', '袁谅', '', '2026-10-12', '2026-10-16', '测试结果记录'],
+        [2, '阶段二·问题现象汇总分析', '整合阶段一输入，复现问题、定位根因', '', '', '2026-10-16', '2026-10-22', ''],
+        ['2.1', '问题现象汇总分析', '汇总失败率偏高与切换时延偏长的现象', '余丽莎', '袁谅、谭富元', '2026-10-16', '2026-10-19', '问题现象汇总表'],
+    ]
+    for r, row in enumerate(samples, 2):
+        for c, v in enumerate(row, 1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = border
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+            if '.' not in str(row[0]):
+                cell.fill = PatternFill('solid', fgColor='D6E4F5')
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return _send_bytes(buf.getvalue(), 'WBS_template.xlsx')
+
+
+def _send_bytes(content, filename):
+    import tempfile
+    from flask import send_file
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+    tmp.write(content); tmp.close()
+    return send_file(tmp.name, as_attachment=True, download_name=filename,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@ext_bp.route('/wbs/<int:pid>/export')
+def wbs_export(pid):
+    """导出当前项目WBS为Excel，与截图同格式"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    db = get_db()
+    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return redirect(url_for('ext.wbs_projects'))
+    tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=? ORDER BY wbs_code, id', (pid,)).fetchall()
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'WBS计划'
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准']
+    header_fill = PatternFill('solid', fgColor='2B579A')
+    thin = Side(style='thin', color='D0D7E5')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.fill = header_fill; c.font = Font(color='FFFFFF', bold=True, size=11)
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True); c.border = border
+    widths = [10, 22, 30, 10, 16, 12, 12, 22]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    r = 2
+    for t in tasks:
+        is_phase = '.' not in (t['wbs_code'] or '')
+        vals = [t['wbs_code'], t['name'], t['work_content'], t['owner'] or '', t['collaborators'] or '',
+                t['plan_start'] or '', t['plan_end'] or '', t['deliverable'] or '']
+        for c, v in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = border
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+            if is_phase:
+                cell.fill = PatternFill('solid', fgColor='D6E4F5')
+        r += 1
+    from io import BytesIO
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f'WBS_{p["name"]}.xlsx'.replace('/', '_')
+    return _send_bytes(buf.getvalue(), fname)

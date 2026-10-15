@@ -1,14 +1,26 @@
 {% extends "base.html" %}
-{% block title %}{{ p.name }} - WBS项目详情{% endblock %}
+{% block title %}{{ p.name }} - WBS项目{% endblock %}
 {% block content %}
 <div style="margin-bottom:14px;">
     <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
 </div>
-<div class="page-header">
-    <h1>🗓️ {{ p.name }}</h1>
-    <p style="color:#666;font-size:13px;">{{ p.description or '' }} · 负责人：{{ p.owner or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
-        {% if current_role != 'admin' %}<span style="color:#e67e22;margin-left:12px;">（只读模式：如需修改请联系管理员）</span>{% endif %}
-    </p>
+
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <div>
+        <h1 style="margin:0;font-size:22px;">🗓️ {{ p.name }}</h1>
+        <p style="color:#666;font-size:13px;margin:6px 0 0;">
+            负责人：{{ p.owner or '-' }} · 参与人：{{ p.participants or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
+            {% if p.description %}<br>{{ p.description }}{% endif %}
+        </p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        {% if current_role == 'admin' %}
+        <a href="{{ url_for('ext.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
+        <button onclick="addRow()" style="padding:7px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">+ 添加任务</button>
+        {% endif %}
+        <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">📥 下载模板</a>
+        <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">📤 导出Excel</a>
+    </div>
 </div>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
@@ -18,20 +30,19 @@
 {% endwith %}
 
 {% if current_role == 'admin' %}
-<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-    <button onclick="document.getElementById('addTaskForm').style.display='block'" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">+ 添加任务/阶段</button>
-    <form method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;">
-        <input type="file" name="file" accept=".xlsx,.xls" style="font-size:13px;">
-        <button type="submit" style="padding:8px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">📥 Excel导入</button>
-    </form>
-</div>
+<form id="importForm" method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
+    <input type="file" name="file" accept=".xlsx,.xls" style="font-size:13px;">
+    <button type="submit" style="padding:6px 12px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
+</form>
+{% endif %}
 
-<!-- 添加任务表单（仅管理员） -->
-<div id="addTaskForm" style="display:none;background:#f5f7fa;padding:16px;border-radius:8px;margin-bottom:16px;">
-    <form method="post" action="{{ url_for('ext.wbs_task_add', pid=p.id) }}" enctype="multipart/form-data">
-        <div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
-            <input name="wbs_code" placeholder="WBS号" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input name="name" placeholder="阶段/任务名称 *" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+<!-- 添加任务表单（仅admin） -->
+{% if current_role == 'admin' %}
+<div id="addForm" style="display:none;background:#f5f7fa;padding:16px;border-radius:8px;margin-bottom:16px;">
+    <form method="post" action="{{ url_for('ext.wbs_task_add', pid=p.id) }}">
+        <div style="display:grid;grid-template-columns:80px 1fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+            <input name="wbs_code" placeholder="WBS号" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
+            <input name="name" placeholder="任务名称 *" required style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
             <input name="owner" placeholder="负责人" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
             <input name="collaborators" placeholder="协作/支撑" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
         </div>
@@ -39,81 +50,244 @@
             <input type="date" name="plan_start" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
             <input type="date" name="plan_end" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
             <select name="parent_id" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-                <option value="0">作为阶段（父任务）</option>
-                {% for ph in phases %}<option value="{{ ph.id }}">子任务（挂到阶段 {{ ph.wbs_code }}）</option>{% endfor %}
+                <option value="0">作为阶段（一级）</option>
+                {% for ph in tasks if ph.parent_id == 0 %}
+                <option value="{{ ph.id }}">挂到阶段 {{ ph.wbs_code }} {{ ph.name }}</option>
+                {% endfor %}
             </select>
             <input name="deliverable" placeholder="交付物/判定标准" style="padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
         </div>
         <div style="display:flex;gap:10px;align-items:center;">
             <input name="work_content" placeholder="工作内容描述" style="flex:1;padding:7px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
-            <input type="file" name="attachment" style="font-size:13px;">
             <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">保存</button>
         </div>
     </form>
 </div>
 {% endif %}
 
-<!-- WBS表格（严格8列，按Excel样式） -->
-<table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;">
+<!-- WBS表格 -->
+<table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;">
     <thead>
         <tr style="background:#2b579a;color:#fff;">
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:60px;">WBS编号</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:180px;">阶段/任务</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;">工作内容</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:90px;">负责人</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:140px;">协作/支撑</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:100px;">计划开始</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:100px;">计划结束</th>
-            <th style="padding:10px 8px;border:1px solid #d0d7e5;width:160px;">交付物/判定标准</th>
-            {% if current_role == 'admin' %}<th style="padding:10px 8px;border:1px solid #d0d7e5;width:60px;">操作</th>{% endif %}
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">WBS</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;min-width:160px;">阶段/任务</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;min-width:180px;">工作内容</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">负责人</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:100px;">协作/支撑</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:95px;">开始</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:95px;">结束</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:120px;">交付物标准</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">状态</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:70px;">进度</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">进展</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">产出物</th>
+            {% if current_role == 'admin' %}<th style="padding:9px 6px;border:1px solid #d0d7e5;width:50px;">操作</th>{% endif %}
         </tr>
     </thead>
     <tbody>
     {% for t in tasks %}
-        {% if t.parent_id == 0 %}
-        <!-- 阶段行：浅蓝底，工作内容跨列 -->
-        <tr style="background:#d6e4f5;">
-            <td style="padding:9px 8px;border:1px solid #d0d7e5;font-weight:600;text-align:center;">{{ t.wbs_code }}</td>
-            <td style="padding:9px 8px;border:1px solid #d0d7e5;font-weight:600;">{{ t.name }}</td>
-            <td colspan="{% if current_role == 'admin' %}6{% else %}5{% endif %}" style="padding:9px 8px;border:1px solid #d0d7e5;color:#333;">
-                {{ t.work_content or '' }}
+        {% set is_phase = '.' not in (t.wbs_code or '') %}
+        {% set depth = (t.wbs_code or '').split('.')|length - 1 %}
+        {% set pad = depth * 18 %}
+        <tr data-tid="{{ t.id }}" class="{% if is_phase %}phase-row{% else %}task-row{% endif %}"
+            style="{% if is_phase %}background:#d6e4f5;font-weight:600;{% else %}background:#fff;{% endif %}">
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;text-align:center;">{{ t.wbs_code }}</td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;padding-left:{{ pad + 6 }}px;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="name" data-tid="{{ t.id }}">{{ t.name }}</span>
+                {% else %}{{ t.name }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="work_content" data-tid="{{ t.id }}">{{ t.work_content or '' }}</span>
+                {% else %}{{ t.work_content or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="owner" data-tid="{{ t.id }}">{{ t.owner or '' }}</span>
+                {% else %}{{ t.owner or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="collaborators" data-tid="{{ t.id }}">{{ t.collaborators or '' }}</span>
+                {% else %}{{ t.collaborators or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="plan_start" data-tid="{{ t.id }}">{{ t.plan_start or '' }}</span>
+                {% else %}{{ t.plan_start or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="plan_end" data-tid="{{ t.id }}">{{ t.plan_end or '' }}</span>
+                {% else %}{{ t.plan_end or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;font-size:12px;">
+                {% if current_role == 'admin' %}
+                <span class="cell" data-field="deliverable" data-tid="{{ t.id }}">{{ t.deliverable or '' }}</span>
+                {% else %}{{ t.deliverable or '' }}{% endif %}
+            </td>
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                <select class="status-select" data-tid="{{ t.id }}" style="width:100%;padding:4px;border:1px solid #ccd;border-radius:4px;font-size:12px;
+                    {% if t.status == '已完成' %}background:#d4edda;{% elif t.status == '进行中' %}background:#cce5ff;{% elif t.status == '阻塞' %}background:#f8d7da;{% else %}background:#fff;{% endif %}">
+                    {% for s in ['未开始','进行中','已完成','阻塞'] %}
+                    <option value="{{ s }}" {% if t.status==s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </td>
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="width:50px;vertical-align:middle;">
+                <span class="prog-val" style="font-size:11px;">{{ t.progress }}%</span>
+            </td>
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                {% set notes_count = (t.notes|from_json|length) if t.notes else 0 %}
+                <button onclick="showNotes({{ t.id }}, this)" title="查看/登记进展" style="background:none;border:none;cursor:pointer;font-size:14px;position:relative;">
+                    📝
+                    {% if notes_count > 0 %}
+                    <span style="position:absolute;top:-4px;right:-6px;background:#c0392b;color:#fff;font-size:9px;border-radius:8px;padding:0 4px;">{{ notes_count }}</span>
+                    {% endif %}
+                </button>
+            </td>
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                {% set files = (t.attachment_path or '').split(';') if t.attachment_path else [] %}
+                {% for f in files if f %}
+                <a href="{{ url_for('ext.wbs_download', filename=f) }}" target="_blank" style="display:block;font-size:11px;color:#2563eb;">📎{{ f.split('/')[-1][:12] }}</a>
+                {% endfor %}
+                <label style="display:inline-block;cursor:pointer;font-size:11px;color:#2563eb;margin-top:2px;">
+                    +上传
+                    <input type="file" class="file-input" data-tid="{{ t.id }}" style="display:none;">
+                </label>
             </td>
             {% if current_role == 'admin' %}
-            <td style="padding:9px 8px;border:1px solid #d0d7e5;">
-                <a href="{{ url_for('ext.wbs_task_edit', tid=t.id) }}" style="color:#2563eb;font-size:12px;">编辑</a>
-                <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除该阶段及其子任务？')">
-                    <button type="submit" style="background:none;border:none;color:#c0392b;font-size:12px;cursor:pointer;padding:0;">删除</button>
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
+                    <button type="submit" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;">删</button>
                 </form>
             </td>
             {% endif %}
         </tr>
-        {% else %}
-        <!-- 子任务行：白底 -->
-        <tr style="background:#fff;">
-            <td style="padding:8px;border:1px solid #d0d7e5;text-align:center;color:#555;">{{ t.wbs_code }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;">{{ t.name }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;color:#444;">{{ t.work_content or '' }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;">{{ t.owner or '' }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;color:#555;">{{ t.collaborators or '' }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;">{{ t.plan_start or '' }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;">{{ t.plan_end or '' }}</td>
-            <td style="padding:8px;border:1px solid #d0d7e5;font-size:12px;">
-                {{ t.deliverable or '' }}
-                {% if t.attachment_path %}<br>📎 <a href="{{ url_for('ext.wbs_download', filename=t.attachment_path) }}" style="color:#2563eb;">附件</a>{% endif %}
-            </td>
-            {% if current_role == 'admin' %}
-            <td style="padding:8px;border:1px solid #d0d7e5;">
-                <a href="{{ url_for('ext.wbs_task_edit', tid=t.id) }}" style="color:#2563eb;font-size:12px;">编辑</a>
-                <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除该任务？')">
-                    <button type="submit" style="background:none;border:none;color:#c0392b;font-size:12px;cursor:pointer;padding:0;">删</button>
-                </form>
-            </td>
-            {% endif %}
-        </tr>
-        {% endif %}
     {% else %}
-        <tr><td colspan="9" style="padding:30px;text-align:center;color:#999;">暂无任务</td></tr>
+        <tr><td colspan="13" style="padding:30px;text-align:center;color:#999;">暂无任务，点击"添加任务"开始拆解</td></tr>
     {% endfor %}
     </tbody>
 </table>
+
+<!-- 进展流水弹窗 -->
+<div id="noteModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:9999;">
+    <div style="background:#fff;max-width:520px;margin:60px auto;border-radius:10px;padding:20px;max-height:70vh;overflow-y:auto;">
+        <h3 style="margin:0 0 12px;font-size:16px;">进展流水</h3>
+        <div id="noteList" style="margin-bottom:12px;font-size:13px;"></div>
+        <textarea id="noteInput" rows="2" placeholder="写一句今天的进展..." style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;box-sizing:border-box;"></textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+            <button onclick="closeNotes()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">关闭</button>
+            <button onclick="submitNote()" style="padding:7px 14px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">提交</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const IS_ADMIN = {{ 'true' if current_role == 'admin' else 'false' }};
+let currentTid = null;
+
+function addRow() {
+    document.getElementById('addForm').style.display = 'block';
+    document.getElementById('addForm').scrollIntoView({behavior:'smooth'});
+}
+
+// 行内编辑：点击单元格变 input
+document.querySelectorAll('.cell').forEach(el => {
+    el.addEventListener('click', () => {
+        if (!IS_ADMIN || el.dataset.editing) return;
+        const tid = el.dataset.tid, field = el.dataset.field;
+        const old = el.textContent;
+        const input = document.createElement('input');
+        input.value = old;
+        input.style.cssText = 'width:100%;padding:4px;border:1px solid #2563eb;border-radius:4px;font-size:13px;box-sizing:border-box;';
+        el.innerHTML = ''; el.appendChild(input);
+        el.dataset.editing = '1'; input.focus();
+        const save = () => {
+            const v = input.value;
+            fetch(`/wbs/task/${tid}/inline`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({field, value:v})
+            }).then(r=>r.json()).then(res => {
+                if (res.ok) { el.textContent = v; }
+                else { alert(res.msg||'保存失败'); el.textContent = old; }
+                el.dataset.editing = '';
+            }).catch(()=>{ el.textContent = old; el.dataset.editing=''; });
+        };
+        input.onblur = save;
+        input.onkeydown = e => { if(e.key==='Enter') input.blur(); };
+    });
+});
+
+// 状态下拉
+document.querySelectorAll('.status-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+        fetch(`/wbs/task/${sel.dataset.tid}/inline`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({field:'status', value:sel.value})
+        }).then(r=>r.json()).then(res => {
+            if(res.ok) {
+                sel.style.background = sel.value==='已完成'?'#d4edda':sel.value==='进行中'?'#cce5ff':sel.value==='阻塞'?'#f8d7da':'#fff';
+            }
+        });
+    });
+});
+
+// 进度条
+document.querySelectorAll('.prog-range').forEach(r => {
+    r.addEventListener('input', () => {
+        r.parentElement.querySelector('.prog-val').textContent = r.value + '%';
+    });
+    r.addEventListener('change', () => {
+        fetch(`/wbs/task/${r.dataset.tid}/inline`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({field:'progress', value:r.value})
+        });
+    });
+});
+
+// 产出物上传
+document.querySelectorAll('.file-input').forEach(inp => {
+    inp.addEventListener('change', () => {
+        if (!inp.files[0]) return;
+        const fd = new FormData();
+        fd.append('file', inp.files[0]);
+        fetch(`/wbs/task/${inp.dataset.tid}/upload`, {method:'POST', body:fd})
+        .then(r=>r.json()).then(res => { if(res.ok) location.reload(); else alert(res.msg||'上传失败'); });
+    });
+});
+
+// 进展流水
+function showNotes(tid, btn) {
+    currentTid = tid;
+    document.getElementById('noteModal').style.display = 'block';
+    document.getElementById('noteInput').value = '';
+    fetch(`/wbs/task/${tid}/notes_data`).then(r=>r.json()).then(data => {
+        const list = document.getElementById('noteList');
+        if (!data.notes || data.notes.length===0) {
+            list.innerHTML = '<div style="color:#999;">暂无进展记录</div>';
+            return;
+        }
+        list.innerHTML = data.notes.map(n =>
+            `<div style="padding:8px;border-bottom:1px solid #eef;margin-bottom:6px;">
+                <div style="color:#888;font-size:11px;">${n.date} · ${n.author}</div>
+                <div style="margin-top:2px;">${n.content}</div>
+            </div>`).join('');
+    });
+}
+function closeNotes(){ document.getElementById('noteModal').style.display='none'; }
+function submitNote() {
+    const v = document.getElementById('noteInput').value.trim();
+    if (!v) return;
+    fetch(`/wbs/task/${currentTid}/note`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content:v})
+    }).then(r=>r.json()).then(res => {
+        if (res.ok) { showNotes(currentTid); location.reload(); }
+        else alert(res.msg||'提交失败');
+    });
+}
+</script>
 {% endblock %}

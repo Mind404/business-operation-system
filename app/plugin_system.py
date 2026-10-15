@@ -82,7 +82,7 @@ def init_plugin_tables():
         FOREIGN KEY (tech_req_id) REFERENCES tech_requirements(id) ON DELETE CASCADE)''')
     db.execute('''CREATE TABLE IF NOT EXISTS wbs_projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT, description TEXT, owner TEXT,
+        name TEXT, description TEXT, owner TEXT, participants TEXT,
         start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中',
         created_at TEXT, updated_at TEXT)''')
     db.execute('''CREATE TABLE IF NOT EXISTS wbs_tasks (
@@ -91,11 +91,17 @@ def init_plugin_tables():
         name TEXT, work_content TEXT, owner TEXT, collaborators TEXT,
         plan_start TEXT, plan_end TEXT, deliverable TEXT,
         priority TEXT DEFAULT 'P2中', attachment_path TEXT,
+        notes TEXT,
         status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
         sort_order INTEGER DEFAULT 0,
         FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE)''')
     # 幂等加列（老库升级）
-    for col, ddl in [('priority', "TEXT DEFAULT 'P2中'"), ('attachment_path', 'TEXT')]:
+    for col, ddl in [('priority', "TEXT DEFAULT 'P2中'"), ('attachment_path', 'TEXT'),
+                     ('participants', 'TEXT'), ('notes', 'TEXT')]:
+        try:
+            db.execute(f'ALTER TABLE wbs_projects ADD COLUMN participants TEXT')
+        except Exception:
+            pass
         try:
             db.execute(f'ALTER TABLE wbs_tasks ADD COLUMN {col} {ddl}')
         except Exception:
