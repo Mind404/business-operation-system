@@ -20,6 +20,11 @@
         {% endif %}
         <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
+        <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
+            <button onclick="setZoom(1)" id="zoom100" style="padding:7px 10px;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:12px;">100%</button>
+            <button onclick="setZoom(1.5)" id="zoom150" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">150%</button>
+            <button onclick="setZoom(2)" id="zoom200" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">200%</button>
+        </div>
     </div>
 </div>
 
@@ -36,7 +41,8 @@
 {% endif %}
 
 <!-- WBS表格 -->
-<table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;">
+<div id="wbsWrap" style="overflow-x:auto;">
+<table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;table-layout:fixed;">
     <thead>
         <tr style="background:#2b579a;color:#fff;">
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">WBS</th>
@@ -176,6 +182,7 @@
     {% endif %}
     </tbody>
 </table>
+</div>
 
 <!-- 进展流水弹窗 -->
 <div id="noteModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:9999;">
@@ -317,5 +324,30 @@ function submitNote() {
         else alert(res.msg||'提交失败');
     });
 }
+</script>
+<style>
+#wbsTable td, #wbsTable th {
+    word-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    vertical-align: middle;
+    line-height: 1.4;
+    padding: 6px 8px;
+}
+#wbsTable td { overflow: visible; text-overflow: clip; }
+</style>
+<script>
+function setZoom(z) {
+    var wrap = document.getElementById('wbsWrap');
+    wrap.style.fontSize = (13 * z) + 'px';
+    ['zoom100','zoom150','zoom200'].forEach(function(id, i){
+        var btn = document.getElementById(id);
+        var v = [1,1.5,2][i];
+        btn.style.background = v==z ? '#2563eb' : '#eef2f7';
+        btn.style.color = v==z ? '#fff' : '#333';
+    });
+    try { localStorage.setItem('wbsZoom', z); } catch(e){}
+}
+(function(){ try { var z = parseFloat(localStorage.getItem('wbsZoom')||'1'); setZoom(z); } catch(e){} })();
 </script>
 {% endblock %}

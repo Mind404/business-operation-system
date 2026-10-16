@@ -1871,7 +1871,28 @@ def wbs_task_inline(tid):
             value = 0
     db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
     db.commit()
+    # 时间字段变更后，自动扩展父任务时间范围
+    if field in ('plan_start', 'plan_end'):
+        _sync_parent_dates(db, tid)
     return jsonify({'ok': True, 'value': value})
+
+
+def _sync_parent_dates(db, child_id):
+    """子任务时间变更后，自动把父任务时间扩展到覆盖所有子任务"""
+    child = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (child_id,)).fetchone()
+    if not child or not child['parent_id']:
+        return
+    pid = child['project_id']
+    parent_id = child['parent_id']
+    # 找所有直接子任务的最早开始和最晚结束
+    rows = db.execute('''SELECT MIN(plan_start) as ms, MAX(plan_end) as me
+                         FROM wbs_tasks WHERE parent_id=?''', (parent_id,)).fetchone()
+    if rows and rows['ms']:
+        db.execute('UPDATE wbs_tasks SET plan_start=?, plan_end=? WHERE id=?',
+                   (rows['ms'], rows['me'], parent_id))
+        db.commit()
+        # 递归往上同步祖父任务
+        _sync_parent_dates(db, parent_id)
 
 
 @ext_bp.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
@@ -1898,6 +1919,9 @@ def wbs_task_quickadd(pid):
          request.form.get('collaborators',''), request.form.get('plan_start',''),
          request.form.get('plan_end',''), request.form.get('deliverable',''),
          '未开始', 0))
+    new_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+    db.commit()
+    _sync_parent_dates(db, new_id)
     db.commit()
     return jsonify({'ok': True})
 
