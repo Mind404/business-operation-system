@@ -60,52 +60,17 @@ def get_db():
 
 
 def init_plugin_tables():
-    """建表并注册插件（幂等）"""
+    """建表并注册插件（幂等）。每个插件自己管自己的表。"""
+    from db_migrations import init_core_tables, init_wbs_tables, init_tech_req_tables, run_migrations
     db = get_db()
-    db.execute('''CREATE TABLE IF NOT EXISTS plugin_registry (
-        id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
-        description TEXT, endpoint TEXT)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS user_plugins (
-        user_id INTEGER, plugin_id TEXT, subscribed_at TEXT,
-        PRIMARY KEY (user_id, plugin_id))''')
-    db.execute('''CREATE TABLE IF NOT EXISTS tech_requirements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stage TEXT, category TEXT, item TEXT, planned_date TEXT,
-        description TEXT, version_response TEXT,
-        product_id INTEGER DEFAULT 1, status TEXT DEFAULT '进行中',
-        sort_order INTEGER DEFAULT 0,
-        created_at TEXT, updated_at TEXT)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS tech_req_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tech_req_id INTEGER, log_date TEXT, content TEXT, author TEXT,
-        created_at TEXT,
-        FOREIGN KEY (tech_req_id) REFERENCES tech_requirements(id) ON DELETE CASCADE)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS wbs_projects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT, description TEXT, owner TEXT, participants TEXT,
-        start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中',
-        created_at TEXT, updated_at TEXT)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS wbs_tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER, wbs_code TEXT, parent_id INTEGER DEFAULT 0,
-        name TEXT, work_content TEXT, owner TEXT, collaborators TEXT,
-        plan_start TEXT, plan_end TEXT, deliverable TEXT,
-        priority TEXT DEFAULT 'P2中', attachment_path TEXT,
-        notes TEXT,
-        status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
-        sort_order INTEGER DEFAULT 0,
-        FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE)''')
-    # 幂等加列（老库升级）
-    for col, ddl in [('priority', "TEXT DEFAULT 'P2中'"), ('attachment_path', 'TEXT'),
-                     ('participants', 'TEXT'), ('notes', 'TEXT')]:
-        try:
-            db.execute(f'ALTER TABLE wbs_projects ADD COLUMN participants TEXT')
-        except Exception:
-            pass
-        try:
-            db.execute(f'ALTER TABLE wbs_tasks ADD COLUMN {col} {ddl}')
-        except Exception:
-            pass
+    # 核心表（用户、插件注册、订阅、版本记录）
+    init_core_tables()
+    # 两个业务插件的表
+    init_wbs_tables()
+    init_tech_req_tables()
+    # 跑增量迁移
+    run_migrations()
+    # 注册插件清单
     for p in PLUGINS:
         db.execute('''INSERT OR IGNORE INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint) VALUES (?,?,?,?,?,?,?)''',
