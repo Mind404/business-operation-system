@@ -22,7 +22,7 @@
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
         {% if current_role == 'admin' and pending_count > 0 %}
         <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
-            ✓ 通过（{{ pending_count }}条）
+            ✓ 通过
         </button>
         <button onclick="batchApprove('reject')" style="padding:7px 14px;background:#dc3545;border:1px solid #dc3545;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
             ✗ 驳回
