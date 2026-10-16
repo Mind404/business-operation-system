@@ -14,35 +14,58 @@
   {% endif %}
 {% endwith %}
 
-<div class="stats-grid" style="margin-bottom:20px;">
-    <div class="stat-card"><div class="stat-value">{{ plugins|length }}</div><div class="stat-label">可用插件</div></div>
-    <div class="stat-card"><div class="stat-value">{{ subscribed|length }}</div><div class="stat-label">已订阅</div></div>
-</div>
-
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;">
+{% set groups = {} %}
 {% for p in plugins %}
-  <div style="border:1px solid #e0e4ea;border-radius:8px;padding:18px;background:#fff;{% if p.core %}opacity:0.85;{% endif %}">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-      <div>
-        <div style="font-size:20px;margin-bottom:4px;">{{ p.icon }} {{ p.name }}</div>
-        <div style="font-size:12px;color:#888;">
-          {% if p.core %}<span style="background:#eef2f7;padding:2px 8px;border-radius:10px;">核心常驻</span>
-          {% else %}<span style="background:#f5f5f5;padding:2px 8px;border-radius:10px;">业务插件</span>{% endif %}
-        </div>
-      </div>
-      {% if p.core %}
-        <span style="font-size:12px;color:#999;">常驻</span>
-      {% else %}
-        <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
-          <button type="submit" style="padding:6px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;
-            {% if p.id in subscribed %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#eef2f7;color:#333;border:1px solid #ccd;{% endif %}">
-            {% if p.id in subscribed %}✓ 已订阅 · 点击取消{% else %}+ 订阅{% endif %}
-          </button>
-        </form>
-      {% endif %}
-    </div>
-    <p style="font-size:13px;color:#555;line-height:1.5;margin:8px 0 0;">{{ p.description }}</p>
-  </div>
+  {% set g = p.group or '其他' %}
+  {% if g not in groups %}{% set _ = groups.update({g: []}) %}{% endif %}
+  {% set _ = groups[g].append(p) %}
 {% endfor %}
+
+{% for group_name, group_plugins in groups.items() %}
+<div style="margin-bottom:24px;">
+    <h3 style="font-size:15px;color:#333;margin:0 0 10px;padding-left:10px;border-left:3px solid #2563eb;">{{ group_name }}</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e0e4ea;border-radius:8px;overflow:hidden;">
+        <thead>
+            <tr style="background:#f5f7fa;">
+                <th style="padding:10px 14px;text-align:left;width:50px;"></th>
+                <th style="padding:10px 14px;text-align:left;">插件名称</th>
+                <th style="padding:10px 14px;text-align:left;width:40%;">功能说明</th>
+                <th style="padding:10px 14px;text-align:center;width:100px;">状态</th>
+                <th style="padding:10px 14px;text-align:center;width:110px;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for p in group_plugins %}
+            <tr style="border-top:1px solid #eee;">
+                <td style="padding:10px 14px;font-size:18px;">{{ p.icon }}</td>
+                <td style="padding:10px 14px;font-weight:bold;color:#333;">{{ p.name }}</td>
+                <td style="padding:10px 14px;color:#666;line-height:1.5;">{{ p.description }}</td>
+                <td style="padding:10px 14px;text-align:center;">
+                    {% if p.core %}
+                        <span style="background:#e8f0fe;color:#2563eb;padding:3px 10px;border-radius:10px;font-size:12px;">常驻</span>
+                    {% elif p.id in subscribed %}
+                        <span style="background:#e6f7e6;color:#2a7a2a;padding:3px 10px;border-radius:10px;font-size:12px;">已订阅</span>
+                    {% else %}
+                        <span style="background:#f5f5f5;color:#999;padding:3px 10px;border-radius:10px;font-size:12px;">未订阅</span>
+                    {% endif %}
+                </td>
+                <td style="padding:10px 14px;text-align:center;">
+                    {% if not p.core %}
+                    <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
+                        <button type="submit" style="padding:6px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;
+                        {% if p.id in subscribed %}background:#fff0f0;color:#dc3545;border:1px solid #f5c6cb;
+                        {% else %}background:#2563eb;color:#fff;border:1px solid #2563eb;{% endif %}">
+                        {% if p.id in subscribed %}取消订阅{% else %}+ 订阅{% endif %}
+                        </button>
+                    </form>
+                    {% else %}
+                        <span style="color:#ccc;font-size:12px;">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
 </div>
+{% endfor %}
 {% endblock %}
