@@ -52,6 +52,20 @@
         </div>
     </div>
 
+    {% if not p and current_role != 'admin' %}
+    <div style="margin-bottom:20px;padding:14px;background:#fff8e6;border:1px solid #ffe0a0;border-radius:6px;">
+        <label style="display:block;font-size:13px;color:#856404;margin-bottom:8px;font-weight:500;">
+            ⚠️ 普通用户创建项目需管理员审批。审批通过后才能导入WBS任务。请选择审批人：
+        </label>
+        <select name="approver" required style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+            <option value="">— 请选择审批管理员 —</option>
+            {% for a in admins %}
+            <option value="{{ a.username }}">{{ a.display_name or a.username }}（{{ a.username }}）</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+
     <!-- 按钮 -->
     <div style="display:flex;gap:12px;padding-top:20px;border-top:1px solid #eef0f4;">
         <button type="submit" style="padding:10px 32px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;">保存项目</button>

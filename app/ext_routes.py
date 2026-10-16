@@ -1708,19 +1708,27 @@ def wbs_alerts():
 @ext_bp.route('/wbs/add', methods=['GET', 'POST'])
 def wbs_project_add():
     db = get_db()
+    admins = db.execute("SELECT username, display_name FROM users WHERE role='admin' AND is_active=1 ORDER BY username").fetchall()
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        db.execute('''INSERT INTO wbs_projects (name, description, owner, participants, start_date, end_date, status, approval_status, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        is_admin = session.get('user_role') == 'admin'
+        approval_status = '已通过' if is_admin else '待审批'
+        approver = '' if is_admin else request.form.get('approver','')
+        db.execute('''INSERT INTO wbs_projects (name, description, owner, participants, start_date, end_date, status, approver, approval_status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (request.form.get('name',''), request.form.get('description',''), request.form.get('owner',''),
              request.form.get('participants',''),
              request.form.get('start_date',''), request.form.get('end_date',''),
-             request.form.get('status','进行中'), '已通过', now, now))
+             request.form.get('status','进行中'), approver, approval_status, now, now))
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
         db.commit()
         log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
-        return redirect(url_for('ext.wbs_project_detail', pid=pid))
-    return render_template('ext/wbs_project_form.html', p=None)
+        if is_admin:
+            return redirect(url_for('ext.wbs_project_detail', pid=pid))
+        else:
+            flash('项目已提交，等待管理员审批通过后才能导入任务。', 'success')
+            return redirect(url_for('ext.wbs_projects'))
+    return render_template('ext/wbs_project_form.html', p=None, admins=admins)
 
 
 @ext_bp.route('/wbs/<int:pid>/edit', methods=['GET', 'POST'])
@@ -1850,6 +1858,14 @@ def wbs_download(filename):
 @ext_bp.route('/wbs/<int:pid>/import', methods=['POST'])
 def wbs_import(pid):
     """按图2格式导入：WBS编号|阶段/任务|工作内容|负责人|协作支撑|计划开始|计划结束|交付物"""
+    db = get_db()
+    proj = db.execute('SELECT approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not proj:
+        flash('项目不存在', 'error')
+        return redirect(url_for('ext.wbs_projects'))
+    if session.get('user_role') != 'admin' and proj['approval_status'] != '已通过':
+        flash('项目待审批通过后才能导入任务', 'error')
+        return redirect(url_for('ext.wbs_project_detail', pid=pid))
     f = request.files.get('file')
     if not f:
         flash('请选择文件', 'error')
