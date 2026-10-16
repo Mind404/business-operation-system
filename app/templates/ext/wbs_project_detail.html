@@ -17,9 +17,14 @@
         {% if current_role == 'admin' %}
         <a href="{{ url_for('ext.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
         {% endif %}
-        <button onclick="document.getElementById('importRealFile').click()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
+        <button onclick="tryImport()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
         <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
+        {% if current_role == 'admin' and pending_count > 0 %}
+        <button onclick="toggleApprovalPanel()" id="approvalBtn" style="padding:7px 14px;background:#faad14;border:1px solid #faad14;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
+            ⚠️ 审批任务（{{ pending_count }}）
+        </button>
+        {% endif %}
         <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
             <button onclick="setZoom(1)" id="zoom100" style="padding:7px 10px;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:12px;">100%</button>
             <button onclick="setZoom(1.5)" id="zoom150" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">150%</button>
@@ -136,6 +141,12 @@
             </td>
             {% if current_role == 'admin' %}
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+                {% if t.approval_status == '待审批' %}
+                <div class="approval-row" style="margin-bottom:4px;">
+                    <button onclick="approveTask({{ t.id }},'approve')" style="background:#28a745;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px;margin-right:2px;">通过</button>
+                    <button onclick="approveTask({{ t.id }},'reject')" style="background:#dc3545;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:11px;">驳回</button>
+                </div>
+                {% endif %}
                 <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
                     <button type="submit" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;">删</button>
                 </form>
@@ -144,7 +155,8 @@
         </tr>
     {% endfor %}
 
-    <!-- 新建行（Excel风格空行） -->
+    <!-- 新建行（Excel风格空行）：仅管理员可见 -->
+    {% if current_role == 'admin' %}
     <tr id="newRow" style="background:#fafbfc;">
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
             <input id="nr_wbs" placeholder="如2" style="width:100%;border:none;background:transparent;text-align:center;font-size:13px;outline:none;">
@@ -178,6 +190,7 @@
             <button onclick="saveNewRow()" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✓</button>
         </td>
     </tr>
+    {% endif %}
     </tbody>
 </table>
 </div>
@@ -198,7 +211,33 @@
 <script>
 const IS_ADMIN = {{ 'true' if current_role == 'admin' else 'false' }};
 const PID = {{ p.id }};
+const PROJECT_APPROVAL = '{{ p.approval_status or "已通过" }}';
 let currentTid = null;
+
+function tryImport() {
+    if (!IS_ADMIN && PROJECT_APPROVAL !== '已通过') {
+        alert('项目正在等待管理员审批，审批通过后才能导入任务。');
+        return;
+    }
+    document.getElementById('importRealFile').click();
+}
+
+function toggleApprovalPanel() {
+    document.querySelectorAll('.approval-row').forEach(r => {
+        r.style.display = r.style.display === 'none' ? '' : 'none';
+    });
+}
+
+function approveTask(tid, action) {
+    fetch(`/wbs/task/${tid}/approve`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `action=${action}`
+    }).then(r => r.json()).then(d => {
+        if (d.ok) location.reload();
+        else alert(d.msg || '操作失败');
+    });
+}
 
 // 行内编辑已有任务
 document.querySelectorAll('.cell').forEach(el => {

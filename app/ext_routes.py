@@ -1773,7 +1773,8 @@ def wbs_project_detail(pid):
     tasks = db.execute('''SELECT * FROM wbs_tasks WHERE project_id=? ORDER BY wbs_code, id''', (pid,)).fetchall()
     # 分组：父任务（阶段）和子任务
     phases = [t for t in tasks if t['parent_id'] == 0]
-    return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases)
+    pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
+    return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases, pending_count=pending_count)
 
 
 def _save_upload(file_storage, subdir='wbs'):
