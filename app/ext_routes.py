@@ -2011,6 +2011,20 @@ def wbs_task_approve(tid):
     return jsonify({'ok': True})
 
 
+@ext_bp.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
+def wbs_project_tasks_approve(pid):
+    """管理员批量审批整个项目下所有待审批任务"""
+    if session.get('user_role') != 'admin':
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    db = get_db()
+    action = request.form.get('action','')
+    status = '已通过' if action == 'approve' else '已驳回'
+    cur = db.execute('UPDATE wbs_tasks SET approval_status=? WHERE project_id=? AND approval_status=?',
+                     (status, pid, '待审批'))
+    db.commit()
+    return jsonify({'ok': True, 'count': cur.rowcount})
+
+
 @ext_bp.route('/wbs/task/<int:tid>/notes_data')
 def wbs_task_notes_data(tid):
     import json
