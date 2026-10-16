@@ -1867,6 +1867,8 @@ def wbs_import(pid):
     ws = wb.active
     db = get_db()
     count = 0
+    is_admin = session.get('user_role') == 'admin'
+    approval = '已通过' if is_admin else '待审批'
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
         if not row or not row[0]:
             continue
@@ -1874,27 +1876,28 @@ def wbs_import(pid):
         name = str(row[1] or '').strip()
         if not name:
             continue
-        # 判断是否为阶段（父任务）：wbs_code 不含小数点
         is_phase = '.' not in code
         parent_id = 0
         if not is_phase:
-            # 找父任务（wbs_code 前缀，如 1.1 的父是 1）
-            parent_code = code.split('.')[0]
+            parent_code = code.rsplit('.', 1)[0]
             parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
                                 (pid, parent_code)).fetchone()
             if parent:
                 parent_id = parent['id']
         db.execute('''INSERT INTO wbs_tasks
             (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
-             plan_start, plan_end, deliverable, status, progress)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+             plan_start, plan_end, deliverable, status, progress, approval_status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pid, code, parent_id, name,
              str(row[2] or '').strip(), str(row[3] or '').strip(), str(row[4] or '').strip(),
              str(row[5] or '').strip(), str(row[6] or '').strip(), str(row[7] or '').strip(),
-             '未开始', 0))
+             '未开始', 0, approval))
         count += 1
     db.commit()
-    flash(f'成功导入 {count} 条WBS任务', 'success')
+    if is_admin:
+        flash(f'成功导入 {count} 条WBS任务', 'success')
+    else:
+        flash(f'成功导入 {count} 条任务，等待管理员审批后才能编辑状态和进度。', 'success')
     return redirect(url_for('ext.wbs_project_detail', pid=pid))
 
 
@@ -1902,7 +1905,7 @@ def wbs_import(pid):
 
 @ext_bp.route('/wbs/task/<int:tid>/inline', methods=['POST'])
 def wbs_task_inline(tid):
-    """单元格行内保存。admin 可改全部字段；普通用户只能改 status/progress"""
+    """单元格行内保存。admin 可改全部字段；普通用户只能改已通过任务的 status/progress"""
     import json
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
@@ -1914,11 +1917,13 @@ def wbs_task_inline(tid):
     admin = session.get('user_role') == 'admin'
     editable_admin = {'wbs_code','name','work_content','owner','collaborators',
                       'plan_start','plan_end','deliverable','status','progress'}
-    editable_user = {'status','progress'}
     if admin:
         allowed = editable_admin
     else:
-        allowed = editable_user
+        # 普通用户：只有审批通过的任务才能改状态/进度
+        if t['approval_status'] != '已通过':
+            return jsonify({'ok': False, 'msg': '任务待审批通过后才能编辑'}), 403
+        allowed = {'status','progress'}
     if field not in allowed:
         return jsonify({'ok': False, 'msg': '无权限修改此字段'}), 403
     if field == 'progress':
@@ -1928,7 +1933,6 @@ def wbs_task_inline(tid):
             value = 0
     db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
     db.commit()
-    # 时间字段变更后，自动扩展父任务时间范围
     if field in ('plan_start', 'plan_end'):
         _sync_parent_dates(db, tid)
     return jsonify({'ok': True, 'value': value})
@@ -1954,7 +1958,7 @@ def _sync_parent_dates(db, child_id):
 
 @ext_bp.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
 def wbs_task_quickadd(pid):
-    """Excel风格快速新建：按WBS编号自动判断父子层级"""
+    """Excel风格快速新建：按WBS编号自动判断父子层级。普通用户添加的任务待审批。"""
     db = get_db()
     code = (request.form.get('wbs_code') or '').strip()
     name = (request.form.get('name') or '').strip()
@@ -1967,18 +1971,33 @@ def wbs_task_quickadd(pid):
                             (pid, parent_code)).fetchone()
         if parent:
             parent_id = parent['id']
+    is_admin = session.get('user_role') == 'admin'
+    approval = '已通过' if is_admin else '待审批'
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
-         plan_start, plan_end, deliverable, status, progress)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+         plan_start, plan_end, deliverable, status, progress, approval_status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, code, parent_id, name,
          request.form.get('work_content',''), request.form.get('owner',''),
          request.form.get('collaborators',''), request.form.get('plan_start',''),
          request.form.get('plan_end',''), request.form.get('deliverable',''),
-         '未开始', 0))
+         '未开始', 0, approval))
     new_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
     db.commit()
     _sync_parent_dates(db, new_id)
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@ext_bp.route('/wbs/task/<int:tid>/approve', methods=['POST'])
+def wbs_task_approve(tid):
+    """管理员审批任务"""
+    if session.get('user_role') != 'admin':
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    db = get_db()
+    action = request.form.get('action','')
+    status = '已通过' if action == 'approve' else '已驳回'
+    db.execute('UPDATE wbs_tasks SET approval_status=? WHERE id=?', (status, tid))
     db.commit()
     return jsonify({'ok': True})
 
