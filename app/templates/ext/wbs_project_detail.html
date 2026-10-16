@@ -21,8 +21,11 @@
         <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
         {% if current_role == 'admin' and pending_count > 0 %}
-        <button onclick="batchApprove()" style="padding:7px 14px;background:#faad14;border:1px solid #faad14;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
-            ⚠️ 待审批计划（{{ pending_count }}条）
+        <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
+            ✓ 通过（{{ pending_count }}条）
+        </button>
+        <button onclick="batchApprove('reject')" style="padding:7px 14px;background:#dc3545;border:1px solid #dc3545;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
+            ✗ 驳回
         </button>
         {% endif %}
         <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
@@ -223,12 +226,13 @@ function tryImport() {
     document.getElementById('importRealFile').click();
 }
 
-function batchApprove() {
-    const action = confirm('确认通过本项目所有待审批的任务吗？\\n\\n点击确定=全部通过，取消=驳回全部。');
+function batchApprove(action) {
+    const tip = action === 'approve' ? '确认通过本项目所有待审批任务？' : '确认驳回本项目所有待审批任务？';
+    if (!confirm(tip)) return;
     fetch(`/wbs/project/${PID}/tasks/approve`, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `action=${action ? 'approve' : 'reject'}`
+        body: `action=${action}`
     }).then(r => r.json()).then(d => {
         if (d.ok) location.reload();
         else alert(d.msg || '操作失败');
