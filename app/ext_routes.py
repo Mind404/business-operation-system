@@ -530,10 +530,8 @@ def revenue_confirm(rid):
     voucher = request.form.get('voucher', '')
     rec = db.execute('SELECT amount FROM revenue_confirmations WHERE id=?', (rid,)).fetchone()
     if not rec:
-        db.close()
         return '收入确认记录不存在', 404
     if confirmed_amount < 0 or confirmed_amount > rec['amount']:
-        db.close()
         return f'确认金额无效：应在 0 ~ {rec["amount"]:.2f} 元之间', 400
     db.execute('UPDATE revenue_confirmations SET status="已确认", confirmed_amount=?, confirm_date=?, voucher=? WHERE id=?',
                (confirmed_amount, confirm_date, voucher, rid))
@@ -681,7 +679,6 @@ def user_contract_list():
         {where_sql} ORDER BY c.created_at DESC''', params).fetchall()
     total_amount = sum(c['amount'] for c in contracts)
     paid_amount = sum(c['paid_amount'] or 0 for c in contracts)
-    db.close()
     return render_template('ext/user_contract_list.html', contracts=contracts,
                            current_status=status, search=search, total=len(contracts),
                            total_amount=total_amount, paid_amount=paid_amount)
@@ -722,7 +719,6 @@ def contract_edit(cid):
     db = get_db()
     contract = db.execute('SELECT * FROM contracts WHERE id=?', (cid,)).fetchone()
     if not contract:
-        db.close()
         return '合同不存在', 404
     ctype = request.args.get('type', '')
     if not ctype and contract['contract_type'] == '用户合同':
@@ -755,11 +751,9 @@ def contract_edit(cid):
             (contract_type, supplier, product_id, amount, paid_amount, sign_date, delivery_date, status, owner, progress, payment_status, remark, cid))
         db.commit()
         log_operation('合同', '编辑', f'{contract["contract_no"]}: 更新合同信息，已付{paid_amount}元')
-        db.close()
         return redirect(url_for('ext.contract_edit', cid=cid, type=ctype))
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     payments = db.execute('SELECT * FROM contract_payments WHERE contract_id=? ORDER BY plan_date', (cid,)).fetchall()
-    db.close()
     return render_template('ext/contract_form.html', products=products, contract=contract,
                            payments=payments, contract_types=contract_types, back_url=back_url, ctype=ctype)
 
@@ -769,7 +763,6 @@ def contract_payment_add(cid):
     db = get_db()
     contract = db.execute('SELECT * FROM contracts WHERE id=?', (cid,)).fetchone()
     if not contract:
-        db.close()
         return '合同不存在', 404
     node_name = request.form.get('node_name', '')
     plan_date = request.form.get('plan_date', '')
@@ -785,7 +778,6 @@ def contract_payment_add(cid):
             db.execute('UPDATE contracts SET paid_amount = COALESCE(paid_amount, 0) + ? WHERE id=?', (amount, cid))
         db.commit()
         log_operation('合同', '添加付款节点', f'{contract["contract_no"]}: {node_name} {amount}元')
-    db.close()
     return redirect(url_for('ext.contract_edit', cid=cid))
 
 @ext_bp.route('/contracts/<int:cid>/payments/<int:pid>/update', methods=['POST'])
@@ -794,7 +786,6 @@ def contract_payment_update(cid, pid):
     db = get_db()
     payment = db.execute('SELECT * FROM contract_payments WHERE id=? AND contract_id=?', (pid, cid)).fetchone()
     if not payment:
-        db.close()
         return '付款节点不存在', 404
     new_status = request.form.get('status', payment['status'])
     actual_date = request.form.get('actual_date', '')
@@ -818,7 +809,6 @@ def contract_payment_update(cid, pid):
             db.execute('UPDATE contracts SET payment_status=? WHERE id=?', ('未付款', cid))
     db.commit()
     log_operation('合同', '更新付款节点', f'节点{pid}: {old_status}→{new_status}')
-    db.close()
     return redirect(url_for('ext.contract_edit', cid=cid))
 
 @ext_bp.route('/contracts/<int:cid>/payments/<int:pid>/delete', methods=['POST'])
@@ -827,7 +817,6 @@ def contract_payment_delete(cid, pid):
     db = get_db()
     payment = db.execute('SELECT * FROM contract_payments WHERE id=? AND contract_id=?', (pid, cid)).fetchone()
     if not payment:
-        db.close()
         return '付款节点不存在', 404
     # 如果节点已付款，减少合同已付款金额
     if payment['status'] == '已付款':
@@ -835,7 +824,6 @@ def contract_payment_delete(cid, pid):
     db.execute('DELETE FROM contract_payments WHERE id=?', (pid,))
     db.commit()
     log_operation('合同', '删除付款节点', f'节点{pid}: {payment["node_name"]}')
-    db.close()
     return redirect(url_for('ext.contract_edit', cid=cid))
 
 @ext_bp.route('/contracts/<int:cid>/update-status', methods=['POST'])
@@ -844,7 +832,6 @@ def contract_update_status(cid):
     db = get_db()
     contract = db.execute('SELECT * FROM contracts WHERE id=?', (cid,)).fetchone()
     if not contract:
-        db.close()
         return '合同不存在', 404
     status = request.form.get('status', contract['status'])
     payment_status = request.form.get('payment_status', contract['payment_status'])
@@ -854,7 +841,6 @@ def contract_update_status(cid):
                (status, payment_status, progress, cid))
     db.commit()
     log_operation('合同', '状态更新', f'{contract["contract_no"]}: 状态→{status}, 付款→{payment_status}', operator)
-    db.close()
     return redirect(request.referrer or url_for('ext.contract_list'))
 
 # ============================================================

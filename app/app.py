@@ -68,7 +68,10 @@ def inject_user():
     ctx = {'current_user': session.get('user_name'), 'current_role': session.get('user_role')}
     try:
         ctx.update(plugin_system.inject_nav_context())
-    except Exception:
+    except Exception as e:
+        import traceback
+        print('=== inject_nav_context error ===')
+        traceback.print_exc()
         ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set()})
     return ctx
 
@@ -258,7 +261,6 @@ def init_db():
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
     db.commit()
-    db.close()
 
 # ============================================================
 # 输入校验工具
@@ -1048,7 +1050,6 @@ def executive_dashboard():
         }
 
     journey = build_journey(db)
-    db.close()
     return render_template('executive.html',
                            customer_reqs=customer_reqs, evolution_reqs=evolution_reqs, all_reqs=all_reqs,
                            dev_tasks=dev_task_list, test_tasks=test_task_list, prod_tasks=prod_task_list,
@@ -1069,12 +1070,10 @@ def executive_checkpoint_update():
     db = get_db()
     admin = db.execute("SELECT password FROM users WHERE username='admin'").fetchone()
     if not admin or admin['password'] != admin_pwd:
-        db.close()
         return jsonify({'success': False, 'error': '管理员密码错误'}), 403
 
     updates = data.get('updates', [])
     if not isinstance(updates, list) or not updates:
-        db.close()
         return jsonify({'success': False, 'error': '无更新数据'}), 400
 
     import datetime as _dt
@@ -1093,7 +1092,6 @@ def executive_checkpoint_update():
         sets = ', '.join(f"{k}=?" for k in fields)
         db.execute(f"UPDATE milestone_checkpoints SET {sets} WHERE id=?", (*fields.values(), cpid))
     db.commit()
-    db.close()
     return jsonify({'success': True, 'msg': f'已更新 {len(updates)} 条检查点'})
 
 
@@ -1107,7 +1105,6 @@ def api_update_gantt_task():
     db = get_db()
     admin = db.execute("SELECT password FROM users WHERE username='admin'").fetchone()
     if not admin or admin['password'] != admin_pwd:
-        db.close()
         return jsonify({'success': False, 'error': '管理员密码错误'}), 403
 
     task_type = data.get('task_type', '')  # dev / test / prod
@@ -1150,10 +1147,8 @@ def api_update_gantt_task():
             elif field == 'desc':
                 db.execute("UPDATE production_schedules SET remark=? WHERE id=?", (value, task_id))
         db.commit()
-        db.close()
         return jsonify({'success': True})
     except Exception as e:
-        db.close()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1167,7 +1162,6 @@ def api_add_gantt_task():
     db = get_db()
     admin = db.execute("SELECT password FROM users WHERE username='admin'").fetchone()
     if not admin or admin['password'] != admin_pwd:
-        db.close()
         return jsonify({'success': False, 'error': '管理员密码错误'}), 403
 
     task_type = data.get('task_type', '')  # dev / test / prod
@@ -1178,7 +1172,6 @@ def api_add_gantt_task():
     desc = data.get('desc', '')
 
     if not name or not start or not end:
-        db.close()
         return jsonify({'success': False, 'error': '任务名称、开始时间、结束时间不能为空'}), 400
 
     from datetime import datetime
@@ -1203,14 +1196,11 @@ def api_add_gantt_task():
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (schedule_no, start, end, status, desc, now, 0))
         else:
-            db.close()
             return jsonify({'success': False, 'error': '未知任务类型'}), 400
 
         db.commit()
-        db.close()
         return jsonify({'success': True})
     except Exception as e:
-        db.close()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1224,7 +1214,6 @@ def api_update_requirement():
     db = get_db()
     admin = db.execute("SELECT password FROM users WHERE username='admin'").fetchone()
     if not admin or admin['password'] != admin_pwd:
-        db.close()
         return jsonify({'success': False, 'error': '管理员密码错误'}), 403
 
     req_id = data.get('req_id')
@@ -1253,10 +1242,8 @@ def api_update_requirement():
         elif field == 'status':
             db.execute("UPDATE requirements SET status=? WHERE id=?", (value, req_id))
         db.commit()
-        db.close()
         return jsonify({'success': True})
     except Exception as e:
-        db.close()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1283,7 +1270,6 @@ def executive_customer():
         'delivered_qty': sum(r['quantity'] or 0 for r in req_list if r['status']=='已交付'),
     }
 
-    db.close()
     return render_template('executive_customer.html', req_list=req_list, stats=stats, now_str=now_str)
 
 
@@ -1296,7 +1282,6 @@ def executive_customer_detail(req_id):
     # 查询需求基本信息
     req = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not req:
-        db.close()
         return '需求不存在', 404
 
     req_info = calc_req_measures(req, db, now_str)
@@ -1487,7 +1472,6 @@ def executive_customer_detail(req_id):
                 'left': i / total_days * 100,
             })
 
-    db.close()
     return render_template('executive_customer_detail.html',
                            req=req_info, version=version, constraints=constraints,
                            dev_tasks=dev_task_list, test_tasks=test_task_list, prod_tasks=prod_task_list,
@@ -1522,7 +1506,6 @@ def executive_evolution():
         t = r['req_type']
         stats['by_type'][t] = stats['by_type'].get(t, 0) + 1
 
-    db.close()
     return render_template('executive_evolution.html', req_list=req_list, stats=stats, now_str=now_str)
 
 # ============================================================
@@ -1558,7 +1541,6 @@ def requirements_list():
     # 统计各类型数量
     type_stats = db.execute('''SELECT req_type, COUNT(*) as cnt FROM requirements WHERE is_deleted=0 GROUP BY req_type''').fetchall()
     type_count = {t['req_type']: t['cnt'] for t in type_stats}
-    db.close()
     return render_template('requirements.html', items=items, current_status=status,
                            current_type=req_type, type_count=type_count,
                            search=search, page=page, total_pages=total_pages, total=total)
@@ -1640,12 +1622,10 @@ def requirement_delete(req_id):
     db = get_db()
     item = db.execute('SELECT id FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not item:
-        db.close()
         return validation_error('需求不存在或已删除')
     db.execute('UPDATE requirements SET is_deleted=1, updated_at=datetime("now","localtime") WHERE id=?', (req_id,))
     db.commit()
     log_operation('需求管理', '删除', f'软删除需求ID: {req_id}')
-    db.close()
     return redirect(url_for('requirements_list'))
 
 @app.route('/requirements/<int:req_id>/status', methods=['POST'])
@@ -1662,7 +1642,6 @@ def requirement_update_status(req_id):
     log_operation('需求管理', '状态更新', f'需求ID {req_id} 状态更新为 {new_status}')
     # 状态联动：当需求状态变更时，自动同步关联版本的状态
     sync_requirement_status(db, req_id, new_status)
-    db.close()
     return jsonify({'success': True, 'status': new_status})
 
 def sync_requirement_status(db, req_id, new_status):
@@ -1692,7 +1671,6 @@ def requirement_detail(req_id):
     db = get_db()
     requirement = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not requirement:
-        db.close()
         return validation_error('需求不存在')
     # 1. 关联的软件版本（关联产品表获取产品名称，字段名映射为模板期望的名称）
     versions = db.execute('''
@@ -1749,7 +1727,6 @@ def requirement_detail(req_id):
         delivery_batches = db.execute('SELECT * FROM delivery_batches WHERE requirement_id=? ORDER BY batch_no', (req_id,)).fetchall()
     except Exception:
         pass
-    db.close()
     return render_template('requirement_detail.html', requirement=requirement,
                            versions=versions, tasks=tasks, bugs=bugs, test_cases=test_cases,
                            schedules=schedules, orders=orders, deliveries=deliveries,
@@ -1790,7 +1767,6 @@ def planning_list():
         if pid not in versions_by_product:
             versions_by_product[pid] = []
         versions_by_product[pid].append(v)
-    db.close()
     return render_template('planning.html', products=products, versions=versions,
                            versions_by_product=versions_by_product)
 
@@ -2469,7 +2445,6 @@ def data_management():
             'count': get_table_count(db, table),
             'columns': get_table_columns(db, table)
         })
-    db.close()
     return render_template('data_management.html', stats=stats, tables=tables_info)
 
 @app.route('/timeline')
@@ -2495,7 +2470,6 @@ def timeline_view():
 
     events = db.execute(query, params).fetchall()
     products = db.execute('SELECT id, name FROM products ORDER BY id').fetchall()
-    db.close()
     return render_template('timeline.html', events=events, products=products,
                            team_filter=team_filter, product_filter=product_filter)
 
@@ -2505,7 +2479,6 @@ def data_export_json():
     db = get_db()
     json_content = export_all_json(db)
     log_operation('数据管理', '导出', f'全库JSON导出，{len(json_content)}字节')
-    db.close()
     return Response(
         json_content,
         mimetype='application/json',
@@ -2518,7 +2491,6 @@ def data_export_csv():
     db = get_db()
     zip_content = export_all_csv_zip(db)
     log_operation('数据管理', '导出', '全库CSV压缩包导出')
-    db.close()
     return Response(
         zip_content,
         mimetype='application/zip',
@@ -2531,7 +2503,6 @@ def data_export_sql():
     db = get_db()
     sql_content = export_sql(db)
     log_operation('数据管理', '导出', '全库SQL备份导出')
-    db.close()
     return Response(
         sql_content,
         mimetype='text/sql',
@@ -2556,7 +2527,6 @@ def data_export_table(table_name, fmt):
         mime = 'application/json'
         ext = 'json'
     log_operation('数据管理', '导出', f'单表导出: {table_name}.{ext}')
-    db.close()
     return Response(
         content,
         mimetype=mime,
@@ -2585,23 +2555,19 @@ def data_import():
             elif filename.endswith('.json'):
                 imported, errors = import_table_json(db, table_name, content)
             else:
-                db.close()
                 return validation_error('仅支持 .csv 或 .json 格式文件')
 
             log_operation('数据管理', '导入', f'表 {table_name} 导入 {imported} 条记录')
-            db.close()
 
             result_msg = f'成功导入 {imported} 条记录到 {TABLE_NAMES_CN.get(table_name, table_name)}'
             if errors:
                 result_msg += f'，{len(errors)} 条失败: {"; ".join(errors[:3])}'
             return render_template('data_import_result.html', message=result_msg, success=True)
         except Exception as e:
-            db.close()
             return render_template('data_import_result.html', message=f'导入失败: {str(e)}', success=False)
 
     db = get_db()
     tables = [{'name': t, 'name_cn': TABLE_NAMES_CN.get(t, t)} for t in BUSINESS_TABLES]
-    db.close()
     return render_template('data_import.html', tables=tables)
 
 @app.route('/data/dictionary')
@@ -2621,7 +2587,6 @@ def data_dictionary():
             'columns': columns,
             'samples': [dict(s) for s in samples]
         })
-    db.close()
     return render_template('data_dictionary.html', tables=tables)
 
 # ============================================================
@@ -2759,7 +2724,6 @@ def api_global_search():
             })
     except Exception:
         pass
-    db.close()
     return jsonify({'success': True, 'results': results[:30]})
 
 # ============================================================
@@ -2819,7 +2783,6 @@ def version_add():
                        (vid, rid, '中'))
         db.commit()
         log_operation('版本规划', '新增', f'新增版本 {request.form.get("version_no")}')
-        db.close()
         return redirect(url_for('version_detail', vid=vid))
     return render_template('version_form.html', products=products, requirements=requirements, item=None)
 
@@ -2831,7 +2794,6 @@ def version_detail(vid):
                             FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id
                             WHERE sv.id=?''', (vid,)).fetchone()
     if not version:
-        db.close()
         return validation_error('版本不存在')
     tasks = db.execute('SELECT * FROM dev_tasks WHERE version_id=? ORDER BY priority, planned_start', (vid,)).fetchall()
     linked_reqs = db.execute('''SELECT r.*, vr.priority as link_priority
@@ -2841,7 +2803,6 @@ def version_detail(vid):
     bugs = db.execute('SELECT * FROM bug_records WHERE version_id=? ORDER BY created_at DESC', (vid,)).fetchall()
     test_cases = db.execute('SELECT * FROM test_cases WHERE version_id=? ORDER BY created_at DESC', (vid,)).fetchall()
     features = db.execute('SELECT * FROM version_features WHERE version_id=? ORDER BY priority, created_at', (vid,)).fetchall()
-    db.close()
     return render_template('version_detail.html', version=version, tasks=tasks,
                            linked_reqs=linked_reqs, bugs=bugs, test_cases=test_cases, features=features)
 
@@ -2855,7 +2816,6 @@ def version_status_update(vid):
     db = get_db()
     cur = db.execute('SELECT status FROM software_versions WHERE id=?', (vid,)).fetchone()
     if not cur:
-        db.close()
         return jsonify({'success': False, 'error': '版本不存在'}), 404
     old_status = cur['status']
     if new_status == '已发布' and old_status != '已发布':
@@ -2865,7 +2825,6 @@ def version_status_update(vid):
         db.execute('UPDATE software_versions SET status=? WHERE id=?', (new_status, vid))
     db.commit()
     log_operation('版本规划', '状态流转', f'版本ID {vid} 状态 {old_status} → {new_status}')
-    db.close()
     return jsonify({'success': True, 'status': new_status})
 
 @app.route('/planning/versions/<int:vid>/tasks/add', methods=['POST'])
@@ -2881,7 +2840,6 @@ def version_task_add(vid):
                 request.form.get('planned_start',''), request.form.get('planned_finish','')))
     db.commit()
     log_operation('版本规划', '新增任务', f'版本ID {vid} 新增任务: {request.form.get("task_name")}')
-    db.close()
     return redirect(url_for('version_detail', vid=vid))
 
 @app.route('/planning/versions/<int:vid>/tasks/<int:tid>/status', methods=['POST'])
@@ -2895,7 +2853,6 @@ def version_task_status(vid, tid):
     db.execute('UPDATE dev_tasks SET status=?, actual_finish=datetime("now","localtime") WHERE id=?',
                (new_status, tid))
     db.commit()
-    db.close()
     return jsonify({'success': True, 'status': new_status})
 
 # ============================================================
@@ -2917,7 +2874,6 @@ def bug_list():
     query += " ORDER BY b.created_at DESC"
     bugs = db.execute(query).fetchall()
     products = db.execute('SELECT id, name FROM products').fetchall()
-    db.close()
     return render_template('bug_list.html', bugs=bugs, tab=tab, products=products)
 
 @app.route('/bugs/add', methods=['GET', 'POST'])
@@ -2942,7 +2898,6 @@ def bug_add():
                       VALUES (?,?,?,?,?,?)''', (bid, '创建', None, '新建', request.form.get('reporter',''), 'Bug登记'))
         db.commit()
         log_operation('Bug管理', '新增', f'新增Bug {bug_no}: {request.form.get("title")}')
-        db.close()
         return redirect(url_for('bug_detail', bid=bid))
     return render_template('bug_form.html', products=products, versions=versions)
 
@@ -2956,10 +2911,8 @@ def bug_detail(bid):
                         LEFT JOIN software_versions sv ON b.version_id=sv.id
                         WHERE b.id=?''', (bid,)).fetchone()
     if not bug:
-        db.close()
         return validation_error('Bug不存在')
     workflow = db.execute('SELECT * FROM bug_workflow WHERE bug_id=? ORDER BY created_at', (bid,)).fetchall()
-    db.close()
     return render_template('bug_detail.html', bug=bug, workflow=workflow)
 
 @app.route('/bugs/<int:bid>/update', methods=['POST'])
@@ -3022,7 +2975,6 @@ def bug_update(bid):
                 request.form.get('close_reason')))
     db.commit()
     log_operation('Bug管理', '流转', f'BugID {bid} 状态从 {old_status} 变更为 {new_status}')
-    db.close()
     return redirect(url_for('bug_detail', bid=bid))
 
 @app.route('/bugs/<int:bid>/escalate', methods=['POST'])
@@ -3035,7 +2987,6 @@ def bug_escalate(bid):
                 request.form.get('reason','严重Bug，升级为质量问题进行根因分析')))
     db.commit()
     log_operation('Bug管理', '升级', f'BugID {bid} 升级为质量问题')
-    db.close()
     return redirect(url_for('bug_detail', bid=bid))
 
 # ============================================================
@@ -3093,7 +3044,6 @@ def schedule_add():
                           VALUES (?,?,?,?)''', (sid, name, seq, '待开始'))
         db.commit()
         log_operation('生产排程', '新增', f'新增排程 {schedule_no}, 自动生成{len(boms)}项物料需求和{len(processes)}道工序')
-        db.close()
         return redirect(url_for('schedule_detail', sid=sid))
     return render_template('schedule_form.html', products=products, requirements=requirements, versions=versions)
 
@@ -3107,7 +3057,6 @@ def schedule_detail(sid):
                              LEFT JOIN requirements r ON ps.requirement_id=r.id
                              WHERE ps.id=?''', (sid,)).fetchone()
     if not schedule:
-        db.close()
         return validation_error('排程不存在')
     processes = db.execute('SELECT * FROM production_processes WHERE schedule_id=? ORDER BY sequence', (sid,)).fetchall()
     materials = db.execute('SELECT * FROM material_plans WHERE schedule_id=? ORDER BY is_key_material DESC, material_name', (sid,)).fetchall()
@@ -3124,7 +3073,6 @@ def schedule_detail(sid):
             WHERE ri.material_plan_id IN ({placeholders})
             ORDER BY mr.created_at DESC
         ''', material_ids).fetchall()
-    db.close()
     return render_template('schedule_detail.html', schedule=schedule, processes=processes,
                            materials=materials, linked_orders=linked_orders, requisitions=requisitions)
 
@@ -3145,7 +3093,6 @@ def schedule_process_status(sid, pid):
     if total > 0 and done >= total:
         db.execute("UPDATE production_schedules SET status='已完成' WHERE id=? AND status != '已取消'", (sid,))
     db.commit()
-    db.close()
     return jsonify({'success': True, 'status': new_status})
 
 # ============================================================
@@ -3794,7 +3741,6 @@ if __name__ == '__main__':
             pass
 
         db.commit()
-        db.close()
     migrate_db()
     host, port, debug = get_config()
     print('='*60)
