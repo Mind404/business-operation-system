@@ -9,7 +9,7 @@
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
     {% for category, msg in messages %}
-    <div class="alert alert-{{ category }}" style="padding:10px 16px;margin:12px 0;border-radius:6px;{% if category=='success' %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#fde6e6;color:#a33;border:1px solid #f0b2b2;{% endif %}">{{ msg }}</div>
+    <div style="padding:10px 16px;margin:12px 0;border-radius:6px;{% if category=='success' %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#fde6e6;color:#a33;border:1px solid #f0b2b2;{% endif %}">{{ msg }}</div>
     {% endfor %}
   {% endif %}
 {% endwith %}
@@ -22,50 +22,37 @@
 {% endfor %}
 
 {% for group_name, group_plugins in groups.items() %}
-<div style="margin-bottom:24px;">
-    <h3 style="font-size:15px;color:#333;margin:0 0 10px;padding-left:10px;border-left:3px solid #2563eb;">{{ group_name }}</h3>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e0e4ea;border-radius:8px;overflow:hidden;">
-        <thead>
-            <tr style="background:#f5f7fa;">
-                <th style="padding:10px 14px;text-align:left;width:50px;"></th>
-                <th style="padding:10px 14px;text-align:left;">插件名称</th>
-                <th style="padding:10px 14px;text-align:left;width:40%;">功能说明</th>
-                <th style="padding:10px 14px;text-align:center;width:100px;">状态</th>
-                <th style="padding:10px 14px;text-align:center;width:110px;">操作</th>
-            </tr>
-        </thead>
-        <tbody>
-        {% for p in group_plugins %}
-            <tr style="border-top:1px solid #eee;">
-                <td style="padding:10px 14px;font-size:18px;">{{ p.icon }}</td>
-                <td style="padding:10px 14px;font-weight:bold;color:#333;">{{ p.name }}</td>
-                <td style="padding:10px 14px;color:#666;line-height:1.5;">{{ p.description }}</td>
-                <td style="padding:10px 14px;text-align:center;">
+<div style="margin-bottom:28px;">
+    <h3 style="font-size:16px;color:#333;margin:0 0 14px;padding-left:12px;border-left:4px solid #2563eb;">{{ group_name }}</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    {% for p in group_plugins %}
+        <div style="border:1px solid #e0e4ea;border-radius:10px;padding:20px;background:#fff;display:flex;gap:16px;align-items:flex-start;{% if p.core %}opacity:0.9;{% endif %}">
+            <div style="font-size:36px;line-height:1;flex-shrink:0;margin-top:4px;">{{ p.icon }}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="font-size:17px;font-weight:bold;color:#222;">{{ p.name }}</span>
                     {% if p.core %}
-                        <span style="background:#e8f0fe;color:#2563eb;padding:3px 10px;border-radius:10px;font-size:12px;">常驻</span>
+                        <span style="background:#e8f0fe;color:#2563eb;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">常驻</span>
                     {% elif p.id in subscribed %}
-                        <span style="background:#e6f7e6;color:#2a7a2a;padding:3px 10px;border-radius:10px;font-size:12px;">已订阅</span>
+                        <span style="background:#e6f7e6;color:#2a7a2a;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">已订阅</span>
                     {% else %}
-                        <span style="background:#f5f5f5;color:#999;padding:3px 10px;border-radius:10px;font-size:12px;">未订阅</span>
+                        <span style="background:#f5f5f5;color:#999;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">未订阅</span>
                     {% endif %}
-                </td>
-                <td style="padding:10px 14px;text-align:center;">
-                    {% if not p.core %}
-                    <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
-                        <button type="submit" style="padding:6px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;
-                        {% if p.id in subscribed %}background:#fff0f0;color:#dc3545;border:1px solid #f5c6cb;
-                        {% else %}background:#2563eb;color:#fff;border:1px solid #2563eb;{% endif %}">
-                        {% if p.id in subscribed %}取消订阅{% else %}+ 订阅{% endif %}
-                        </button>
-                    </form>
-                    {% else %}
-                        <span style="color:#ccc;font-size:12px;">—</span>
-                    {% endif %}
-                </td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+                </div>
+                <p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 12px;">{{ p.description }}</p>
+                {% if not p.core %}
+                <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
+                    <button type="submit" style="padding:7px 20px;border:none;border-radius:6px;cursor:pointer;font-size:14px;
+                    {% if p.id in subscribed %}background:#fff0f0;color:#dc3545;border:1px solid #f5c6cb;
+                    {% else %}background:#2563eb;color:#fff;border:1px solid #2563eb;{% endif %}">
+                    {% if p.id in subscribed %}取消订阅{% else %}+ 订阅{% endif %}
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    {% endfor %}
+    </div>
 </div>
 {% endfor %}
 {% endblock %}

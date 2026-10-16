@@ -25,7 +25,7 @@
         {% for t in overdue %}
         <tr style="background:#fff5f5;">
             <td style="padding:8px;border:1px solid #f5c6cb;"><b>{{ t.wbs_code }}</b> {{ t.name }}</td>
-            <td style="padding:8px;border:1px solid #f5c6cb;color:#666;">{{ t.project_name }}</td>
+            <td style="padding:8px;border:1px solid #f5c6cb;"><a href="{{ url_for('ext.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
             <td style="padding:8px;border:1px solid #f5c6cb;">{{ t.owner or '—' }}</td>
             <td style="padding:8px;border:1px solid #f5c6cb;text-align:center;">{{ t.plan_end }}</td>
             <td style="padding:8px;border:1px solid #f5c6cb;text-align:center;color:#dc3545;font-weight:bold;">超期</td>
@@ -53,7 +53,7 @@
         {% for t in due3 %}
         <tr>
             <td style="padding:8px;border:1px solid #ffd0a8;"><b>{{ t.wbs_code }}</b> {{ t.name }}</td>
-            <td style="padding:8px;border:1px solid #ffd0a8;color:#666;">{{ t.project_name }}</td>
+            <td style="padding:8px;border:1px solid #ffd0a8;"><a href="{{ url_for('ext.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
             <td style="padding:8px;border:1px solid #ffd0a8;">{{ t.owner or '—' }}</td>
             <td style="padding:8px;border:1px solid #ffd0a8;text-align:center;">{{ t.plan_end }}</td>
             <td style="padding:8px;border:1px solid #ffd0a8;text-align:center;">{{ t.status }}</td>
@@ -80,7 +80,7 @@
         {% for t in due7 %}
         <tr>
             <td style="padding:8px;border:1px solid #b8d4fe;"><b>{{ t.wbs_code }}</b> {{ t.name }}</td>
-            <td style="padding:8px;border:1px solid #b8d4fe;color:#666;">{{ t.project_name }}</td>
+            <td style="padding:8px;border:1px solid #b8d4fe;"><a href="{{ url_for('ext.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
             <td style="padding:8px;border:1px solid #b8d4fe;">{{ t.owner or '—' }}</td>
             <td style="padding:8px;border:1px solid #b8d4fe;text-align:center;">{{ t.plan_end }}</td>
             <td style="padding:8px;border:1px solid #b8d4fe;text-align:center;">{{ t.status }}</td>

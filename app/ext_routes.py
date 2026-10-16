@@ -1686,17 +1686,17 @@ def wbs_alerts():
     soon3 = (today + timedelta(days=3)).isoformat()
     soon7 = (today + timedelta(days=7)).isoformat()
     # 逾期
-    overdue = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+    overdue = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end!='' AND t.plan_end<? AND t.status!='已完成' AND t.parent_id>0
         ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
     # 3天内
-    due3 = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+    due3 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>=? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
         ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
     # 7天内
-    due7 = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+    due7 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
         ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
