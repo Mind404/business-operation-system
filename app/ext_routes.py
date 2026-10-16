@@ -1670,10 +1670,12 @@ def wbs_projects():
         FROM wbs_projects p ORDER BY p.id DESC''').fetchall()
     # 预警统计
     today = date.today().isoformat()
+    soon3 = (date.today() + timedelta(days=3)).isoformat()
     soon7 = (date.today() + timedelta(days=7)).isoformat()
     overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status!='已完成' AND parent_id>0", (today,)).fetchone()[0]
-    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status!='已完成' AND parent_id>0", (today, soon7)).fetchone()[0]
-    return render_template('ext/wbs_projects.html', rows=rows, overdue=overdue, due7=due7, today=today)
+    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status!='已完成' AND parent_id>0", (today, soon3)).fetchone()[0]
+    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status!='已完成' AND parent_id>0", (soon3, soon7)).fetchone()[0]
+    return render_template('ext/wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today)
 
 
 @ext_bp.route('/wbs/alerts')
