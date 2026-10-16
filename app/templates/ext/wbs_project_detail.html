@@ -16,8 +16,8 @@
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         {% if current_role == 'admin' %}
         <a href="{{ url_for('ext.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
-        <button onclick="document.getElementById('importRealFile').click()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
         {% endif %}
+        <button onclick="document.getElementById('importRealFile').click()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
         <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
         <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
         <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
