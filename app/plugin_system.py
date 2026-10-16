@@ -12,13 +12,13 @@ from flask import g, session, current_app, redirect, url_for, request, flash
 # core=1 常驻不可关；core=0 业务插件，用户自行订阅
 # ============================================================
 PLUGINS = [
-    # --- 核心常驻（基底只看这两个） ---
-    {'id': 'overview',    'name': '总览看板',         'icon': '🗺️', 'group': '核心', 'core': 1,
-     'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive'},
+    # --- 核心常驻（基底只看个人中心） ---
     {'id': 'profile',      'name': '个人中心',         'icon': '👤', 'group': '核心', 'core': 1,
      'desc': '我的信息、我的待办、我的插件订阅', 'endpoint': 'profile', 'nav_path': '/profile'},
 
     # --- 业务插件（默认不订阅，去插件中心开启） ---
+    {'id': 'overview',    'name': '总览看板',         'icon': '🗺️', 'group': '业务', 'core': 0,
+     'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive'},
     {'id': 'workbench',   'name': '我的工作台',       'icon': '📊', 'group': '业务', 'core': 0,
      'desc': '个人待办与快捷入口', 'endpoint': 'index', 'nav_path': '/'},
     {'id': 'requirements','name': '需求数据库',       'icon': '📋', 'group': '业务', 'core': 0,
@@ -48,7 +48,7 @@ PLUGINS = [
 # 业务插件 endpoint → plugin_id 映射（用于路由守卫）
 _BIZ_ENDPOINTS = {p['endpoint']: p['id'] for p in PLUGINS if not p['core']}
 # 免守卫路径（登录、静态、插件中心本身、个人中心、总览）
-_WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/executive', '/logout')
+_WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/logout')
 
 
 def get_db():
@@ -108,14 +108,14 @@ def register_plugin_guard(app):
         # 静态资源、POST 表单提交里的 toggle 等放行
         ep = request.endpoint
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
-                            'executive_dashboard', 'login', 'logout'):
+                            'login', 'logout'):
             return None
         # 该 endpoint 属于某个业务插件？
         pid = _BIZ_ENDPOINTS.get(ep)
         if not pid:
             return None
-        # 核心插件 endpoint 放行
-        if pid in ('overview', 'profile'):
+        # 核心插件 endpoint 放行（只有个人中心常驻）
+        if pid in ('profile',):
             return None
         user_id = session.get('user_id')
         if not user_id:
