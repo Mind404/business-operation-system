@@ -6,8 +6,15 @@
     <p class="page-desc">项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物</p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <a href="{{ url_for('ext.wbs_project_add') }}" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;text-decoration:none;font-size:13px;">+ 新建项目</a>
+    {% if overdue > 0 or due7 > 0 %}
+    <a href="{{ url_for('ext.wbs_alerts') }}" style="padding:8px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;text-decoration:none;color:#856404;font-size:13px;display:flex;gap:8px;align-items:center;">
+        ⚠️ 到期预警
+        {% if overdue > 0 %}<span style="background:#dc3545;color:#fff;border-radius:10px;padding:1px 8px;font-size:12px;">{{ overdue }} 已逾期</span>{% endif %}
+        {% if due7 > 0 %}<span style="background:#fd7e14;color:#fff;border-radius:10px;padding:1px 8px;font-size:12px;">{{ due7 }} 7天内到期</span>{% endif %}
+    </a>
+    {% endif %}
 </div>
 
 {% with messages = get_flashed_messages(with_categories=true) %}

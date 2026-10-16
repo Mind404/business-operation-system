@@ -1662,12 +1662,45 @@ def tech_req_import():
 # ============================================================
 @ext_bp.route('/wbs')
 def wbs_projects():
+    from datetime import date, timedelta
     db = get_db()
     rows = db.execute('''SELECT p.*,
         (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id) AS task_count,
         (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id AND t.parent_id=0) AS phase_count
         FROM wbs_projects p ORDER BY p.id DESC''').fetchall()
-    return render_template('ext/wbs_projects.html', rows=rows)
+    # 预警统计
+    today = date.today().isoformat()
+    soon7 = (date.today() + timedelta(days=7)).isoformat()
+    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status!='已完成' AND parent_id>0", (today,)).fetchone()[0]
+    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status!='已完成' AND parent_id>0", (today, soon7)).fetchone()[0]
+    return render_template('ext/wbs_projects.html', rows=rows, overdue=overdue, due7=due7, today=today)
+
+
+@ext_bp.route('/wbs/alerts')
+def wbs_alerts():
+    """跨项目到期预警看板"""
+    from datetime import date, timedelta
+    db = get_db()
+    today = date.today()
+    today_s = today.isoformat()
+    soon3 = (today + timedelta(days=3)).isoformat()
+    soon7 = (today + timedelta(days=7)).isoformat()
+    # 逾期
+    overdue = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+        JOIN wbs_projects p ON t.project_id=p.id
+        WHERE t.plan_end!='' AND t.plan_end<? AND t.status!='已完成' AND t.parent_id>0
+        ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
+    # 3天内
+    due3 = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+        JOIN wbs_projects p ON t.project_id=p.id
+        WHERE t.plan_end>=? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+        ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
+    # 7天内
+    due7 = db.execute('''SELECT t.*, p.name as project_name FROM wbs_tasks t
+        JOIN wbs_projects p ON t.project_id=p.id
+        WHERE t.plan_end>? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+        ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
+    return render_template('ext/wbs_alerts.html', overdue=overdue, due3=due3, due7=due7, today=today_s)
 
 
 @ext_bp.route('/wbs/add', methods=['GET', 'POST'])
