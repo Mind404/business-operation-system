@@ -34,11 +34,9 @@
   {% endfor %}
 {% endwith %}
 
-{% if current_role == 'admin' %}
 <form method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:none;">
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
-{% endif %}
 
 <!-- WBS表格 -->
 <div id="wbsWrap" style="overflow-x:auto;">
@@ -147,7 +145,6 @@
     {% endfor %}
 
     <!-- 新建行（Excel风格空行） -->
-    {% if current_role == 'admin' %}
     <tr id="newRow" style="background:#fafbfc;">
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
             <input id="nr_wbs" placeholder="如2" style="width:100%;border:none;background:transparent;text-align:center;font-size:13px;outline:none;">
@@ -181,7 +178,6 @@
             <button onclick="saveNewRow()" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✓</button>
         </td>
     </tr>
-    {% endif %}
     </tbody>
 </table>
 </div>
