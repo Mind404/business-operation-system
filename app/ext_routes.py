@@ -1905,7 +1905,7 @@ def wbs_task_quickadd(pid):
         return jsonify({'ok': False, 'msg': 'WBS号和任务名必填'}), 400
     parent_id = 0
     if '.' in code:
-        parent_code = code.split('.')[0]
+        parent_code = code.rsplit('.', 1)[0]
         parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
                             (pid, parent_code)).fetchone()
         if parent:

@@ -338,8 +338,8 @@ function submitNote() {
 </style>
 <script>
 function setZoom(z) {
-    var wrap = document.getElementById('wbsWrap');
-    wrap.style.fontSize = (13 * z) + 'px';
+    var tbl = document.getElementById('wbsTable');
+    tbl.style.fontSize = (13 * z) + 'px';
     ['zoom100','zoom150','zoom200'].forEach(function(id, i){
         var btn = document.getElementById(id);
         var v = [1,1.5,2][i];
