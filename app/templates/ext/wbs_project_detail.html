@@ -4,8 +4,16 @@
 <style>
     .cell{display:block;min-height:22px;width:100%;cursor:pointer;padding:2px 0;}
     .cell:hover{background:#f0f5ff;border-radius:3px;}
-    .prog-val{cursor:pointer;border-bottom:1px dashed transparent;}
+    .prog-val{cursor:pointer;border-bottom:1px dashed transparent;min-width:34px;display:inline-block;text-align:left;}
     .prog-val:hover{border-bottom-color:#2563eb;color:#2563eb;}
+    .prog-range{-webkit-appearance:none;appearance:none;width:90px;height:8px;border-radius:4px;
+        background:linear-gradient(to right,#2563eb 0%,#2563eb var(--fill,0%),#d0d7e5 var(--fill,0%),#d0d7e5 100%);
+        outline:none;vertical-align:middle;cursor:pointer;margin-right:6px;}
+    .prog-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+        background:#fff;border:3px solid #2563eb;box-shadow:0 1px 3px rgba(0,0,0,.25);cursor:pointer;}
+    .prog-range::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #2563eb;cursor:pointer;}
+    .prog-range::-moz-range-track{height:8px;border-radius:4px;background:#d0d7e5;}
+    .prog-range:disabled{opacity:.4;cursor:default;}
 </style>
 <div style="margin-bottom:14px;">
     <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
@@ -134,7 +142,7 @@
                 </select>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
-                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="width:80px;vertical-align:middle;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
+                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="--fill:{{ t.progress }}%;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
                 <span class="prog-val" data-tid="{{ t.id }}" style="font-size:11px;{% if current_role!='admin' and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
@@ -329,6 +337,7 @@ document.querySelectorAll('.prog-range').forEach(r => {
     r.addEventListener('input', () => {
         const v = r.parentElement.querySelector('.prog-val');
         if (v) v.textContent = r.value + '%';
+        r.style.setProperty('--fill', r.value + '%');
     });
     r.addEventListener('change', () => {
         fetch(`/wbs/task/${r.dataset.tid}/inline`, {
@@ -362,7 +371,7 @@ document.querySelectorAll('.prog-val').forEach(el => {
                 if (d.ok) {
                     el.textContent = v + '%';
                     const r = el.parentElement.querySelector('.prog-range');
-                    if (r) r.value = v;
+                    if (r) { r.value = v; r.style.setProperty('--fill', v + '%'); }
                 } else { alert(d.msg||'保存失败'); el.textContent = old; }
                 el.dataset.editing = '';
             }).catch(()=>{ el.textContent = old; el.dataset.editing=''; });
