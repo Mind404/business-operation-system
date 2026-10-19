@@ -2069,19 +2069,6 @@ def wbs_task_quickadd(pid):
     return jsonify({'ok': True})
 
 
-@ext_bp.route('/wbs/task/<int:tid>/approve', methods=['POST'])
-def wbs_task_approve(tid):
-    """管理员审批任务"""
-    if session.get('user_role') != 'admin':
-        return jsonify({'ok': False, 'msg': '无权限'}), 403
-    db = get_db()
-    action = request.form.get('action','')
-    status = '已通过' if action == 'approve' else '已驳回'
-    db.execute('UPDATE wbs_tasks SET approval_status=? WHERE id=?', (status, tid))
-    db.commit()
-    return jsonify({'ok': True})
-
-
 @ext_bp.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
 def wbs_project_tasks_approve(pid):
     """管理员批量审批整个项目下所有待审批任务"""
