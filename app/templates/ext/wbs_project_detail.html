@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ p.name }} - WBS项目{% endblock %}
 {% block content %}
+<style>
+    .cell{display:block;min-height:22px;width:100%;cursor:pointer;padding:2px 0;}
+    .cell:hover{background:#f0f5ff;border-radius:3px;}
+    .prog-val{cursor:pointer;border-bottom:1px dashed transparent;}
+    .prog-val:hover{border-bottom-color:#2563eb;color:#2563eb;}
+</style>
 <div style="margin-bottom:14px;">
     <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
 </div>
@@ -128,8 +134,8 @@
                 </select>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
-                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="width:50px;vertical-align:middle;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
-                <span class="prog-val" style="font-size:11px;">{{ t.progress }}%</span>
+                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="width:80px;vertical-align:middle;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
+                <span class="prog-val" data-tid="{{ t.id }}" style="font-size:11px;{% if current_role!='admin' and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
                 {% set notes_count = (t.notes|from_json|length) if t.notes else 0 %}
@@ -321,13 +327,47 @@ document.querySelectorAll('.status-select').forEach(sel => {
 // 进度条
 document.querySelectorAll('.prog-range').forEach(r => {
     r.addEventListener('input', () => {
-        r.parentElement.querySelector('.prog-val').textContent = r.value + '%';
+        const v = r.parentElement.querySelector('.prog-val');
+        if (v) v.textContent = r.value + '%';
     });
     r.addEventListener('change', () => {
         fetch(`/wbs/task/${r.dataset.tid}/inline`, {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({field:'progress', value:r.value})
-        });
+        }).then(res=>res.json()).then(d=>{ if(!d.ok) alert(d.msg||'保存失败'); });
+    });
+});
+
+// 进度数字：点击直接输入
+document.querySelectorAll('.prog-val').forEach(el => {
+    el.addEventListener('click', () => {
+        const tid = el.dataset.tid;
+        if (!tid || el.dataset.editing) return;
+        const old = el.textContent;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = 0; input.max = 100;
+        input.value = old.replace('%','');
+        input.style.cssText = 'width:52px;padding:2px 4px;border:1px solid #2563eb;border-radius:4px;font-size:12px;text-align:center;';
+        el.innerHTML = ''; el.appendChild(input);
+        el.dataset.editing = '1'; input.focus();
+        input.onblur = () => {
+            let v = parseInt(input.value, 10);
+            if (isNaN(v)) v = 0;
+            v = Math.max(0, Math.min(100, v));
+            fetch(`/wbs/task/${tid}/inline`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({field:'progress', value:v})
+            }).then(res=>res.json()).then(d=>{
+                if (d.ok) {
+                    el.textContent = v + '%';
+                    const r = el.parentElement.querySelector('.prog-range');
+                    if (r) r.value = v;
+                } else { alert(d.msg||'保存失败'); el.textContent = old; }
+                el.dataset.editing = '';
+            }).catch(()=>{ el.textContent = old; el.dataset.editing=''; });
+        };
+        input.onkeydown = e => { if(e.key==='Enter') input.blur(); };
     });
 });
 
