@@ -151,7 +151,7 @@
                 <span class="cell" data-field="deliverable" data-tid="{{ t.id }}">{{ t.deliverable or '' }}</span>
                 {% else %}{{ t.deliverable or '' }}{% endif %}
             </td>
-            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后才能修改状态{% endif %}">
                 <select class="status-select" data-tid="{{ t.id }}" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %} style="width:100%;padding:4px;border:1px solid #ccd;border-radius:4px;
                     {% if t.status == '已完成' %}background:#d4edda;{% elif t.status == '进行中' %}background:#cce5ff;{% elif t.status == '阻塞' %}background:#f8d7da;{% else %}background:#fff;{% endif %}">
                     {% for s in ['未开始','进行中','已完成','阻塞'] %}
@@ -159,13 +159,13 @@
                     {% endfor %}
                 </select>
             </td>
-            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后才能调整进度{% endif %}">
                 <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="--fill:{{ t.progress }}%;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
-                <span class="prog-val" data-tid="{{ t.id }}" style="font-size:11px;{% if current_role!='admin' and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
+                <span class="prog-val" data-tid="{{ t.id }}" {% if current_role!='admin' and t.approval_status!='已通过' %}data-lock="1"{% endif %} style="font-size:11px;{% if current_role!='admin' and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
                 {% set notes_count = (t.notes|from_json|length) if t.notes else 0 %}
-                <button onclick="{% if current_role=='admin' or t.approval_status=='已通过' %}showNotes({{ t.id }}, this){% else %}return false;{% endif %}" title="查看/登记进展" style="background:{% if current_role=='admin' or t.approval_status=='已通过' %}#e8f0fe;border:1px solid #b8d4fe;{% else %}#f5f5f5;{% endif %}border-radius:6px;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %}font-size:16px;padding:2px 6px;position:relative;line-height:1;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}">
+                <button onclick="{% if current_role=='admin' or t.approval_status=='已通过' %}showNotes({{ t.id }}, this){% else %}alert('任务审批通过后才能登记进展');{% endif %}" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后才能登记进展{% else %}查看/登记进展{% endif %}" style="background:{% if current_role=='admin' or t.approval_status=='已通过' %}#e8f0fe;border:1px solid #b8d4fe;{% else %}#f5f5f5;{% endif %}border-radius:6px;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %}font-size:16px;padding:2px 6px;position:relative;line-height:1;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}">
                     📝
                     {% if notes_count > 0 %}
                     <span style="position:absolute;top:-6px;right:-8px;background:#c0392b;color:#fff;font-size:10px;border-radius:8px;padding:0 4px;">{{ notes_count }}</span>
@@ -177,12 +177,13 @@
                 {% for f in files if f %}
                 <a href="{{ url_for('ext.wbs_download', filename=f) }}" target="_blank" style="display:block;font-size:11px;color:#2563eb;">📎{{ f.split('/')[-1][:12] }}</a>
                 {% endfor %}
-                <label style="display:inline-block;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %};font-size:11px;color:{% if current_role=='admin' or t.approval_status=='已通过' %}#2563eb;{% else %}#ccc;{% endif %};margin-top:2px;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}">
+                <label style="display:inline-block;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %};font-size:11px;color:{% if current_role=='admin' or t.approval_status=='已通过' %}#2563eb;{% else %}#ccc;{% endif %};margin-top:2px;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}"
+                    {% if current_role!='admin' and t.approval_status!='已通过' %}title="任务审批通过后才能上传产出物" onclick="alert('任务审批通过后才能上传产出物')"{% endif %}>
                     +上传
                     <input type="file" class="file-input" data-tid="{{ t.id }}" style="display:none;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
                 </label>
             </td>
-            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后可编辑备注{% endif %}">
                 {% if current_role == 'admin' or t.approval_status == '已通过' %}
                 <span class="cell" data-field="remark" data-tid="{{ t.id }}" data-remark="1">{{ t.remark or '' }}</span>
                 {% else %}<span style="color:#bbb;">待审批</span>{% endif %}
@@ -259,6 +260,15 @@ const PID = {{ p.id }};
 const PROJECT_APPROVAL = '{{ p.approval_status or "已通过" }}';
 let currentTid = null;
 
+// 普通用户：表格里的只读字段（无编辑控件、纯文本的格子）给出悬停提示，避免"点了没反应"
+if (!IS_ADMIN) {
+    document.querySelectorAll('#wbsTable td').forEach(td => {
+        if (!td.querySelector('.cell,.status-select,.prog-range,.prog-val,button,input,label,a') && !td.title && td.textContent.trim()) {
+            td.title = '仅管理员可修改此字段，如需调整请告知项目管理员';
+        }
+    });
+}
+
 function tryImport() {
     if (!IS_ADMIN && PROJECT_APPROVAL !== '已通过') {
         alert('项目正在等待管理员审批，审批通过后才能导入任务。');
@@ -302,7 +312,11 @@ function resubmitProject() {
 document.querySelectorAll('.cell').forEach(el => {
     el.addEventListener('click', () => {
         // 管理员可编辑全部字段；普通用户只能编辑标记了 data-remark 的备注列（且任务已审批通过）
-        if ((!IS_ADMIN && !el.dataset.remark) || el.dataset.editing) return;
+        if (!IS_ADMIN && !el.dataset.remark) {
+            alert('此字段仅管理员可修改。如需调整请告知项目管理员。');
+            return;
+        }
+        if (el.dataset.editing) return;
         const tid = el.dataset.tid, field = el.dataset.field;
         const old = el.textContent;
         const input = document.createElement('input');
@@ -357,14 +371,20 @@ function saveNewRow() {
 // 状态下拉
 document.querySelectorAll('.status-select').forEach(sel => {
     sel.addEventListener('change', () => {
+        const oldVal = sel.dataset.prev || sel.value;
         fetch(`/wbs/task/${sel.dataset.tid}/inline`, {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({field:'status', value:sel.value})
         }).then(r=>r.json()).then(res => {
             if(res.ok) {
+                sel.dataset.prev = sel.value;
+                sel.style.background = sel.value==='已完成'?'#d4edda':sel.value==='进行中'?'#cce5ff':sel.value==='阻塞'?'#f8d7da':'#fff';
+            } else {
+                alert(res.msg || '保存失败');
+                sel.value = oldVal;
                 sel.style.background = sel.value==='已完成'?'#d4edda':sel.value==='进行中'?'#cce5ff':sel.value==='阻塞'?'#f8d7da':'#fff';
             }
-        });
+        }).catch(()=>{ sel.value = oldVal; alert('保存失败，请重试'); });
     });
 });
 
@@ -387,6 +407,7 @@ document.querySelectorAll('.prog-range').forEach(r => {
 document.querySelectorAll('.prog-val').forEach(el => {
     el.addEventListener('click', () => {
         const tid = el.dataset.tid;
+        if (el.dataset.lock) { alert('任务审批通过后才能调整进度'); return; }
         if (!tid || el.dataset.editing) return;
         const old = el.textContent;
         const input = document.createElement('input');
@@ -410,7 +431,7 @@ document.querySelectorAll('.prog-val').forEach(el => {
                     if (r) { r.value = v; r.style.setProperty('--fill', v + '%'); }
                 } else { alert(d.msg||'保存失败'); el.textContent = old; }
                 el.dataset.editing = '';
-            }).catch(()=>{ el.textContent = old; el.dataset.editing=''; });
+            }).catch(()=>{ el.textContent = old; el.dataset.editing=''; alert('保存失败，请重试'); });
         };
         input.onkeydown = e => { if(e.key==='Enter') input.blur(); };
     });
