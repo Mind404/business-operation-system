@@ -1687,20 +1687,23 @@ def wbs_alerts():
     today_s = today.isoformat()
     soon3 = (today + timedelta(days=3)).isoformat()
     soon7 = (today + timedelta(days=7)).isoformat()
-    # 逾期
+    # 逾期（只统计任务级审批通过的任务，待审批/已驳回的不纳入预警）
     overdue = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end!='' AND t.plan_end<? AND t.status!='已完成' AND t.parent_id>0
+          AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
     # 3天内
     due3 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>=? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+          AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
     # 7天内
     due7 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+          AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
     return render_template('ext/wbs_alerts.html', overdue=overdue, due3=due3, due7=due7, today=today_s)
 
@@ -1733,6 +1736,9 @@ def wbs_project_add():
 
 @ext_bp.route('/wbs/<int:pid>/edit', methods=['GET', 'POST'])
 def wbs_project_edit(pid):
+    if session.get('user_role') != 'admin':
+        flash('只有管理员可以编辑项目信息', 'error')
+        return redirect(url_for('ext.wbs_projects'))
     db = get_db()
     p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
     if not p:
@@ -1764,6 +1770,40 @@ def wbs_project_approve(pid):
     return redirect(url_for('ext.wbs_projects'))
 
 
+@ext_bp.route('/wbs/<int:pid>/resubmit', methods=['POST'])
+def wbs_project_resubmit(pid):
+    """普通用户：项目被驳回后重新提交审批"""
+    if session.get('user_role') == 'admin':
+        return jsonify({'ok': False, 'msg': '管理员无需重新提交'}), 400
+    db = get_db()
+    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return jsonify({'ok': False, 'msg': '项目不存在'}), 404
+    if p['approval_status'] != '已驳回':
+        return jsonify({'ok': False, 'msg': '只有被驳回的项目可以重新提交'}), 400
+    db.execute('''UPDATE wbs_projects SET approval_status='待审批', updated_at=datetime("now","localtime") WHERE id=?''', (pid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@ext_bp.route('/wbs/<int:pid>/delete', methods=['POST'])
+def wbs_project_delete(pid):
+    """管理员删除项目（级联删除其下所有任务）"""
+    if session.get('user_role') != 'admin':
+        flash('只有管理员可以删除项目', 'error')
+        return redirect(url_for('ext.wbs_projects'))
+    db = get_db()
+    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        flash('项目不存在', 'error')
+        return redirect(url_for('ext.wbs_projects'))
+    db.execute('DELETE FROM wbs_tasks WHERE project_id=?', (pid,))
+    db.execute('DELETE FROM wbs_projects WHERE id=?', (pid,))
+    db.commit()
+    flash(f'项目「{p["name"]}」及其下所有任务已删除。', 'success')
+    return redirect(url_for('ext.wbs_projects'))
+
+
 @ext_bp.route('/wbs/<int:pid>')
 def wbs_project_detail(pid):
     db = get_db()
@@ -1774,7 +1814,9 @@ def wbs_project_detail(pid):
     # 分组：父任务（阶段）和子任务
     phases = [t for t in tasks if t['parent_id'] == 0]
     pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
-    return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases, pending_count=pending_count)
+    rejected_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='已驳回'", (pid,)).fetchone()[0]
+    return render_template('ext/wbs_project_detail.html', p=p, tasks=tasks, phases=phases,
+                           pending_count=pending_count, rejected_count=rejected_count)
 
 
 def _save_upload(file_storage, subdir='wbs'):
@@ -1844,7 +1886,14 @@ def wbs_task_delete(tid):
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if t:
-        db.execute('DELETE FROM wbs_tasks WHERE id=? OR parent_id=?', (tid, tid))
+        # 递归收集所有子孙任务id一并删除，避免留下孤儿任务
+        def collect(pid):
+            ids = [pid]
+            for row in db.execute('SELECT id FROM wbs_tasks WHERE parent_id=?', (pid,)).fetchall():
+                ids.extend(collect(row['id']))
+            return ids
+        ids = collect(tid)
+        db.execute('DELETE FROM wbs_tasks WHERE id IN (%s)' % ','.join('?' * len(ids)), tuple(ids))
         db.commit()
     return redirect(url_for('ext.wbs_project_detail', pid=t['project_id'] if t else 0))
 
@@ -1875,9 +1924,15 @@ def wbs_import(pid):
     wb = openpyxl.load_workbook(f, data_only=True)
     ws = wb.active
     db = get_db()
-    count = 0
     is_admin = session.get('user_role') == 'admin'
     approval = '已通过' if is_admin else '待审批'
+    # 已存在的 WBS 编号（查重）
+    existing = set(r[0] for r in db.execute(
+        'SELECT wbs_code FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall())
+    # 第一遍：全部插入（先不挂父子，避免 Excel 乱序导致父行未插入）
+    inserted = []  # (row_id, wbs_code)
+    count = 0
+    skip = 0
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
         if not row or not row[0]:
             continue
@@ -1885,29 +1940,38 @@ def wbs_import(pid):
         name = str(row[1] or '').strip()
         if not name:
             continue
-        is_phase = '.' not in code
-        parent_id = 0
-        if not is_phase:
-            parent_code = code.rsplit('.', 1)[0]
-            parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
-                                (pid, parent_code)).fetchone()
-            if parent:
-                parent_id = parent['id']
-        db.execute('''INSERT INTO wbs_tasks
+        if code in existing:
+            skip += 1
+            continue
+        existing.add(code)
+        cur = db.execute('''INSERT INTO wbs_tasks
             (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
              plan_start, plan_end, deliverable, status, progress, approval_status, remark)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (pid, code, parent_id, name,
+            (pid, code, 0, name,
              str(row[2] or '').strip(), str(row[3] or '').strip(), str(row[4] or '').strip(),
              str(row[5] or '').strip(), str(row[6] or '').strip(), str(row[7] or '').strip(),
              '未开始', 0, approval,
              str(row[8] or '').strip() if len(row) > 8 else ''))
+        inserted.append((cur.lastrowid, code))
         count += 1
+    # 第二遍：按 WBS 编号补挂父子关系（此时父行必然已存在）
+    for row_id, code in inserted:
+        if '.' in code:
+            parent_code = code.rsplit('.', 1)[0]
+            parent = db.execute('SELECT id FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
+                                (pid, parent_code)).fetchone()
+            if parent:
+                db.execute('UPDATE wbs_tasks SET parent_id=? WHERE id=?', (parent['id'], row_id))
     db.commit()
+    # 导入后同步父任务时间：让阶段时间自动覆盖所有子任务
+    for row_id, code in inserted:
+        _sync_parent_dates(db, row_id)
     if is_admin:
-        flash(f'成功导入 {count} 条WBS任务', 'success')
+        flash(f'成功导入 {count} 条WBS任务' + (f'，跳过 {skip} 条已存在的任务' if skip else ''), 'success')
     else:
-        flash(f'成功导入 {count} 条任务，等待管理员审批通过后才能编辑状态、进度、进展和产出物。', 'success')
+        flash(f'成功导入 {count} 条任务' + (f'，跳过 {skip} 条已存在的任务' if skip else '')
+              + '，等待管理员审批通过后才能编辑状态、进度、进展和产出物。', 'success')
     return redirect(url_for('ext.wbs_project_detail', pid=pid))
 
 
@@ -1949,15 +2013,20 @@ def wbs_task_inline(tid):
 
 
 def _sync_parent_dates(db, child_id):
-    """子任务时间变更后，自动把父任务时间扩展到覆盖所有子任务"""
+    """子任务时间变更后，自动把父任务时间扩展到覆盖『父任务自身 + 所有直接子任务』的时间并集（只会扩张，不会收缩）"""
     child = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (child_id,)).fetchone()
     if not child or not child['parent_id']:
         return
     pid = child['project_id']
     parent_id = child['parent_id']
-    # 找所有直接子任务的最早开始和最晚结束
-    rows = db.execute('''SELECT MIN(plan_start) as ms, MAX(plan_end) as me
-                         FROM wbs_tasks WHERE parent_id=?''', (parent_id,)).fetchone()
+    # 取父任务自身 + 所有直接子任务中非空的最早开始和最晚结束
+    rows = db.execute('''SELECT MIN(plan_start) as ms, MAX(plan_end) as me FROM (
+                             SELECT plan_start, plan_end FROM wbs_tasks
+                             WHERE parent_id=? AND plan_start!='' AND plan_end!=''
+                             UNION ALL
+                             SELECT plan_start, plan_end FROM wbs_tasks
+                             WHERE id=? AND plan_start!='' AND plan_end!=''
+                         )''', (parent_id, parent_id)).fetchone()
     if rows and rows['ms']:
         db.execute('UPDATE wbs_tasks SET plan_start=?, plan_end=? WHERE id=?',
                    (rows['ms'], rows['me'], parent_id))
@@ -1968,7 +2037,9 @@ def _sync_parent_dates(db, child_id):
 
 @ext_bp.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
 def wbs_task_quickadd(pid):
-    """Excel风格快速新建：按WBS编号自动判断父子层级。普通用户添加的任务待审批。"""
+    """Excel风格快速新建：按WBS编号自动判断父子层级。仅管理员可用（普通用户只能通过导入Excel添加任务）。"""
+    if session.get('user_role') != 'admin':
+        return jsonify({'ok': False, 'msg': '普通用户只能通过导入Excel添加任务'}), 403
     db = get_db()
     code = (request.form.get('wbs_code') or '').strip()
     name = (request.form.get('name') or '').strip()
@@ -1981,8 +2052,7 @@ def wbs_task_quickadd(pid):
                             (pid, parent_code)).fetchone()
         if parent:
             parent_id = parent['id']
-    is_admin = session.get('user_role') == 'admin'
-    approval = '已通过' if is_admin else '待审批'
+    approval = '已通过'
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
          plan_start, plan_end, deliverable, status, progress, approval_status, remark)
@@ -2026,6 +2096,18 @@ def wbs_project_tasks_approve(pid):
     return jsonify({'ok': True, 'count': cur.rowcount})
 
 
+@ext_bp.route('/wbs/project/<int:pid>/tasks/resubmit', methods=['POST'])
+def wbs_project_tasks_resubmit(pid):
+    """普通用户：任务被驳回后，一键重新提交本项目下所有已驳回任务，进入待审批"""
+    if session.get('user_role') == 'admin':
+        return jsonify({'ok': False, 'msg': '管理员无需重新提交'}), 400
+    db = get_db()
+    cur = db.execute("UPDATE wbs_tasks SET approval_status='待审批' WHERE project_id=? AND approval_status='已驳回'",
+                     (pid,))
+    db.commit()
+    return jsonify({'ok': True, 'count': cur.rowcount})
+
+
 @ext_bp.route('/wbs/task/<int:tid>/notes_data')
 def wbs_task_notes_data(tid):
     import json
@@ -2042,12 +2124,14 @@ def wbs_task_notes_data(tid):
 
 @ext_bp.route('/wbs/task/<int:tid>/note', methods=['POST'])
 def wbs_task_add_note(tid):
-    """追加进展流水，不覆盖历史"""
+    """追加进展流水，不覆盖历史。任务审批通过后（管理员或参与人）才能添加。"""
     import json
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    if t['approval_status'] != '已通过':
+        return jsonify({'ok': False, 'msg': '任务审批通过后才能添加进展'}), 403
     data = request.get_json(force=True)
     content = (data.get('content') or '').strip()
     if not content:
@@ -2069,11 +2153,13 @@ def wbs_task_add_note(tid):
 
 @ext_bp.route('/wbs/task/<int:tid>/upload', methods=['POST'])
 def wbs_task_upload(tid):
-    """上传产出物文件，追加到 attachment_path（多个用分号分隔）"""
+    """上传产出物文件，追加到 attachment_path（多个用分号分隔）。任务审批通过后才能上传。"""
     db = get_db()
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    if t['approval_status'] != '已通过':
+        return jsonify({'ok': False, 'msg': '任务审批通过后才能上传产出物'}), 403
     attach = _save_upload(request.files.get('file'), 'wbs')
     if not attach:
         return jsonify({'ok': False, 'msg': '未收到文件'}), 400

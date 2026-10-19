@@ -56,6 +56,16 @@
                     <button name="action" value="approve" style="padding:3px 10px;background:#52c41a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">通过</button>
                     <button name="action" value="reject" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-left:4px;">驳回</button>
                 </form>
+                {% elif current_role != 'admin' and r.approval_status == '已驳回' %}
+                <form method="post" action="{{ url_for('ext.wbs_project_resubmit', pid=r.id) }}" style="display:inline;">
+                    <button style="padding:3px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">重新提交审批</button>
+                </form>
+                {% endif %}
+                {% if current_role == 'admin' %}
+                <form method="post" action="{{ url_for('ext.wbs_project_delete', pid=r.id) }}" style="display:inline;margin-left:6px;"
+                      onsubmit="return confirm('确认删除项目「{{ r.name }}」及其下所有任务？此操作不可恢复！');">
+                    <button style="padding:3px 10px;background:#fff;color:#dc3545;border:1px solid #dc3545;border-radius:4px;cursor:pointer;font-size:12px;">删除</button>
+                </form>
                 {% endif %}
             </td>
         </tr>
