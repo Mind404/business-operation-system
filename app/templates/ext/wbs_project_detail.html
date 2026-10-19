@@ -72,6 +72,7 @@
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:70px;">进度</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">进展</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">产出物</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;min-width:140px;">备注</th>
             {% if current_role == 'admin' %}<th style="padding:9px 6px;border:1px solid #d0d7e5;width:50px;">操作</th>{% endif %}
         </tr>
     </thead>
@@ -149,6 +150,11 @@
                     <input type="file" class="file-input" data-tid="{{ t.id }}" style="display:none;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
                 </label>
             </td>
+            <td style="padding:7px 6px;border:1px solid #d0d7e5;">
+                {% if current_role == 'admin' or t.approval_status == '已通过' %}
+                <span class="cell" data-field="remark" data-tid="{{ t.id }}" data-remark="1">{{ t.remark or '' }}</span>
+                {% else %}<span style="color:#bbb;">待审批</span>{% endif %}
+            </td>
             {% if current_role == 'admin' %}
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
                 <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
@@ -190,6 +196,9 @@
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;color:#999;font-size:12px;text-align:center;">0%</td>
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
+        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
+            <input id="nr_remark" placeholder="备注" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+        </td>
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
             <button onclick="saveNewRow()" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✓</button>
         </td>
@@ -242,7 +251,8 @@ function batchApprove(action) {
 // 行内编辑已有任务
 document.querySelectorAll('.cell').forEach(el => {
     el.addEventListener('click', () => {
-        if (!IS_ADMIN || el.dataset.editing) return;
+        // 管理员可编辑全部字段；普通用户只能编辑标记了 data-remark 的备注列（且任务已审批通过）
+        if ((!IS_ADMIN && !el.dataset.remark) || el.dataset.editing) return;
         const tid = el.dataset.tid, field = el.dataset.field;
         const old = el.textContent;
         const input = document.createElement('input');
@@ -280,6 +290,7 @@ function saveNewRow() {
     fd.append('plan_start', document.getElementById('nr_start').value);
     fd.append('plan_end', document.getElementById('nr_end').value);
     fd.append('deliverable', document.getElementById('nr_deliv').value);
+    fd.append('remark', document.getElementById('nr_remark').value);
     fetch(`/wbs/${PID}/task/quickadd`, {method:'POST', body:fd})
     .then(r=>r.json()).then(res => {
         if (res.ok) location.reload();
@@ -287,7 +298,7 @@ function saveNewRow() {
     });
 }
 // 回车触发
-['nr_wbs','nr_name','nr_work','nr_owner','nr_collab','nr_deliv'].forEach(id => {
+['nr_wbs','nr_name','nr_work','nr_owner','nr_collab','nr_deliv','nr_remark'].forEach(id => {
     document.getElementById(id).addEventListener('keydown', e => {
         if (e.key === 'Enter') saveNewRow();
     });

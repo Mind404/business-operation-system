@@ -1895,18 +1895,19 @@ def wbs_import(pid):
                 parent_id = parent['id']
         db.execute('''INSERT INTO wbs_tasks
             (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
-             plan_start, plan_end, deliverable, status, progress, approval_status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             plan_start, plan_end, deliverable, status, progress, approval_status, remark)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (pid, code, parent_id, name,
              str(row[2] or '').strip(), str(row[3] or '').strip(), str(row[4] or '').strip(),
              str(row[5] or '').strip(), str(row[6] or '').strip(), str(row[7] or '').strip(),
-             '未开始', 0, approval))
+             '未开始', 0, approval,
+             str(row[8] or '').strip() if len(row) > 8 else ''))
         count += 1
     db.commit()
     if is_admin:
         flash(f'成功导入 {count} 条WBS任务', 'success')
     else:
-        flash(f'成功导入 {count} 条任务，等待管理员审批后才能编辑状态和进度。', 'success')
+        flash(f'成功导入 {count} 条任务，等待管理员审批通过后才能编辑状态、进度、进展和产出物。', 'success')
     return redirect(url_for('ext.wbs_project_detail', pid=pid))
 
 
@@ -1925,14 +1926,14 @@ def wbs_task_inline(tid):
     value = data.get('value', '')
     admin = session.get('user_role') == 'admin'
     editable_admin = {'wbs_code','name','work_content','owner','collaborators',
-                      'plan_start','plan_end','deliverable','status','progress'}
+                      'plan_start','plan_end','deliverable','status','progress','remark'}
     if admin:
         allowed = editable_admin
     else:
-        # 普通用户：只有审批通过的任务才能改状态/进度
+        # 普通用户：只有审批通过的任务才能改状态/进度/备注
         if t['approval_status'] != '已通过':
             return jsonify({'ok': False, 'msg': '任务待审批通过后才能编辑'}), 403
-        allowed = {'status','progress'}
+        allowed = {'status','progress','remark'}
     if field not in allowed:
         return jsonify({'ok': False, 'msg': '无权限修改此字段'}), 403
     if field == 'progress':
@@ -1984,13 +1985,13 @@ def wbs_task_quickadd(pid):
     approval = '已通过' if is_admin else '待审批'
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
-         plan_start, plan_end, deliverable, status, progress, approval_status)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+         plan_start, plan_end, deliverable, status, progress, approval_status, remark)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, code, parent_id, name,
          request.form.get('work_content',''), request.form.get('owner',''),
          request.form.get('collaborators',''), request.form.get('plan_start',''),
          request.form.get('plan_end',''), request.form.get('deliverable',''),
-         '未开始', 0, approval))
+         '未开始', 0, approval, request.form.get('remark','')))
     new_id = db.execute('SELECT last_insert_rowid()').fetchone()[0]
     db.commit()
     _sync_parent_dates(db, new_id)
@@ -2093,7 +2094,7 @@ def wbs_template():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准']
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','备注']
     header_fill = PatternFill('solid', fgColor='2B579A')
     header_font = Font(color='FFFFFF', bold=True, size=11)
     thin = Side(style='thin', color='D0D7E5')
@@ -2103,16 +2104,16 @@ def wbs_template():
         c.fill = header_fill; c.font = header_font
         c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         c.border = border
-    widths = [10, 22, 30, 10, 16, 12, 12, 22]
+    widths = [10, 22, 30, 10, 16, 12, 12, 22, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     # 示例行
     samples = [
-        [1, '阶段一·资源诉求（输入梳理）', '汇总各渠道输入，为问题定位提供基线', '', '', '2026-10-12', '2026-10-16', ''],
-        ['1.1', '在轨测试情况', '统计切换性能的比对情况（切换失败率、切换时延）', '余丽莎', '谭富元、李雪', '2026-10-12', '2026-10-16', '数据统计表/比对报告'],
-        ['1.2', '质量测试情况', '实验室入网性能/切换性能的测试结果收集', '袁谅', '', '2026-10-12', '2026-10-16', '测试结果记录'],
-        [2, '阶段二·问题现象汇总分析', '整合阶段一输入，复现问题、定位根因', '', '', '2026-10-16', '2026-10-22', ''],
-        ['2.1', '问题现象汇总分析', '汇总失败率偏高与切换时延偏长的现象', '余丽莎', '袁谅、谭富元', '2026-10-16', '2026-10-19', '问题现象汇总表'],
+        [1, '阶段一·资源诉求（输入梳理）', '汇总各渠道输入，为问题定位提供基线', '', '', '2026-10-12', '2026-10-16', '', ''],
+        ['1.1', '在轨测试情况', '统计切换性能的比对情况（切换失败率、切换时延）', '余丽莎', '谭富元、李雪', '2026-10-12', '2026-10-16', '数据统计表/比对报告', ''],
+        ['1.2', '质量测试情况', '实验室入网性能/切换性能的测试结果收集', '袁谅', '', '2026-10-12', '2026-10-16', '测试结果记录', ''],
+        [2, '阶段二·问题现象汇总分析', '整合阶段一输入，复现问题、定位根因', '', '', '2026-10-16', '2026-10-22', '', ''],
+        ['2.1', '问题现象汇总分析', '汇总失败率偏高与切换时延偏长的现象', '余丽莎', '袁谅、谭富元', '2026-10-16', '2026-10-19', '问题现象汇总表', ''],
     ]
     for r, row in enumerate(samples, 2):
         for c, v in enumerate(row, 1):
@@ -2147,7 +2148,7 @@ def wbs_export(pid):
         return redirect(url_for('ext.wbs_projects'))
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=? ORDER BY wbs_code, id', (pid,)).fetchall()
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准']
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','备注']
     header_fill = PatternFill('solid', fgColor='2B579A')
     thin = Side(style='thin', color='D0D7E5')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -2155,14 +2156,14 @@ def wbs_export(pid):
         c = ws.cell(row=1, column=i, value=h)
         c.fill = header_fill; c.font = Font(color='FFFFFF', bold=True, size=11)
         c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True); c.border = border
-    widths = [10, 22, 30, 10, 16, 12, 12, 22]
+    widths = [10, 22, 30, 10, 16, 12, 12, 22, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     r = 2
     for t in tasks:
         is_phase = '.' not in (t['wbs_code'] or '')
         vals = [t['wbs_code'], t['name'], t['work_content'], t['owner'] or '', t['collaborators'] or '',
-                t['plan_start'] or '', t['plan_end'] or '', t['deliverable'] or '']
+                t['plan_start'] or '', t['plan_end'] or '', t['deliverable'] or '', t['remark'] or '']
         for c, v in enumerate(vals, 1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.border = border

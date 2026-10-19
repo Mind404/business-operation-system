@@ -70,6 +70,8 @@ def init_wbs_tables():
         notes TEXT,
         status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
         sort_order INTEGER DEFAULT 0,
+        approval_status TEXT DEFAULT '已通过',
+        remark TEXT,
         FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE)''')
     db.commit()
 
@@ -106,6 +108,8 @@ MIGRATIONS = [
     (2, 'wbs_tasks 加 priority/attachment_path/notes', None),
     # v3: wbs_projects 加 participants 字段
     (3, 'wbs_projects 加 participants', None),
+    # v4: wbs_tasks 加 approval_status / wbs_projects 加 approver+approval_status / wbs_tasks 加 remark
+    (4, '两级审批字段+任务备注', None),
 ]
 
 
@@ -130,6 +134,20 @@ def run_migrations():
                 db.execute("ALTER TABLE wbs_projects ADD COLUMN participants TEXT")
             except sqlite3.OperationalError:
                 pass
+        elif ver == 4:
+            # 两级审批：任务审批状态；项目审批人+审批状态；任务备注
+            for col, ddl in [('approval_status', "TEXT DEFAULT '已通过'"),
+                             ('remark', 'TEXT')]:
+                try:
+                    db.execute(f'ALTER TABLE wbs_tasks ADD COLUMN {col} {ddl}')
+                except sqlite3.OperationalError:
+                    pass
+            for col, ddl in [('approver', 'TEXT'),
+                             ('approval_status', "TEXT DEFAULT '已通过'")]:
+                try:
+                    db.execute(f'ALTER TABLE wbs_projects ADD COLUMN {col} {ddl}')
+                except sqlite3.OperationalError:
+                    pass
         _set_version(db, ver, note)
     db.commit()
 
