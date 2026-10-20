@@ -2,7 +2,6 @@
 {% set page_title = '测试用例库' %}
 {% block header_actions %}
 {% if can_write('ext.test_case') %}<a href="{{ url_for('ext.test_case_add') }}" class="btn btn-primary">+ 新增用例</a>{% endif %}
-<a href="{{ url_for('ext.test_execution_list') }}" class="btn btn-outline">测试执行</a>
 {% endblock %}
 {% block ext_content %}
 <div class="filter-bar">

@@ -56,7 +56,7 @@ def require_login():
     # 权限校验：检查当前角色是否有权限访问该模块
     endpoint = request.endpoint or ''
     # 工作台和登录相关页面所有角色都可以访问
-    if endpoint in ('index', 'logout', 'ext.my_tasks', 'ext.task_add', 'ext.task_detail', 'ext.task_update'):
+    if endpoint in ('index', 'logout'):
         return None
     # 【权限放开】v8.5.0 起取消全部模块权限与只读限制，所有登录用户均可访问与编辑
     # 保留登录校验；gantt/模块权限/只读拦截全部放行
@@ -330,13 +330,9 @@ def index():
         # 新模块统计
         'test_cases_total': db.execute('SELECT COUNT(*) FROM test_cases').fetchone()[0],
         'test_executions_active': db.execute("SELECT COUNT(*) FROM test_executions WHERE status='进行中'").fetchone()[0],
-        'tickets_pending': db.execute("SELECT COUNT(*) FROM tech_support_tickets WHERE status IN ('待处理','处理中')").fetchone()[0],
-        'feedback_pending': db.execute("SELECT COUNT(*) FROM user_feedbacks WHERE status='待评估'").fetchone()[0],
-        'delivery_plans_active': db.execute("SELECT COUNT(*) FROM delivery_plans WHERE status IN ('计划中','进行中')").fetchone()[0],
-        'revenue_pending': db.execute("SELECT COUNT(*) FROM revenue_confirmations WHERE status='待确认'").fetchone()[0],
-        'contracts_active': db.execute("SELECT COUNT(*) FROM contracts WHERE status='执行中'").fetchone()[0],
-        'resources_active': db.execute("SELECT COUNT(*) FROM resource_schedules WHERE status='已分配'").fetchone()[0],
-        'devices_online': db.execute("SELECT COUNT(*) FROM devices WHERE status='在线'").fetchone()[0],
+                        'delivery_plans_active': db.execute("SELECT COUNT(*) FROM delivery_plans WHERE status IN ('计划中','进行中')").fetchone()[0],
+                'contracts_active': db.execute("SELECT COUNT(*) FROM contracts WHERE status='执行中'").fetchone()[0],
+                'devices_online': db.execute("SELECT COUNT(*) FROM devices WHERE status='在线'").fetchone()[0],
         'device_alerts': db.execute("SELECT COUNT(*) FROM device_alerts WHERE status='未处理'").fetchone()[0],
         'quality_issues_pending': db.execute("SELECT COUNT(*) FROM bug_records WHERE is_quality_issue=1 AND status NOT IN ('已关闭','已取消')").fetchone()[0],
         'dev_tasks_pending': db.execute("SELECT COUNT(*) FROM dev_tasks WHERE status NOT IN ('已完成','已取消')").fetchone()[0],

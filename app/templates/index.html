@@ -20,60 +20,19 @@
             </div>
             <div class="hero-focus">
                 {% if current_role == 'admin' %}系统管理与决策总览 · 关注交付进度与风险
-                {% elif current_role == 'product' %}计划统筹 · 需求评审 · 版本规划 · 资源调度
-                {% elif current_role == 'dev_test' %}开发任务推进 · 测试执行 · Bug处理
+                {% elif current_role == 'product' %}计划统筹 · 需求评审 · 版本规划
+                {% elif current_role == 'dev_test' %}开发任务推进 · 测试用例 · Bug处理
                 {% elif current_role == 'quality' %}质量检测 · Bug巡检 · 质量督办闭环
-                {% elif current_role == 'delivery' %}交付计划 · 技术支持 · 运维监控
+                {% elif current_role == 'delivery' %}交付计划 · 设备运维 · 运维监控
                 {% endif %}
             </div>
         </div>
         <div class="hero-right">
-            <div class="hero-todo-card">
-                <div class="hero-todo-num">{{ my_tasks_count }}</div>
-                <div class="hero-todo-label">待办事项</div>
-            </div>
         </div>
     </div>
 
     <!-- 两栏布局：左待办 + 右常用入口 -->
     <div class="dash-two-col">
-        <!-- 我的待办 -->
-        <div class="dash-panel">
-            <div class="panel-head">
-                <h3 class="panel-title">📋 我的待办</h3>
-                <a href="{{ url_for('ext.my_tasks') }}" class="panel-link">全部 →</a>
-            </div>
-            {% if my_tasks %}
-            <div class="todo-compact">
-                {% for t in my_tasks[:5] %}
-                <div class="todo-row {% if t.due_date and t.due_date < now_date %}todo-row-overdue{% endif %}">
-                    <span class="todo-dot dot-{{ t.priority }}"></span>
-                    <div class="todo-row-main">
-                        <div class="todo-row-title">{{ t.title }}</div>
-                        <div class="todo-row-meta">
-                            <span class="todo-tag">{{ t.module }}</span>
-                            {% if t.due_date %}
-                            <span class="todo-due {% if t.due_date < now_date %}due-red{% endif %}">{{ t.due_date }}</span>
-                            {% endif %}
-                            <span class="todo-status status-{{ t.status }}">{{ t.status }}</span>
-                        </div>
-                    </div>
-                    <a href="{{ url_for('ext.task_detail', tid=t.id) }}" class="todo-go">处理</a>
-                </div>
-                {% endfor %}
-                {% if my_tasks|length > 5 %}
-                <div class="todo-more">还有 {{ my_tasks|length - 5 }} 项待办，<a href="{{ url_for('ext.my_tasks') }}">点击查看</a></div>
-                {% endif %}
-            </div>
-            {% else %}
-            <div class="empty-box">
-                <div class="empty-icon-lg">🎉</div>
-                <div class="empty-text-lg">暂无待办，工作都已安排妥当</div>
-                <a href="{{ url_for('ext.task_add') }}" class="btn btn-primary btn-sm">+ 新建任务</a>
-            </div>
-            {% endif %}
-        </div>
-
         <!-- 常用功能 -->
         <div class="dash-panel">
             <div class="panel-head">
@@ -115,14 +74,6 @@
                     <span class="qi-icon">📄</span>
                     <span class="qi-text">合同跟进</span>
                 </a>
-                <a href="{{ url_for('ext.resource_list') }}" class="quick-item q-cyan">
-                    <span class="qi-icon">🔀</span>
-                    <span class="qi-text">资源调度</span>
-                </a>
-                <a href="{{ url_for('ext.tech_spec_list') }}" class="quick-item q-pink">
-                    <span class="qi-icon">📑</span>
-                    <span class="qi-text">技术规格</span>
-                </a>
 
                 {% elif current_role == 'dev_test' %}
                 <a href="{{ url_for('version_list') }}" class="quick-item q-blue">
@@ -137,10 +88,6 @@
                     <span class="qi-icon">🧪</span>
                     <span class="qi-text">测试用例</span>
                 </a>
-                <a href="{{ url_for('ext.test_execution_list') }}" class="quick-item q-orange">
-                    <span class="qi-icon">📊</span>
-                    <span class="qi-text">测试执行</span>
-                </a>
 
                 {% elif current_role == 'quality' %}
                 <a href="{{ url_for('bug_list') }}" class="quick-item q-red">
@@ -150,10 +97,6 @@
                 <a href="{{ url_for('ext.delivery_plan_list') }}" class="quick-item q-green">
                     <span class="qi-icon">📦</span>
                     <span class="qi-text">交付跟踪</span>
-                </a>
-                <a href="{{ url_for('ext.test_execution_list') }}" class="quick-item q-orange">
-                    <span class="qi-icon">📊</span>
-                    <span class="qi-text">测试报告</span>
                 </a>
 
                 {% elif current_role == 'delivery' %}
@@ -165,21 +108,9 @@
                     <span class="qi-icon">🚚</span>
                     <span class="qi-text">交付计划</span>
                 </a>
-                <a href="{{ url_for('ext.ticket_list') }}" class="quick-item q-orange">
-                    <span class="qi-icon">🎧</span>
-                    <span class="qi-text">技术支持</span>
-                </a>
-                <a href="{{ url_for('ext.revenue_list') }}" class="quick-item q-purple">
-                    <span class="qi-icon">💰</span>
-                    <span class="qi-text">收入确认</span>
-                </a>
                 <a href="{{ url_for('ext.device_list') }}" class="quick-item q-cyan">
                     <span class="qi-icon">📡</span>
                     <span class="qi-text">设备运维</span>
-                </a>
-                <a href="{{ url_for('ext.feedback_list') }}" class="quick-item q-pink">
-                    <span class="qi-icon">💬</span>
-                    <span class="qi-text">用户反馈</span>
                 </a>
                 {% endif %}
             </div>

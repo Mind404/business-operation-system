@@ -20,8 +20,6 @@
 {% block content %}
 <div class="module-tabs">
     <a href="{{ url_for('requirements_list') }}" class="module-tab {% if request.endpoint.startswith('requirements_') %}active{% endif %}">📋 需求数据库</a>
-    <a href="{{ url_for('ext.feedback_list') }}" class="module-tab {% if request.endpoint.startswith('ext.feedback_') %}active{% endif %}">💬 用户反馈</a>
-    <a href="{{ url_for('ext.ticket_list') }}" class="module-tab {% if request.endpoint.startswith('ext.ticket_') %}active{% endif %}">🎫 支持工单</a>
 </div>
 
 <!-- 业务逻辑说明：两类需求的性质区分 -->

@@ -442,20 +442,6 @@ CREATE TABLE IF NOT EXISTS requisition_items (
     FOREIGN KEY (requisition_id) REFERENCES material_requisitions(id) ON DELETE CASCADE,
     FOREIGN KEY (material_plan_id) REFERENCES material_plans(id)
 );
-CREATE TABLE IF NOT EXISTS resource_schedules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    resource_type TEXT DEFAULT '人力资源',
-    resource_name TEXT NOT NULL,
-    project TEXT,
-    task TEXT,
-    start_date TEXT,
-    end_date TEXT,
-    allocation INTEGER DEFAULT 100,
-    status TEXT DEFAULT '已分配',
-    owner TEXT,
-    remark TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
-);
 CREATE TABLE IF NOT EXISTS revenue_confirmations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     confirm_no TEXT UNIQUE,
@@ -506,43 +492,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT DEFAULT (datetime('now','localtime')),
     completed_at TEXT
 );
-CREATE TABLE IF NOT EXISTS tech_specs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id INTEGER NOT NULL,
-    version_id INTEGER,
-    spec_name TEXT NOT NULL,
-    spec_type TEXT DEFAULT '功能规格',
-    content TEXT,
-    parameters TEXT,
-    interfaces TEXT,
-    performance TEXT,
-    status TEXT DEFAULT '草稿',
-    author TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    updated_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (product_id) REFERENCES products(id),
-    FOREIGN KEY (version_id) REFERENCES software_versions(id)
-);
-CREATE TABLE IF NOT EXISTS tech_support_tickets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_no TEXT UNIQUE,
-    customer TEXT,
-    contact_person TEXT,
-    contact_phone TEXT,
-    product_id INTEGER,
-    title TEXT NOT NULL,
-    description TEXT,
-    category TEXT DEFAULT '技术咨询',
-    priority TEXT DEFAULT '中',
-    status TEXT DEFAULT '待处理',
-    handler TEXT,
-    solution TEXT,
-    resolved_at TEXT,
-    satisfaction INTEGER,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    updated_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (product_id) REFERENCES products(id)
-);
 CREATE TABLE IF NOT EXISTS test_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_no TEXT UNIQUE,
@@ -557,19 +506,6 @@ CREATE TABLE IF NOT EXISTS test_batches (
     status TEXT DEFAULT '已完成',
     remark TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS test_case_results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    execution_id INTEGER NOT NULL,
-    case_id INTEGER NOT NULL,
-    result TEXT DEFAULT '未执行',
-    actual_result TEXT,
-    bug_id INTEGER,
-    executed_at TEXT,
-    executor TEXT,
-    FOREIGN KEY (execution_id) REFERENCES test_executions(id) ON DELETE CASCADE,
-    FOREIGN KEY (case_id) REFERENCES test_cases(id),
-    FOREIGN KEY (bug_id) REFERENCES bug_records(id)
 );
 CREATE TABLE IF NOT EXISTS test_cases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -650,15 +586,6 @@ CREATE TABLE IF NOT EXISTS test_records (
     remark TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime'))
 , station_data TEXT);
-CREATE TABLE IF NOT EXISTS ticket_workflow (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_id INTEGER NOT NULL,
-    action TEXT NOT NULL,
-    operator TEXT,
-    comment TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (ticket_id) REFERENCES tech_support_tickets(id) ON DELETE CASCADE
-);
 CREATE TABLE IF NOT EXISTS timeline_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_date TEXT NOT NULL,
@@ -677,23 +604,6 @@ CREATE TABLE IF NOT EXISTS timeline_events (
             FOREIGN KEY (version_id) REFERENCES software_versions(id),
             FOREIGN KEY (requirement_id) REFERENCES requirements(id)
         );
-CREATE TABLE IF NOT EXISTS user_feedbacks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer TEXT,
-    product_id INTEGER,
-    feedback_type TEXT DEFAULT '功能建议',
-    title TEXT NOT NULL,
-    content TEXT,
-    source TEXT DEFAULT '客户反馈',
-    priority TEXT DEFAULT '中',
-    status TEXT DEFAULT '待评估',
-    converted_requirement_id INTEGER,
-    handler TEXT,
-    evaluation TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (product_id) REFERENCES products(id),
-    FOREIGN KEY (converted_requirement_id) REFERENCES requirements(id)
-);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -748,7 +658,6 @@ CREATE INDEX IF NOT EXISTS idx_dev_ver_change ON device_version_changes(device_i
 CREATE INDEX IF NOT EXISTS idx_device_status ON devices(status);
 CREATE INDEX IF NOT EXISTS idx_dp_customer ON delivery_plans(customer);
 CREATE INDEX IF NOT EXISTS idx_dt_version ON dev_tasks(version_id);
-CREATE INDEX IF NOT EXISTS idx_feedback_type ON user_feedbacks(feedback_type);
 CREATE INDEX IF NOT EXISTS idx_inv_material ON inventory(material_name);
 CREATE INDEX IF NOT EXISTS idx_logs_time ON operation_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_mp_schedule ON material_plans(schedule_id);
@@ -768,4 +677,3 @@ CREATE INDEX IF NOT EXISTS idx_tc_product ON test_cases(product_id);
 CREATE INDEX IF NOT EXISTS idx_te_version ON test_executions(version_id);
 CREATE INDEX IF NOT EXISTS idx_test_records_batch ON test_records(batch_id);
 CREATE INDEX IF NOT EXISTS idx_test_records_sn ON test_records(sn);
-CREATE INDEX IF NOT EXISTS idx_ticket_status ON tech_support_tickets(status);

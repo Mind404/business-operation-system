@@ -15,7 +15,6 @@
 {% block content %}
 <div class="module-tabs">
     <a href="{{ url_for('planning_list') }}" class="module-tab {% if request.endpoint in ['planning_list','product_add','product_edit'] or request.endpoint.startswith('version_') %}active{% endif %}">📐 产品与版本规划</a>
-    <a href="{{ url_for('ext.tech_spec_list') }}" class="module-tab {% if request.endpoint.startswith('ext.tech_spec') %}active{% endif %}">📄 技术规格</a>
 </div>
 
 <!-- 概览统计卡片 -->
