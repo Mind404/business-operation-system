@@ -105,8 +105,8 @@
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">状态</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:150px;">进度</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">进展</th>
-            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:80px;">产出物</th>
-            <th style="padding:9px 6px;border:1px solid #d0d7e5;min-width:140px;">备注</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:100px;">产出物</th>
+            <th style="padding:9px 6px;border:1px solid #d0d7e5;width:90px;">备注</th>
             {% if current_role == 'admin' %}<th style="padding:9px 6px;border:1px solid #d0d7e5;width:50px;">操作</th>{% endif %}
         </tr>
     </thead>
@@ -179,7 +179,12 @@
                 {% for f in files if f %}
                 {% set fname = f.split('/')[-1] %}
                 {% set show_name = fname[15:] if (fname|length >= 15 and fname[:14].isdigit() and fname[14:15] == '_') else fname %}
-                <a href="{{ url_for('ext.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
+                <div style="display:flex;align-items:center;justify-content:center;gap:3px;">
+                    <a href="{{ url_for('ext.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
+                    {% if current_role=='admin' or t.approval_status=='已通过' %}
+                    <button onclick="delFile({{ t.id }}, {{ f|tojson }}, {{ show_name|tojson }})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;line-height:1;padding:0 1px;" title="删除该产出物（用于替换传错的文件）">✕</button>
+                    {% endif %}
+                </div>
                 {% endfor %}
                 <label style="display:inline-block;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %};font-size:11px;color:{% if current_role=='admin' or t.approval_status=='已通过' %}#2563eb;{% else %}#ccc;{% endif %};margin-top:2px;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}"
                     {% if current_role!='admin' and t.approval_status!='已通过' %}title="任务审批通过后才能上传产出物" onclick="alert('任务审批通过后才能上传产出物')"{% endif %}>
@@ -474,6 +479,15 @@ document.querySelectorAll('.file-input').forEach(inp => {
         .then(r=>r.json()).then(res => { if(res.ok) location.reload(); else alert(res.msg||'上传失败'); });
     });
 });
+
+// 产出物删除（传错文件后替换）
+function delFile(tid, filename, show_name) {
+    if (!confirm('确认删除产出物「' + show_name + '」？删除后可重新上传替换。')) return;
+    const body = 'filename=' + encodeURIComponent(filename);
+    fetch(`/wbs/task/${tid}/del_attachment`, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body})
+    .then(r=>r.json()).then(res => { if(res.ok) location.reload(); else alert(res.msg||'删除失败'); })
+    .catch(()=> alert('删除失败，请重试'));
+}
 
 // 进展流水
 function showNotes(tid, btn) {

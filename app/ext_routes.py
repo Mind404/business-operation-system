@@ -2131,6 +2131,31 @@ def wbs_task_upload(tid):
     return jsonify({'ok': True, 'path': attach, 'name': fname})
 
 
+@ext_bp.route('/wbs/task/<int:tid>/del_attachment', methods=['POST'])
+def wbs_task_del_attachment(tid):
+    """删除指定产出物文件（应对传错文件后替换场景）。权限与上传一致：管理员或任务审批通过后的普通用户。"""
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    role = session.get('user_role')
+    if role != 'admin' and t['approval_status'] != '已通过':
+        return jsonify({'ok': False, 'msg': '任务审批通过后才能删除产出物'}), 403
+    target = (request.form.get('filename') or '').strip()
+    files = [f for f in (t['attachment_path'] or '').split(';') if f]
+    if target not in files:
+        return jsonify({'ok': False, 'msg': '产出物不存在或已被删除'}), 404
+    # 物理删除文件（相对 uploads 目录），文件已不存在也允许清理记录
+    try:
+        os.remove(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', target))
+    except OSError:
+        pass
+    files.remove(target)
+    db.execute('UPDATE wbs_tasks SET attachment_path=? WHERE id=?', (';'.join(files), tid))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @ext_bp.route('/wbs/template')
 def wbs_template():
     """下载 Excel 导入模板（与截图同格式）"""
