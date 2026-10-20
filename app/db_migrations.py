@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 数据库迁移管理：schema_version 记录版本号，按版本跑增量迁移。
-每个插件自己负责自己的表，不往公共文件堆字段。
+【v10.3.0 方案A】schema.sql 已是唯一权威建表源（51张表全量定义）；
+本模块仅保留两职责：
+  1) 兼容历史库的幂等兜底（CREATE TABLE IF NOT EXISTS，重复执行无副作用）
+  2) 增量迁移 run_migrations（未来新版本只在此追加 ALTER/新增列，不回改 schema.sql）
 """
 import sqlite3
 from datetime import datetime

@@ -3,6 +3,7 @@
 插件化基底：插件注册表 + 用户订阅 + 动态导航 + 路由守卫
 核心插件（总览看板/个人中心）常驻；其余全部业务插件，未订阅不显示也不可访问。
 """
+import json
 import sqlite3
 from datetime import datetime
 from flask import g, session, current_app, redirect, url_for, request, flash
@@ -18,29 +19,41 @@ PLUGINS = [
 
     # --- 业务插件（默认不订阅，去插件中心开启） ---
     {'id': 'overview',    'name': '总览看板',         'icon': '🗺️', 'group': '业务', 'core': 0,
-     'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive'},
+     'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive',
+     'tables': ['timeline_events','gantt_projects','gantt_settings','milestone_checkpoints']},
     {'id': 'workbench',   'name': '我的工作台',       'icon': '📊', 'group': '业务', 'core': 0,
-     'desc': '个人待办与快捷入口', 'endpoint': 'index', 'nav_path': '/'},
+     'desc': '个人待办与快捷入口', 'endpoint': 'index', 'nav_path': '/',
+     'tables': ['tasks']},
     {'id': 'requirements','name': '需求数据库',       'icon': '📋', 'group': '业务', 'core': 0,
-     'desc': '用户需求/集团系统侧/应用侧/领导任务，全流程源头', 'endpoint': 'requirements_list', 'nav_path': '/requirements'},
+     'desc': '用户需求/集团系统侧/应用侧/领导任务，全流程源头', 'endpoint': 'requirements_list', 'nav_path': '/requirements',
+     'tables': ['requirements','requirement_reviews','revenue_confirmations']},
     {'id': 'tech_req',    'name': '外部技术需求统计', 'icon': '🔬', 'group': '业务', 'core': 0,
-     'desc': '集团系统侧技术特性跟踪：问题项 + 每日进展日志 + 版本响应要求', 'endpoint': 'ext.tech_req_list', 'nav_path': '/tech-reqs'},
+     'desc': '集团系统侧技术特性跟踪：问题项 + 每日进展日志 + 版本响应要求', 'endpoint': 'ext.tech_req_list', 'nav_path': '/tech-reqs',
+     'tables': ['tech_requirements','tech_req_logs']},
     {'id': 'wbs',         'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
-     'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物', 'endpoint': 'ext.wbs_projects', 'nav_path': '/wbs'},
+     'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物', 'endpoint': 'ext.wbs_projects', 'nav_path': '/wbs',
+     'tables': ['wbs_projects','wbs_tasks']},
     {'id': 'planning',    'name': '产品与版本规划',   'icon': '📐', 'group': '业务', 'core': 0,
-     'desc': '产品定义、软件版本规划、开发任务分解', 'endpoint': 'planning_list', 'nav_path': '/planning'},
+     'desc': '产品定义、软件版本规划、开发任务分解', 'endpoint': 'planning_list', 'nav_path': '/planning',
+     'tables': ['products','software_versions','version_features','version_requirements','dev_tasks','test_plans']},
     {'id': 'production',  'name': '研发生产',         'icon': '🏭', 'group': '业务', 'core': 0,
-     'desc': '生产排程、工序、物料BOM', 'endpoint': 'production_dashboard', 'nav_path': '/production'},
+     'desc': '生产排程、工序、物料BOM', 'endpoint': 'production_dashboard', 'nav_path': '/production',
+     'tables': ['production_schedules','production_orders','production_processes','material_plans','material_requisitions','requisition_items','bom_items','inventory','warehouse_receipts','quality_inspections','deliveries','delivery_batches']},
     {'id': 'bug',         'name': 'Bug管理',         'icon': '🐛', 'group': '业务', 'core': 0,
-     'desc': 'Bug全生命周期流转、质量问题根因闭环', 'endpoint': 'bug_list', 'nav_path': '/bugs'},
+     'desc': 'Bug全生命周期流转、质量问题根因闭环', 'endpoint': 'bug_list', 'nav_path': '/bugs',
+     'tables': ['bug_records','bug_workflow','defect_handling']},
     {'id': 'test',        'name': '测试管理',         'icon': '🧪', 'group': '业务', 'core': 0,
-     'desc': '测试用例库、用例执行记录', 'endpoint': 'ext.test_case_list', 'nav_path': '/test'},
+     'desc': '测试用例库、用例执行记录', 'endpoint': 'ext.test_case_list', 'nav_path': '/test',
+     'tables': ['test_cases','test_executions','test_records','test_batches']},
     {'id': 'delivery',    'name': '交付管理',         'icon': '📦', 'group': '业务', 'core': 0,
-     'desc': '交付跟踪、交付计划', 'endpoint': 'ext.delivery_plan_list', 'nav_path': '/delivery'},
+     'desc': '交付跟踪、交付计划', 'endpoint': 'ext.delivery_plan_list', 'nav_path': '/delivery',
+     'tables': ['delivery_plans']},
     {'id': 'device',      'name': '设备运维与OTA',    'icon': '📡', 'group': '业务', 'core': 0,
-     'desc': '设备状态监控、版本变更记录、OTA版本发布', 'endpoint': 'ext.device_center', 'nav_path': '/device'},
+     'desc': '设备状态监控、版本变更记录、OTA版本发布', 'endpoint': 'ext.device_center', 'nav_path': '/device',
+     'tables': ['devices','device_alerts','device_version_changes','ota_versions','ota_upgrades']},
     {'id': 'contract',    'name': '合同跟进',         'icon': '📄', 'group': '业务', 'core': 0,
-     'desc': '生产合同、物料采购合同、付款节点', 'endpoint': 'ext.contract_list', 'nav_path': '/contracts'},
+     'desc': '生产合同、物料采购合同、付款节点', 'endpoint': 'ext.contract_list', 'nav_path': '/contracts',
+     'tables': ['contracts','contract_payments']},
     {'id': 'data_mgmt',   'name': '数据管理',         'icon': '💾', 'group': '业务', 'core': 0,
      'desc': 'Excel导入导出、操作日志查询', 'endpoint': 'data_management', 'nav_path': '/data'},
 ]
@@ -73,8 +86,9 @@ def init_plugin_tables():
     # 注册插件清单
     for p in PLUGINS:
         db.execute('''INSERT OR IGNORE INTO plugin_registry
-            (id, name, icon, grp, core, description, endpoint) VALUES (?,?,?,?,?,?,?)''',
-            (p['id'], p['name'], p['icon'], p['group'], p['core'], p['desc'], p['endpoint']))
+            (id, name, icon, grp, core, description, endpoint, tables) VALUES (?,?,?,?,?,?,?,?)''',
+            (p['id'], p['name'], p['icon'], p['group'], p['core'], p['desc'], p['endpoint'],
+             json.dumps(p.get('tables', []), ensure_ascii=False)))
     db.commit()
 
 
@@ -126,6 +140,43 @@ def register_plugin_guard(app):
         return None
 
 
+def log_operation(module, action, detail, operator='系统'):
+    """统一操作日志入口（全系统共用，失败静默不影响业务）"""
+    try:
+        db = get_db()
+        db.execute('INSERT INTO operation_logs (module, action, detail, operator) VALUES (?,?,?,?)',
+                   (module, action, detail, operator))
+        db.commit()
+    except Exception:
+        pass
+
+
+def submit_approval(plugin_id, record_type, record_id, requester_id, action, payload=None):
+    """提交审批申请（方案A统一审批表；WBS 暂保持自身审批流程）"""
+    db = get_db()
+    cur = db.execute(
+        'INSERT INTO approval_requests (plugin_id, record_type, record_id, requester_id, action, payload) '
+        'VALUES (?,?,?,?,?,?)',
+        (plugin_id, record_type, record_id, requester_id, action,
+         json.dumps(payload, ensure_ascii=False) if payload else None))
+    db.commit()
+    return cur.lastrowid
+
+
+def review_approval(req_id, reviewer_id, approve, comment=''):
+    """审批统一入口：approve=True 通过 / False 驳回"""
+    db = get_db()
+    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (req_id,)).fetchone()
+    if not row or row['status'] != '待审批':
+        return False, '审批申请不存在或已处理'
+    status = '已通过' if approve else '已驳回'
+    db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=? WHERE id=?',
+               (status, reviewer_id, comment, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), req_id))
+    db.commit()
+    log_operation(row['plugin_id'], '审批', f"#{req_id} {row['record_type']} → {status}{('：'+comment) if comment else ''}", '')
+    return True, status
+
+
 def toggle_plugin(user_id, plugin_id):
     """订阅/取消订阅切换。核心插件不可取消。"""
     db = get_db()
@@ -139,9 +190,11 @@ def toggle_plugin(user_id, plugin_id):
     if existing:
         db.execute('DELETE FROM user_plugins WHERE user_id=? AND plugin_id=?', (user_id, plugin_id))
         msg = f'已取消订阅 {p["name"]}'
+        log_operation('插件中心', '取消订阅', f'用户#{user_id} 取消订阅 {p["name"]}')
     else:
         db.execute('INSERT INTO user_plugins (user_id, plugin_id, subscribed_at) VALUES (?,?,?)',
                    (user_id, plugin_id, datetime.now().strftime('%Y-%m-%d %H:%M')))
         msg = f'已订阅 {p["name"]}'
+        log_operation('插件中心', '订阅', f'用户#{user_id} 订阅 {p["name"]}')
     db.commit()
     return True, msg

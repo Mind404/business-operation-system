@@ -39,6 +39,7 @@ app.register_blueprint(ext_bp)
 
 # 插件化基底：建表 + 注册插件 + 路由守卫
 import plugin_system
+from plugin_system import log_operation
 with app.app_context():
     plugin_system.init_plugin_tables()
 plugin_system.register_plugin_guard(app)
@@ -301,12 +302,6 @@ def validate_range(value, field_name, min_val, max_val):
 def validation_error(message, back_url=None):
     """返回校验错误页面"""
     return render_template('error.html', message=message, back_url=back_url or request.referrer or '/')
-
-def log_operation(module, action, detail, operator='系统'):
-    db = get_db()
-    db.execute('INSERT INTO operation_logs (module, action, detail, operator) VALUES (?,?,?,?)',
-               (module, action, detail, operator))
-    db.commit()
 
 # ============================================================
 # 首页 / 仪表盘

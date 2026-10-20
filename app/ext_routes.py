@@ -6,6 +6,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, jsonify, g, Response, flash, session, send_from_directory
 from datetime import datetime
 import io, os, json, random
+from plugin_system import log_operation
 
 ext_bp = Blueprint('ext', __name__)
 
@@ -23,15 +24,6 @@ def close_db(exception):
     db = g.pop('db', None)
     if db is not None:
         db.close()
-
-def log_operation(module, action, detail, operator='系统'):
-    try:
-        db = get_db()
-        db.execute('INSERT INTO operation_logs (module, action, detail, operator) VALUES (?,?,?,?)',
-                   (module, action, detail, operator))
-        db.commit()
-    except:
-        pass
 
 # ============================================================
 # 测试组：测试用例库
@@ -1170,6 +1162,7 @@ def wbs_project_approve(pid):
     status = '已通过' if action == 'approve' else '已驳回'
     db.execute('UPDATE wbs_projects SET approval_status=?, updated_at=datetime("now","localtime") WHERE id=?', (status, pid))
     db.commit()
+    log_operation('WBS', '项目审批', f'项目#{pid} → {status}', session.get('username','admin'))
     flash(f'项目已{status}。', 'success')
     return redirect(url_for('ext.wbs_projects'))
 
@@ -1187,6 +1180,7 @@ def wbs_project_resubmit(pid):
         return jsonify({'ok': False, 'msg': '只有被驳回的项目可以重新提交'}), 400
     db.execute('''UPDATE wbs_projects SET approval_status='待审批', updated_at=datetime("now","localtime") WHERE id=?''', (pid,))
     db.commit()
+    log_operation('WBS', '重新提交', f'项目#{pid} 重新提交审批', session.get('username','admin'))
     return jsonify({'ok': True})
 
 
@@ -1204,6 +1198,7 @@ def wbs_project_delete(pid):
     db.execute('DELETE FROM wbs_tasks WHERE project_id=?', (pid,))
     db.execute('DELETE FROM wbs_projects WHERE id=?', (pid,))
     db.commit()
+    log_operation('WBS', '删除项目', f'项目#{pid}「{p["name"]}」(级联删除任务)', session.get('username','admin'))
     flash(f'项目「{p["name"]}」及其下所有任务已删除。', 'success')
     return redirect(url_for('ext.wbs_projects'))
 

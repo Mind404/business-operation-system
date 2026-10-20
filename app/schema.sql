@@ -677,3 +677,71 @@ CREATE INDEX IF NOT EXISTS idx_tc_product ON test_cases(product_id);
 CREATE INDEX IF NOT EXISTS idx_te_version ON test_executions(version_id);
 CREATE INDEX IF NOT EXISTS idx_test_records_batch ON test_records(batch_id);
 CREATE INDEX IF NOT EXISTS idx_test_records_sn ON test_records(sn);
+
+-- ============================================================
+-- 以下为插件运行时表（v10.3.0 起并入 schema.sql 作为唯一权威建表源）
+-- 原由 db_migrations.init_* 在启动时自建，现统一收敛；db_migrations 仅保留幂等兜底与增量迁移
+-- ============================================================
+
+-- 插件注册表（tables 列登记该插件全部业务表，方案A：单库+表前缀登记）
+CREATE TABLE IF NOT EXISTS plugin_registry (
+    id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
+    description TEXT, endpoint TEXT, tables TEXT DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS user_plugins (
+    user_id INTEGER, plugin_id TEXT, subscribed_at TEXT,
+    PRIMARY KEY (user_id, plugin_id)
+);
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY, note TEXT, applied_at TEXT
+);
+
+-- 统一审批表（方案A：其他插件第一阶段统一走此表，WBS 保持现有审批）
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_id TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    record_id INTEGER NOT NULL,
+    requester_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    payload TEXT,
+    status TEXT DEFAULT '待审批',
+    reviewer_id INTEGER,
+    review_comment TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    reviewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_requests(status);
+
+-- WBS 插件表（含审批字段：approval_status/approver）
+CREATE TABLE IF NOT EXISTS wbs_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT, description TEXT, owner TEXT,
+    start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中',
+    created_at TEXT, updated_at TEXT, participants TEXT, approver TEXT DEFAULT '', approval_status TEXT DEFAULT '已通过'
+);
+CREATE TABLE IF NOT EXISTS wbs_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER, wbs_code TEXT, parent_id INTEGER DEFAULT 0,
+    name TEXT, work_content TEXT, owner TEXT, collaborators TEXT,
+    plan_start TEXT, plan_end TEXT, deliverable TEXT,
+    status TEXT DEFAULT '未开始', progress INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0, priority TEXT DEFAULT 'P2中', attachment_path TEXT, participants TEXT, notes TEXT, approval_status TEXT DEFAULT '已通过', remark TEXT,
+    FOREIGN KEY (project_id) REFERENCES wbs_projects(id) ON DELETE CASCADE
+);
+
+-- 外部技术需求插件表
+CREATE TABLE IF NOT EXISTS tech_requirements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stage TEXT, category TEXT, item TEXT, planned_date TEXT,
+    description TEXT, version_response TEXT,
+    product_id INTEGER DEFAULT 1, status TEXT DEFAULT '进行中',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS tech_req_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tech_req_id INTEGER, log_date TEXT, content TEXT, author TEXT,
+    created_at TEXT,
+    FOREIGN KEY (tech_req_id) REFERENCES tech_requirements(id) ON DELETE CASCADE
+);
