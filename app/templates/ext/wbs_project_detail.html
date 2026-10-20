@@ -14,6 +14,8 @@
     .prog-range::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #2563eb;cursor:pointer;}
     .prog-range::-moz-range-track{height:8px;border-radius:4px;background:#d0d7e5;}
     .prog-range:disabled{opacity:.4;cursor:default;}
+    .prog-range.locked{opacity:.4;cursor:default;}
+    .status-select.locked{opacity:.5;cursor:default;}
 </style>
 <div style="margin-bottom:14px;">
     <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
@@ -152,7 +154,7 @@
                 {% else %}{{ t.deliverable or '' }}{% endif %}
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后才能修改状态{% endif %}">
-                <select class="status-select" data-tid="{{ t.id }}" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %} style="width:100%;padding:4px;border:1px solid #ccd;border-radius:4px;
+                <select class="status-select{% if current_role!='admin' and t.approval_status!='已通过' %} locked{% endif %}" data-tid="{{ t.id }}" {% if current_role!='admin' and t.approval_status!='已通过' %}data-lock="1"{% endif %} style="width:100%;padding:4px;border:1px solid #ccd;border-radius:4px;
                     {% if t.status == '已完成' %}background:#d4edda;{% elif t.status == '进行中' %}background:#cce5ff;{% elif t.status == '阻塞' %}background:#f8d7da;{% else %}background:#fff;{% endif %}">
                     {% for s in ['未开始','进行中','已完成','阻塞'] %}
                     <option value="{{ s }}" {% if t.status==s %}selected{% endif %}>{{ s }}</option>
@@ -160,7 +162,7 @@
                 </select>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后才能调整进度{% endif %}">
-                <input type="range" class="prog-range" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="--fill:{{ t.progress }}%;" {% if current_role!='admin' and t.approval_status!='已通过' %}disabled{% endif %}>
+                <input type="range" class="prog-range{% if current_role!='admin' and t.approval_status!='已通过' %} locked{% endif %}" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="--fill:{{ t.progress }}%;" {% if current_role!='admin' and t.approval_status!='已通过' %}data-lock="1"{% endif %}>
                 <span class="prog-val" data-tid="{{ t.id }}" {% if current_role!='admin' and t.approval_status!='已通过' %}data-lock="1"{% endif %} style="font-size:11px;{% if current_role!='admin' and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
@@ -175,7 +177,9 @@
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
                 {% set files = (t.attachment_path or '').split(';') if t.attachment_path else [] %}
                 {% for f in files if f %}
-                <a href="{{ url_for('ext.wbs_download', filename=f) }}" target="_blank" style="display:block;font-size:11px;color:#2563eb;">📎{{ f.split('/')[-1][:12] }}</a>
+                {% set fname = f.split('/')[-1] %}
+                {% set show_name = fname[15:] if (fname|length >= 15 and fname[:14].isdigit() and fname[14:15] == '_') else fname %}
+                <a href="{{ url_for('ext.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
                 {% endfor %}
                 <label style="display:inline-block;cursor:{% if current_role=='admin' or t.approval_status=='已通过' %}pointer;{% else %}default;{% endif %};font-size:11px;color:{% if current_role=='admin' or t.approval_status=='已通过' %}#2563eb;{% else %}#ccc;{% endif %};margin-top:2px;{% if current_role!='admin' and t.approval_status!='已通过' %}opacity:0.4;{% endif %}"
                     {% if current_role!='admin' and t.approval_status!='已通过' %}title="任务审批通过后才能上传产出物" onclick="alert('任务审批通过后才能上传产出物')"{% endif %}>
@@ -361,9 +365,10 @@ function saveNewRow() {
         else alert(res.msg||'保存失败');
     });
 }
-// 回车触发
+// 回车触发（新建行仅管理员可见，普通用户无此元素，必须判空，否则整段脚本中断）
 ['nr_wbs','nr_name','nr_work','nr_owner','nr_collab','nr_deliv','nr_remark'].forEach(id => {
-    document.getElementById(id).addEventListener('keydown', e => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', e => {
         if (e.key === 'Enter') saveNewRow();
     });
 });
@@ -400,6 +405,28 @@ document.querySelectorAll('.prog-range').forEach(r => {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({field:'progress', value:r.value})
         }).then(res=>res.json()).then(d=>{ if(!d.ok) alert(d.msg||'保存失败'); });
+    });
+});
+
+// 待审批任务进度条：点击/拖动/键盘均给提示，阻止修改（此前disabled无反馈，用户以为没反应）
+document.querySelectorAll('.prog-range.locked').forEach(r => {
+    ['mousedown','touchstart','keydown'].forEach(ev => {
+        r.addEventListener(ev, e => {
+            e.preventDefault();
+            e.stopPropagation();
+            alert('任务审批通过后才能调整进度');
+        });
+    });
+});
+
+// 待审批任务状态下拉：点击给提示（此前disabled无反馈）
+document.querySelectorAll('.status-select.locked').forEach(s => {
+    ['mousedown','touchstart','keydown'].forEach(ev => {
+        s.addEventListener(ev, e => {
+            e.preventDefault();
+            e.stopPropagation();
+            alert('任务审批通过后才能修改状态');
+        });
     });
 });
 

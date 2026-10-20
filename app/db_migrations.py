@@ -35,11 +35,18 @@ def _set_version(db, version, note=''):
 # ============================================================
 def init_core_tables():
     db = get_db()
+    # users 表结构与 schema.sql 权威定义保持一致（display_name/is_active）
     db.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE, password TEXT, name TEXT,
-        role TEXT DEFAULT 'user', department TEXT,
-        created_at TEXT)''')
+        username TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
+        display_name TEXT, role TEXT DEFAULT 'user', is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now','localtime')))''')
+    # 兼容历史库（旧结构为 name/department）：补齐 display_name/is_active
+    cols = [r[1] for r in db.execute('PRAGMA table_info(users)').fetchall()]
+    if 'display_name' not in cols:
+        db.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+    if 'is_active' not in cols:
+        db.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
     db.execute('''CREATE TABLE IF NOT EXISTS plugin_registry (
         id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
         description TEXT, endpoint TEXT)''')

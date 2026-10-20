@@ -93,6 +93,26 @@
                 </div>
                 {% endif %}
                 {% endwith %}
+                <script>
+                // 全局：提示条幅 3 秒后自动淡出消失，保持页面清爽（可手动点 × 提前关闭）
+                (function(){
+                    var autoHide = function(){
+                        var msgs = document.querySelectorAll('.flash-message');
+                        msgs.forEach(function(m){
+                            setTimeout(function(){
+                                m.style.transition = 'opacity .5s ease';
+                                m.style.opacity = '0';
+                                setTimeout(function(){ m.style.display = 'none'; }, 500);
+                            }, 3000);
+                        });
+                    };
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', autoHide);
+                    } else {
+                        autoHide();
+                    }
+                })();
+                </script>
                 {% block content %}{% endblock %}
             </div>
         </main>

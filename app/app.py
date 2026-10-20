@@ -260,6 +260,15 @@ def init_db():
     db = sqlite3.connect(app.config['DATABASE'])
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
+    # 首次运行（users 为空）：写入默认账号，保证解压即用
+    # 管理员 admin/admin123，普通用户 product/product123
+    if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:
+        db.executescript("""
+            INSERT INTO users (username, password, display_name, role, is_active)
+            VALUES ('admin','admin123','系统管理员','admin',1);
+            INSERT INTO users (username, password, display_name, role, is_active)
+            VALUES ('product','product123','产品经理','user',1);
+        """)
     db.commit()
 
 # ============================================================
