@@ -6,14 +6,6 @@
     <p class="page-desc">按需订阅你的工作模块，未订阅的模块不会出现在左侧导航。取消订阅只隐藏入口，数据保留不删。</p>
 </div>
 
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-    {% for category, msg in messages %}
-    <div style="padding:10px 16px;margin:12px 0;border-radius:6px;{% if category=='success' %}background:#e6f7e6;color:#2a7a2a;border:1px solid #b2d8b2;{% else %}background:#fde6e6;color:#a33;border:1px solid #f0b2b2;{% endif %}">{{ msg }}</div>
-    {% endfor %}
-  {% endif %}
-{% endwith %}
-
 {% set groups = {} %}
 {% for p in plugins %}
   {% set g = p.group or '其他' %}

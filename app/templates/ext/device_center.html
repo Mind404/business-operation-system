@@ -43,14 +43,6 @@
 </style>
 
 <!-- 全局消息 -->
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-    {% for cat, msg in messages %}
-    <div class="dc-flash {{ cat if cat in ('success','error') else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endif %}
-{% endwith %}
-
 <!-- 双子页切换 -->
 <div class="dc-tabs">
     <a href="{{ url_for('ext.device_center', tab='device') }}" class="dc-tab {% if tab == 'device' %}active{% endif %}">
