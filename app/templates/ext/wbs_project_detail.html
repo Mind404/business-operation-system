@@ -46,6 +46,7 @@
         {% endif %}
         <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
             <button onclick="setZoom(1)" id="zoom100" style="padding:7px 10px;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:12px;">100%</button>
+            <button onclick="setZoom(1.25)" id="zoom125" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">125%</button>
             <button onclick="setZoom(1.5)" id="zoom150" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">150%</button>
             <button onclick="setZoom(2)" id="zoom200" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">200%</button>
         </div>
@@ -557,9 +558,9 @@ function setZoom(z) {
     tbl.querySelectorAll('.cell').forEach(function(c){
         c.style.minHeight = (22 * z) + 'px';
     });
-    ['zoom100','zoom150','zoom200'].forEach(function(id, i){
+    ['zoom100','zoom125','zoom150','zoom200'].forEach(function(id, i){
         var btn = document.getElementById(id);
-        var v = [1,1.5,2][i];
+        var v = [1,1.25,1.5,2][i];
         btn.style.background = v==z ? '#2563eb' : '#eef2f7';
         btn.style.color = v==z ? '#fff' : '#333';
     });
