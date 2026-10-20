@@ -182,7 +182,7 @@
                 <div style="display:flex;align-items:center;justify-content:center;gap:3px;">
                     <a href="{{ url_for('ext.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
                     {% if current_role=='admin' or t.approval_status=='已通过' %}
-                    <button onclick="delFile({{ t.id }}, {{ f|tojson }}, {{ show_name|tojson }})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;line-height:1;padding:0 1px;" title="删除该产出物（用于替换传错的文件）">✕</button>
+                    <button onclick="delFile({{ t.id }}, {{ f|tojson }}, {{ show_name|tojson }})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;line-height:1;padding:0 1px;" title="删除">✕</button>
                     {% endif %}
                 </div>
                 {% endfor %}
