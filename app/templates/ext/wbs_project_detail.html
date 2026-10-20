@@ -495,14 +495,47 @@ function showNotes(tid, btn) {
             list.innerHTML = '<div style="color:#999;">暂无进展记录</div>';
             return;
         }
-        list.innerHTML = data.notes.map(n =>
-            `<div style="padding:8px;border-bottom:1px solid #eef;margin-bottom:6px;">
-                <div style="color:#888;font-size:11px;">${n.date} · ${n.author}</div>
+        list.innerHTML = data.notes.map((n, i) =>
+            `<div style="padding:8px;border-bottom:1px solid #eef;margin-bottom:6px;" id="note-item-${i}">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div style="color:#888;font-size:11px;">${n.date} · ${n.author}</div>
+                    ${(IS_ADMIN || data.approval_ok) ? `<button onclick="editNote(${currentTid}, ${i}, this)" title="编辑" style="border:none;background:#eef2f7;border-radius:4px;cursor:pointer;font-size:12px;padding:2px 8px;">✏️ 编辑</button>` : ''}
+                </div>
                 <div style="margin-top:2px;">${n.content}</div>
             </div>`).join('');
     });
 }
 function closeNotes(){ document.getElementById('noteModal').style.display='none'; }
+
+// 行内编辑进展记录：把内容变成输入框，保存后调用更新接口
+function editNote(tid, idx, btn) {
+    const item = document.getElementById('note-item-' + idx);
+    const contentDiv = item.querySelectorAll('div')[2];
+    const oldText = contentDiv.textContent.trim();
+    contentDiv.innerHTML = `<textarea id="note-edit-${idx}" rows="2" style="width:100%;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;box-sizing:border-box;">${oldText.replace(/</g, '&lt;')}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+            <button onclick="cancelEdit(${idx}, '${oldText.replace(/'/g, "\\'").replace(/</g, '&lt;')}')" style="padding:4px 10px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:12px;">取消</button>
+            <button onclick="saveNote(${tid}, ${idx})" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">保存</button>
+        </div>`;
+    btn.style.display = 'none';
+    document.getElementById('note-edit-' + idx).focus();
+}
+function cancelEdit(idx, oldText) {
+    const item = document.getElementById('note-item-' + idx);
+    item.querySelectorAll('div')[2].textContent = oldText;
+    item.querySelector('button[title="编辑"]').style.display = '';
+}
+function saveNote(tid, idx) {
+    const v = document.getElementById('note-edit-' + idx).value.trim();
+    if (!v) { alert('内容不能为空'); return; }
+    fetch(`/wbs/task/${tid}/note/update`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({index: idx, content: v})
+    }).then(r=>r.json()).then(res => {
+        if (res.ok) { showNotes(tid); }
+        else alert(res.msg || '更新失败');
+    }).catch(() => alert('更新失败'));
+}
 function submitNote() {
     const v = document.getElementById('noteInput').value.trim();
     if (!v) return;

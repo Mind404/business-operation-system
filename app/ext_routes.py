@@ -1492,14 +1492,14 @@ def wbs_project_tasks_resubmit(pid):
 def wbs_task_notes_data(tid):
     import json
     db = get_db()
-    t = db.execute('SELECT notes FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    t = db.execute('SELECT notes, approval_status FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
-        return jsonify({'notes': []})
+        return jsonify({'notes': [], 'approval_ok': False})
     try:
         notes = json.loads(t['notes']) if t['notes'] else []
     except Exception:
         notes = []
-    return jsonify({'notes': notes})
+    return jsonify({'notes': notes, 'approval_ok': t['approval_status'] == '已通过'})
 
 
 @ext_bp.route('/wbs/task/<int:tid>/note', methods=['POST'])
@@ -1529,6 +1529,39 @@ def wbs_task_add_note(tid):
     db.execute('UPDATE wbs_tasks SET notes=? WHERE id=?', (json.dumps(notes, ensure_ascii=False), tid))
     db.commit()
     return jsonify({'ok': True, 'count': len(notes), 'last': notes[-1]})
+
+
+@ext_bp.route('/wbs/task/<int:tid>/note/update', methods=['POST'])
+def wbs_task_update_note(tid):
+    """编辑已登记的进展流水（按索引更新内容，保留登记时间和作者）。任务审批通过后（管理员或参与人）才能编辑。"""
+    import json
+    db = get_db()
+    t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if not t:
+        return jsonify({'ok': False, 'msg': '任务不存在'}), 404
+    if t['approval_status'] != '已通过':
+        return jsonify({'ok': False, 'msg': '任务审批通过后才能编辑进展'}), 403
+    data = request.get_json(force=True)
+    try:
+        idx = int(data.get('index', -1))
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'msg': '无效的记录序号'}), 400
+    content = (data.get('content') or '').strip()
+    if not content:
+        return jsonify({'ok': False, 'msg': '内容为空'}), 400
+    notes = []
+    try:
+        notes = json.loads(t['notes']) if t['notes'] else []
+    except Exception:
+        notes = []
+    if idx < 0 or idx >= len(notes):
+        return jsonify({'ok': False, 'msg': '记录不存在'}), 404
+    old = notes[idx]
+    notes[idx] = {'date': old.get('date', ''), 'author': old.get('author', ''), 'content': content}
+    db.execute('UPDATE wbs_tasks SET notes=? WHERE id=?', (json.dumps(notes, ensure_ascii=False), tid))
+    db.commit()
+    log_operation('WBS', '编辑进展', f'任务#{tid} 第{idx + 1}条进展已更新', session.get('username', ''))
+    return jsonify({'ok': True, 'count': len(notes), 'updated': notes[idx]})
 
 
 @ext_bp.route('/wbs/task/<int:tid>/upload', methods=['POST'])
