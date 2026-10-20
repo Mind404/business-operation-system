@@ -230,6 +230,10 @@ def delivery_plan_edit(plan_id):
 
 @ext_bp.route('/delivery/plans/<int:plan_id>/delete', methods=['POST'])
 def delivery_plan_delete(plan_id):
+    from app import is_admin
+    if not is_admin():
+        flash('仅管理员可删除交付计划', 'error')
+        return redirect(url_for('ext.delivery_plan_list'))
     db = get_db()
     plan = db.execute('SELECT * FROM delivery_plans WHERE id=?', (plan_id,)).fetchone()
     if plan:
@@ -402,6 +406,10 @@ def contract_payment_update(cid, pid):
 
 @ext_bp.route('/contracts/<int:cid>/payments/<int:pid>/delete', methods=['POST'])
 def contract_payment_delete(cid, pid):
+    from app import is_admin
+    if not is_admin():
+        flash('仅管理员可删除付款节点', 'error')
+        return redirect(url_for('ext.contract_detail', cid=cid))
     """删除付款/收款节点"""
     db = get_db()
     payment = db.execute('SELECT * FROM contract_payments WHERE id=? AND contract_id=?', (pid, cid)).fetchone()
@@ -426,6 +434,12 @@ def contract_update_status(cid):
     payment_status = request.form.get('payment_status', contract['payment_status'])
     progress = request.form.get('progress', contract['progress'])
     operator = request.form.get('operator', '')
+    # v10.3.2 权限统一：普通用户提交审批
+    if status != contract['status']:
+        perm, aid = submit_status_change('contract', 'contract', cid, status)
+        if perm == 'pending':
+            flash('状态变更申请已提交，等待管理员审批', 'info')
+            return redirect(request.referrer or url_for('ext.contract_list'))
     db.execute('UPDATE contracts SET status=?, payment_status=?, progress=? WHERE id=?',
                (status, payment_status, progress, cid))
     db.commit()
@@ -865,11 +879,14 @@ def ota_publish(oid):
 @ext_bp.route('/devices/<int:did>/status', methods=['POST'])
 def device_status_update(did):
     """更新设备在线状态"""
-    from app import can_write
-    if not can_write('ext.device'):
-        return jsonify(ok=False, msg='只读权限'), 403
+    from app import is_admin, submit_status_change
     db = get_db()
     status = request.form.get('status', '在线')
+    # v10.3.2 权限统一：普通用户提交审批
+    perm, aid = submit_status_change('device', 'device', did, status)
+    if perm == 'pending':
+        flash('状态变更申请已提交，等待管理员审批', 'info')
+        return redirect(url_for('ext.device_detail', did=did))
     db.execute("UPDATE devices SET status=? WHERE id=?", (status, did))
     db.commit()
     log_operation('设备', '状态更新', f'设备#{did} → {status}', 'delivery_c')
@@ -994,6 +1011,10 @@ def tech_req_add_log(rid):
 
 @ext_bp.route('/tech-reqs/<int:rid>/delete', methods=['POST'])
 def tech_req_delete(rid):
+    from app import is_admin
+    if not is_admin():
+        flash('仅管理员可删除技术需求', 'error')
+        return redirect(url_for('ext.tech_req_list'))
     db = get_db()
     db.execute('DELETE FROM tech_req_logs WHERE tech_req_id=?', (rid,))
     db.execute('DELETE FROM tech_requirements WHERE id=?', (rid,))

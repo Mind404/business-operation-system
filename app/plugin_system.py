@@ -60,6 +60,34 @@ PLUGINS = [
 
 # 业务插件 endpoint → plugin_id 映射（用于路由守卫）
 _BIZ_ENDPOINTS = {p['endpoint']: p['id'] for p in PLUGINS if not p['core']}
+
+# v10.3.2 前缀守卫：插件子路由也纳入订阅校验（防 URL 直连绕过）
+_PLUGIN_PATH_PREFIXES = {
+    'overview': ('/executive',),
+    'requirements': ('/requirements',),
+    'tech_req': ('/tech-reqs',),
+    'wbs': ('/wbs',),
+    'planning': ('/planning',),
+    'production': ('/production',),
+    'bug': ('/bugs',),
+    'test': ('/test',),
+    'delivery': ('/delivery',),
+    'device': ('/device', '/devices', '/ota'),
+    'contract': ('/contracts',),
+    'data_mgmt': ('/data',),
+}
+
+# 免前缀守卫的全局路径（登录/静态/个人中心/插件中心/审批中心本身）
+_GUARD_FREE_PATHS = ('/login', '/static', '/plugins', '/profile', '/logout', '/approvals', '/')
+
+
+def _plugin_id_for_path(path):
+    """按路径前缀判断归属插件（子路由直连也能拦）"""
+    for pid, prefixes in _PLUGIN_PATH_PREFIXES.items():
+        for pfx in prefixes:
+            if path == pfx or path.startswith(pfx + '/'):
+                return pid
+    return None
 # 免守卫路径（登录、静态、插件中心本身、个人中心、总览）
 _WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/logout')
 
@@ -124,8 +152,14 @@ def register_plugin_guard(app):
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
                             'login', 'logout'):
             return None
+        # v10.3.2：前缀守卫兜底——子路由（URL 直连）也按路径判归属
+        for free in _GUARD_FREE_PATHS:
+            if request.path == free or request.path.startswith(free + '/'):
+                return None
         # 该 endpoint 属于某个业务插件？
         pid = _BIZ_ENDPOINTS.get(ep)
+        if not pid:
+            pid = _plugin_id_for_path(request.path)
         if not pid:
             return None
         # 核心插件 endpoint 放行（只有个人中心常驻）

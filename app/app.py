@@ -228,6 +228,89 @@ def can_write(module_prefix):
     """检查当前角色是否对指定模块有写权限"""
     return has_module_access(module_prefix) and not is_readonly_module(module_prefix)
 
+
+# ============================================================
+# v10.3.2 阶段2 权限统一：WBS式两级权限（管理员+普通用户）
+# 通用规则：普通用户可改自己创建记录的业务字段；状态类字段变更需提交审批（统一审批表）
+# WBS 插件保持自身审批流程，不走此表
+# ============================================================
+def is_admin():
+    """当前用户是否为管理员"""
+    return get_current_role() == 'admin'
+
+
+def submit_status_change(plugin_id, record_type, record_id, new_status, payload_extra=None):
+    """状态类变更统一入口：
+    - 管理员：返回 ('direct', None)，调用方直接执行 UPDATE
+    - 普通用户：写入 approval_requests 待审批，返回 ('pending', approval_id)
+    """
+    if is_admin():
+        return 'direct', None
+    payload = {'new_status': new_status}
+    if payload_extra:
+        payload.update(payload_extra)
+    aid = plugin_system.submit_approval(plugin_id, record_type, record_id,
+                                        session.get('user_id'), f'状态变更→{new_status}', payload)
+    log_operation(plugin_id, '提交审批', f'{record_type}#{record_id} 申请状态变更→{new_status}',
+                  session.get('username', ''))
+    return 'pending', aid
+
+
+# ---- 审批落地函数：审批通过后按插件/记录类型分派执行状态变更 ----
+def _apply_requirement_status(db, rid, payload):
+    ns = payload.get('new_status')
+    db.execute("UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (ns, rid))
+    db.commit()
+    sync_requirement_status(db, rid, ns)
+
+
+def _apply_version_status(db, vid, payload):
+    ns = payload.get('new_status')
+    if ns == '已发布':
+        db.execute("UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime') WHERE id=?", (ns, vid))
+    else:
+        db.execute("UPDATE software_versions SET status=? WHERE id=?", (ns, vid))
+    db.commit()
+
+
+def _apply_task_status(db, tid, payload):
+    ns = payload.get('new_status')
+    db.execute("UPDATE dev_tasks SET status=? WHERE id=?", (ns, tid))
+    db.commit()
+
+
+def _apply_bug_status(db, bid, payload):
+    fields, params = ['status=?'], [payload.get('new_status', '新建')]
+    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
+        if payload.get(f):
+            fields.append(f'{f}=?')
+            params.append(payload[f])
+    if payload.get('new_status') == '已关闭':
+        fields.append('closed_at=datetime("now","localtime")')
+    db.execute(f'UPDATE bug_records SET {",".join(fields)} WHERE id=?', (*params, bid))
+    db.commit()
+
+
+def _apply_contract_status(db, cid, payload):
+    db.execute("UPDATE contracts SET status=? WHERE id=?", (payload.get('new_status'), cid))
+    db.commit()
+
+
+def _apply_device_status(db, did, payload):
+    db.execute("UPDATE devices SET status=? WHERE id=?", (payload.get('new_status'), did))
+    db.commit()
+
+
+_APPROVAL_APPLY = {
+    ('requirements', 'requirement'): _apply_requirement_status,
+    ('planning', 'software_version'): _apply_version_status,
+    ('planning', 'dev_task'): _apply_task_status,
+    ('bug', 'bug'): _apply_bug_status,
+    ('contract', 'contract'): _apply_contract_status,
+    ('device', 'device'): _apply_device_status,
+}
+
+
 @app.context_processor
 def inject_permissions():
     """向模板注入权限相关变量"""
@@ -1063,6 +1146,8 @@ def executive_dashboard():
 
 @app.route('/executive/checkpoints/update', methods=['POST'])
 def executive_checkpoint_update():
+    if not is_admin():
+        return jsonify({'success': False, 'error': '仅管理员可操作检查点'}), 403
     """更新成果检查点状态（需管理员密码，支持批量）"""
     from flask import jsonify
     data = request.get_json() or {}
@@ -1619,6 +1704,9 @@ def requirement_edit(req_id):
 @app.route('/requirements/<int:req_id>/delete', methods=['POST'])
 def requirement_delete(req_id):
     """软删除需求（v8.6.0）：标记 is_deleted=1，保留历史追溯，防止外键崩溃"""
+    if not is_admin():
+        flash('仅管理员可删除需求', 'error')
+        return redirect(url_for('requirements_list'))
     db = get_db()
     item = db.execute('SELECT id FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if not item:
@@ -1636,6 +1724,10 @@ def requirement_update_status(req_id):
     if new_status not in valid_statuses:
         return jsonify({'success': False, 'error': '无效的状态值'}), 400
     db = get_db()
+    # v10.3.2 权限统一：普通用户提交审批，管理员直接改
+    perm, aid = submit_status_change('requirements', 'requirement', req_id, new_status)
+    if perm == 'pending':
+        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
     db.execute('''UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?''',
                (new_status, req_id))
     db.commit()
@@ -1832,6 +1924,9 @@ def product_edit(pid):
 
 @app.route('/planning/<int:pid>/delete', methods=['POST'])
 def product_delete(pid):
+    if not is_admin():
+        flash('仅管理员可删除产品', 'error')
+        return redirect(url_for('planning_list'))
     db = get_db()
     db.execute('DELETE FROM products WHERE id=?', (pid,))
     db.commit()
@@ -2116,6 +2211,9 @@ def requisition_add():
 
 @app.route('/production/requisition/<int:rid>/approve', methods=['POST'])
 def requisition_approve(rid):
+    if not is_admin():
+        flash('仅管理员可审批领料', 'error')
+        return redirect(url_for('production_dashboard', tab='requisitions'))
     db = get_db()
     req = db.execute('SELECT * FROM material_requisitions WHERE id=?', (rid,)).fetchone()
     if req:
@@ -2344,6 +2442,9 @@ def receipt_add():
 
 @app.route('/delivery/receipt/<int:rid>/approve', methods=['POST'])
 def receipt_approve(rid):
+    if not is_admin():
+        flash('仅管理员可审批入库', 'error')
+        return redirect(url_for('delivery_dashboard', tab='receipts'))
     db = get_db()
     receipt = db.execute('SELECT * FROM warehouse_receipts WHERE id=?', (rid,)).fetchone()
     if receipt:
@@ -2431,6 +2532,57 @@ from flask import Response, send_file
 
 # 注册模板全局函数
 app.jinja_env.globals['get_field_desc'] = get_field_desc
+
+@app.route('/approvals')
+def approval_center():
+    """统一审批中心：管理员查看/处理全部待审批状态变更申请"""
+    if not is_admin():
+        flash('仅管理员可访问审批中心', 'error')
+        return redirect(url_for('index'))
+    db = get_db()
+    items = [dict(r) for r in db.execute('SELECT a.*, u.display_name, u.username FROM approval_requests a LEFT JOIN users u ON a.requester_id=u.id ORDER BY a.created_at DESC').fetchall()]
+    for r in items:
+        try:
+            r['payload_dict'] = json.loads(r['payload']) if r['payload'] else {}
+        except Exception:
+            r['payload_dict'] = {}
+    pending = [r for r in items if r['status'] == '待审批']
+    done = [r for r in items if r['status'] != '待审批']
+    return render_template('approval_center.html', pending=pending, done=done)
+
+
+@app.route('/approvals/<int:req_id>/review', methods=['POST'])
+def approval_review(req_id):
+    """审批处理：管理员通过（落地状态变更）/ 驳回"""
+    if not is_admin():
+        return jsonify({'ok': False, 'msg': '仅管理员可审批'}), 403
+    approve = request.form.get('action') == 'approve'
+    comment = request.form.get('comment', '')
+    db = get_db()
+    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (req_id,)).fetchone()
+    if not row or row['status'] != '待审批':
+        return jsonify({'ok': False, 'msg': '申请不存在或已处理'})
+    if approve:
+        payload = json.loads(row['payload']) if row['payload'] else {}
+        handler = _APPROVAL_APPLY.get((row['plugin_id'], row['record_type']))
+        if handler:
+            try:
+                handler(db, row['record_id'], payload)
+            except Exception as e:
+                return jsonify({'ok': False, 'msg': '状态落地失败: ' + str(e)}), 500
+        db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
+                   ('已通过', session.get('user_id'), comment, req_id))
+        db.commit()
+        log_operation('审批中心', '通过', '#%d %s#%d 状态变更已落地' % (req_id, row['record_type'], row['record_id']),
+                      session.get('username', ''))
+        return jsonify({'ok': True, 'msg': '已通过并落地'})
+    db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
+               ('已驳回', session.get('user_id'), comment, req_id))
+    db.commit()
+    log_operation('审批中心', '驳回', '#%d %s#%d' % (req_id, row['record_type'], row['record_id']),
+                  session.get('username', ''))
+    return jsonify({'ok': True, 'msg': '已驳回'})
+
 
 @app.route('/data')
 def data_management():
@@ -2814,6 +2966,10 @@ def version_status_update(vid):
     if new_status not in valid:
         return jsonify({'success': False, 'error': '无效的状态值'}), 400
     db = get_db()
+    # v10.3.2 权限统一：普通用户提交审批
+    perm, aid = submit_status_change('planning', 'software_version', vid, new_status)
+    if perm == 'pending':
+        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
     cur = db.execute('SELECT status FROM software_versions WHERE id=?', (vid,)).fetchone()
     if not cur:
         return jsonify({'success': False, 'error': '版本不存在'}), 404
@@ -2850,6 +3006,10 @@ def version_task_status(vid, tid):
     if new_status not in valid:
         return jsonify({'success': False}), 400
     db = get_db()
+    # v10.3.2 权限统一：普通用户提交审批
+    perm, aid = submit_status_change('planning', 'dev_task', tid, new_status)
+    if perm == 'pending':
+        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
     db.execute('UPDATE dev_tasks SET status=?, actual_finish=datetime("now","localtime") WHERE id=?',
                (new_status, tid))
     db.commit()
@@ -2923,6 +3083,16 @@ def bug_update(bid):
     if new_status not in valid:
         return validation_error('无效的状态')
     db = get_db()
+    # v10.3.2 权限统一：普通用户提交审批（携带完整变更字段）
+    payload_extra = {}
+    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
+        v = request.form.get(f)
+        if v:
+            payload_extra[f] = v
+    perm, aid = submit_status_change('bug', 'bug', bid, new_status, payload_extra)
+    if perm == 'pending':
+        flash('状态变更申请已提交，等待管理员审批', 'info')
+        return redirect(url_for('bug_detail', bid=bid))
     bug = db.execute('SELECT status FROM bug_records WHERE id=?', (bid,)).fetchone()
     old_status = bug['status'] if bug else None
     update_fields = ['status=?']
