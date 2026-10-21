@@ -614,6 +614,41 @@ def admin_external_cache(sid):
     return render_template('external_cache.html', system=row, caches=caches)
 
 
+@app.route('/admin/ai-settings', methods=['GET', 'POST'])
+def admin_ai_settings():
+    """AI 模型设置（v11.1，参考图2 API密钥管理）：
+    模式切换（本地 Ollama / 远程 OpenAI 兼容 API）、BaseURL、API Key（脱敏+显示/复制）、
+    模型名、连接测试、安全提示。配置存 ai_config 表，ai_service 读取生效。"""
+    if not is_admin():
+        flash('仅管理员可配置 AI 模型', 'error')
+        return redirect(url_for('index'))
+    from ai_service import _get_config, _save_config, _mask_key
+    if request.method == 'POST':
+        mode = request.form.get('mode', 'local')
+        base_url = (request.form.get('base_url') or '').strip()
+        api_key = (request.form.get('api_key') or '').strip()
+        model = (request.form.get('model') or '').strip()
+        enabled = '1' if request.form.get('enabled') == '1' else '0'
+        # 未填写新 key 时保留旧 key（避免编辑其他项时清空密钥）
+        if not api_key:
+            cur = _get_config()
+            api_key = cur.get('api_key', '')
+        if mode == 'remote' and not base_url:
+            flash('远程模式必须填写 BaseURL', 'error')
+            return redirect(url_for('admin_ai_settings'))
+        if not model:
+            flash('请填写模型名称', 'error')
+            return redirect(url_for('admin_ai_settings'))
+        _save_config({'mode': mode, 'base_url': base_url, 'api_key': api_key,
+                      'model': model, 'enabled': enabled})
+        log_operation('平台', 'AI设置', f'更新 AI 模型配置（模式={mode}，模型={model}）')
+        flash('AI 模型配置已保存', 'success')
+        return redirect(url_for('admin_ai_settings'))
+    cfg = _get_config()
+    cfg['api_key_masked'] = _mask_key(cfg.get('api_key', ''))
+    return render_template('ai_settings.html', cfg=cfg)
+
+
 
 def is_readonly_module(module_prefix):
     """【权限放开】v8.5.0 起取消只读限制"""
@@ -668,59 +703,11 @@ def _apply_req_status_new(db, rid, payload):
     req_apply(db, rid, payload.get('new_status'), '系统（审批通过）')
 
 
-def _apply_requirement_status(db, rid, payload):
-    from plugins.requirements.routes import sync_requirement_status
-    ns = payload.get('new_status')
-    db.execute("UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (ns, rid))
-    db.commit()
-    sync_requirement_status(db, rid, ns)
-
-
-def _apply_version_status(db, vid, payload):
-    ns = payload.get('new_status')
-    if ns == '已发布':
-        db.execute("UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime') WHERE id=?", (ns, vid))
-    else:
-        db.execute("UPDATE software_versions SET status=? WHERE id=?", (ns, vid))
-    db.commit()
-
-
-def _apply_task_status(db, tid, payload):
-    ns = payload.get('new_status')
-    db.execute("UPDATE dev_tasks SET status=? WHERE id=?", (ns, tid))
-    db.commit()
-
-
-def _apply_bug_status(db, bid, payload):
-    fields, params = ['status=?'], [payload.get('new_status', '新建')]
-    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
-        if payload.get(f):
-            fields.append(f'{f}=?')
-            params.append(payload[f])
-    if payload.get('new_status') == '已关闭':
-        fields.append('closed_at=datetime("now","localtime")')
-    db.execute(f'UPDATE bug_records SET {",".join(fields)} WHERE id=?', (*params, bid))
-    db.commit()
-
-
-def _apply_contract_status(db, cid, payload):
-    db.execute("UPDATE contracts SET status=? WHERE id=?", (payload.get('new_status'), cid))
-    db.commit()
-
-
-def _apply_device_status(db, did, payload):
-    db.execute("UPDATE devices SET status=? WHERE id=?", (payload.get('new_status'), did))
-    db.commit()
-
-
 _APPROVAL_APPLY = {
+    # v11.0 平台化：仅保留 P0 插件（需求收集）的审批落地；
+    # 已删除插件（旧 requirements/planning/bug/contract/device）的审批单
+    # 分派缺失时由审批中心 .get() 容错跳过（记录日志，不报错）。
     ('requirements', 'req_status'): _apply_req_status_new,
-    ('requirements', 'requirement'): _apply_requirement_status,
-    ('planning', 'software_version'): _apply_version_status,
-    ('planning', 'dev_task'): _apply_task_status,
-    ('bug', 'bug'): _apply_bug_status,
-    ('contract', 'contract'): _apply_contract_status,
-    ('device', 'device'): _apply_device_status,
 }
 
 
@@ -757,14 +744,24 @@ def init_db():
     db = sqlite3.connect(app.config['DATABASE'])
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
+    # v11.0 平台/插件表兜底（老库升级路径：schema.sql 未含这些表的历史库，幂等补建）
+    try:
+        from db_migrations import init_platform_tables, init_req_tables
+        from flask import g
+        g.db = db
+        init_platform_tables()
+        init_req_tables()
+        g.pop('db', None)
+    except Exception as e:
+        print(f'  数据库迁移警告：v11平台表兜底补建失败 - {e}')
     # 首次运行（users 为空）：写入默认账号，保证解压即用
     # 管理员 admin/admin123，普通用户 product/product123
     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:
         db.executescript("""
-            INSERT INTO users (username, password, display_name, role, is_active)
-            VALUES ('admin','admin123','系统管理员','admin',1);
-            INSERT INTO users (username, password, display_name, role, is_active)
-            VALUES ('product','product123','产品经理','user',1);
+            INSERT INTO users (username, password, display_name, role, is_active, department)
+            VALUES ('admin','admin123','系统管理员','admin',1,'平台管理部');
+            INSERT INTO users (username, password, display_name, role, is_active, department)
+            VALUES ('product','product123','产品经理','user',1,'产品部');
         """)
     db.commit()
 

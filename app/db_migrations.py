@@ -38,18 +38,24 @@ def _set_version(db, version, note=''):
 # ============================================================
 def init_core_tables():
     db = get_db()
-    # users 表结构与 schema.sql 权威定义保持一致（display_name/is_active）
+    # users 表结构与 schema.sql 权威定义保持一致（display_name/is_active/department）
     db.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL UNIQUE, password TEXT NOT NULL,
         display_name TEXT, role TEXT DEFAULT 'user', is_active INTEGER DEFAULT 1,
+        department TEXT,
         created_at TEXT DEFAULT (datetime('now','localtime')))''')
-    # 兼容历史库（旧结构为 name/department）：补齐 display_name/is_active
+    # 兼容历史库（旧结构为 name/department）：补齐 display_name/is_active/department
     cols = [r[1] for r in db.execute('PRAGMA table_info(users)').fetchall()]
     if 'display_name' not in cols:
         db.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
     if 'is_active' not in cols:
         db.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
+    if 'department' not in cols:
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN department TEXT")
+        except Exception:
+            pass
     db.execute('''CREATE TABLE IF NOT EXISTS plugin_registry (
         id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
         description TEXT, endpoint TEXT, tables TEXT)''')
@@ -166,6 +172,10 @@ def init_req_tables():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         field_key TEXT UNIQUE, field_label TEXT,
         required INTEGER DEFAULT 0, visible INTEGER DEFAULT 1)''')
+    # AI 模型配置（key-value：mode/base_url/api_key/model；管理员在设置页维护）
+    db.execute('''CREATE TABLE IF NOT EXISTS ai_config (
+        key TEXT PRIMARY KEY,
+        value TEXT)''')
     # 默认字段配置（仅首启写入一次）
     default_fields = [
         ('title', '需求标题', 1, 1), ('req_type', '需求类型', 0, 1),

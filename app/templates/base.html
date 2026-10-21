@@ -57,6 +57,9 @@
                     <a href="{{ url_for('admin_external') }}" class="nav-item {% if request.path.startswith('/admin/external') %}active{% endif %}">
                         <span class="nav-icon">🔌</span> 外部系统接入
                     </a>
+                    <a href="{{ url_for('admin_ai_settings') }}" class="nav-item {% if request.path.startswith('/admin/ai-settings') %}active{% endif %}">
+                        <span class="nav-icon">🤖</span> AI 设置
+                    </a>
                 </div>
                 {% endif %}
 
