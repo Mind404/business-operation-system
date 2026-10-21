@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ system.name }} 聚合缓存 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📦 {{ system.name }} · 聚合缓存</h1>
+    <p class="page-desc">外部系统按《插件接入规范》上报的数据快照（平台只读展示，不反向写业务库）</p>
+</div>
+
+<div style="display:flex;gap:12px;margin-bottom:16px;">
+    <a href="{{ url_for('admin_external') }}" style="padding:8px 14px;background:#f1f5f9;color:#475569;border:none;border-radius:6px;font-size:13px;text-decoration:none;">← 返回接入管理</a>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;">
+    {% if caches %}
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+            <tr style="background:#f5f7fa;text-align:left;">
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">数据分类</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">数据快照</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">更新时间</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in caches %}
+            <tr style="border-bottom:1px solid #eef1f5;">
+                <td style="padding:9px;color:#1e293b;font-weight:500;width:120px;">{{ c.category }}</td>
+                <td style="padding:9px;color:#475569;white-space:pre-wrap;font-size:12px;">{{ c.payload }}</td>
+                <td style="padding:9px;color:#64748b;font-size:12px;width:140px;">{{ c.updated_at }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="font-size:13px;color:#94a3b8;">暂无数据上报。接入完成后，外部系统按规范调用数据上报接口写入此处。</div>
+    {% endif %}
+</div>
+{% endblock %}

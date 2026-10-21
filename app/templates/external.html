@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}外部系统接入 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔌 外部系统接入管理</h1>
+    <p class="page-desc">插件接入平台登记：外部系统可独立运行，按《插件接入规范 v1.0》接入后受平台统一权限/审批/聚合管理</p>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;margin-bottom:16px;">
+    <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">登记外部系统 / 插件</h3>
+    <form id="extForm" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
+        <div>
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">系统名称 *</label>
+            <input type="text" name="name" placeholder="如：测试管理系统" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div>
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">插件标识（可选）</label>
+            <input type="text" name="plugin_id" placeholder="如：testing（小写英文）" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div>
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">系统类型</label>
+            <select name="system_type" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                <option>业务系统</option><option>测试系统</option><option>Bug系统</option>
+                <option>版本系统</option><option>文档系统</option><option>其他</option>
+            </select>
+        </div>
+        <div>
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">接入方式</label>
+            <select name="access_method" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                <option value="api">API 对接（推荐）</option><option value="db">数据库直连（读库聚合）</option>
+            </select>
+        </div>
+        <div style="grid-column:1 / -1;">
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">连接配置（API地址/数据库连接串/账号等，按接入方式填写）</label>
+            <input type="text" name="conn_config" placeholder="示例：http://10.0.0.5:8080/api 或 sqlite:///D:/testing.db" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div style="grid-column:1 / -1;">
+            <label style="font-size:12px;color:#334155;display:block;margin-bottom:4px;">备注</label>
+            <input type="text" name="note" placeholder="系统功能说明" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+        </div>
+        <div style="grid-column:1 / -1;">
+            <button type="button" onclick="saveExt()" style="padding:8px 20px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">登记接入</button>
+            <span id="extMsg" style="font-size:12px;margin-left:10px;"></span>
+        </div>
+    </form>
+</div>
+
+<div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;">
+    <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">已登记系统</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+            <tr style="background:#f5f7fa;text-align:left;">
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">名称</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">插件标识</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">类型</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">接入方式</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">连接配置</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">缓存条目</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">状态</th>
+                <th style="padding:9px;border-bottom:2px solid #e0e4ea;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in systems %}
+            <tr style="border-bottom:1px solid #eef1f5;">
+                <td style="padding:9px;color:#1e293b;font-weight:500;">{{ s.name }}</td>
+                <td style="padding:9px;color:#475569;">{{ s.plugin_id or '-' }}</td>
+                <td style="padding:9px;color:#475569;">{{ s.system_type }}</td>
+                <td style="padding:9px;color:#475569;">{{ 'API 对接' if s.access_method == 'api' else '数据库直连' }}</td>
+                <td style="padding:9px;color:#64748b;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ s.conn_config or '-' }}</td>
+                <td style="padding:9px;color:#475569;">{{ s.cache_cnt }}</td>
+                <td style="padding:9px;">
+                    {% if s.status == '已启用' %}<span style="background:#dcfce7;color:#15803d;border-radius:4px;padding:1px 8px;font-size:12px;">已启用</span>
+                    {% else %}<span style="background:#f1f5f9;color:#64748b;border-radius:4px;padding:1px 8px;font-size:12px;">{{ s.status }}</span>{% endif %}
+                </td>
+                <td style="padding:9px;">
+                    <button onclick="testExt({{ s.id }})" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">测试</button>
+                    <a href="{{ url_for('admin_external_cache', sid=s.id) }}" style="padding:4px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;text-decoration:none;color:#475569;margin-left:4px;">缓存</a>
+                    <button onclick="toggleExt({{ s.id }})" style="padding:4px 10px;border:1px solid #bfd3ff;border-radius:6px;background:#f0f4ff;color:#1e40af;font-size:12px;cursor:pointer;margin-left:4px;">{{ '停用' if s.status == '已启用' else '启用' }}</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" style="padding:30px;text-align:center;color:#94a3b8;">暂无登记系统。外部插件/独立系统接入平台前，先在此登记。</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script>
+function saveExt() {
+    const form = document.getElementById('extForm');
+    const msg = document.getElementById('extMsg');
+    msg.textContent = '保存中…';
+    fetch('{{ url_for("admin_external_create") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams(new FormData(form))
+    }).then(r => r.json()).then(d => {
+        if (d.success) { msg.style.color = '#15803d'; msg.textContent = '已登记'; setTimeout(() => location.reload(), 600); }
+        else { msg.style.color = '#dc2626'; msg.textContent = d.error || '登记失败'; }
+    }).catch(() => { msg.style.color = '#dc2626'; msg.textContent = '请求失败'; });
+}
+function toggleExt(id) {
+    fetch('{{ url_for("admin_external_toggle", sid=0) }}'.replace('/0/', '/' + id + '/'), {method: 'POST'})
+        .then(() => location.reload());
+}
+function testExt(id) {
+    fetch('{{ url_for("admin_external_test", sid=0) }}'.replace('/0/', '/' + id + '/'), {method: 'POST'})
+        .then(r => r.json()).then(d => alert(d.msg || (d.success ? '测试通过' : '测试失败')));
+}
+</script>
+{% endblock %}

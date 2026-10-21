@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}{{ item.code }} 详情 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ item.code }} · {{ item.title }}</h1>
+    <p class="page-desc">需求详情与追溯（状态：{{ item.status }}）</p>
+</div>
+
+<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+    <a href="{{ url_for('requirements.req_list') }}" style="padding:8px 14px;background:#f1f5f9;color:#475569;border:none;border-radius:6px;font-size:13px;text-decoration:none;">← 返回列表</a>
+    <a href="{{ url_for('requirements.req_edit', rid=item.id) }}" style="padding:8px 14px;background:#f0f4ff;border:1px solid #bfd3ff;border-radius:6px;color:#1e40af;font-size:13px;text-decoration:none;">✏️ 编辑</a>
+    {% if is_admin %}
+    <form method="post" action="{{ url_for('requirements.req_delete', rid=item.id) }}" onsubmit="return confirm('确认删除该需求？（软删可追溯）')">
+        <button type="submit" style="padding:8px 14px;background:#fff;border:1px solid #fca5a5;border-radius:6px;color:#dc2626;font-size:13px;cursor:pointer;">🗑 删除</button>
+    </form>
+    {% endif %}
+</div>
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
+    <!-- 左侧：需求信息 + 状态流转 -->
+    <div>
+        <div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;margin-bottom:16px;">
+            <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">需求信息</h3>
+            <table style="width:100%;font-size:13px;border-collapse:collapse;">
+                {% for label, val in [
+                    ('需求编号', item.code), ('需求类型', item.req_type), ('来源部门', item.source_dept or '-'),
+                    ('客户/提出方', item.customer or '-'), ('优先级', item.priority),
+                    ('期望交付日期', item.delivery_date or '-'), ('负责人', item.owner or '-'),
+                    ('需求数量', item.quantity), ('创建人', item.created_by), ('创建时间', item.created_at),
+                ] %}
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:8px 10px;color:#64748b;width:120px;">{{ label }}</td>
+                    <td style="padding:8px 10px;color:#1e293b;font-weight:500;">{{ val }}</td>
+                </tr>
+                {% endfor %}
+                <tr>
+                    <td style="padding:8px 10px;color:#64748b;">需求描述</td>
+                    <td style="padding:8px 10px;color:#1e293b;white-space:pre-wrap;">{{ item.description or '-' }}</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- 状态流转 -->
+        <div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;margin-bottom:16px;">
+            <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">状态流转（审批流管控）</h3>
+            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+                {% for st in ['待评审','评审通过','已采纳','开发中','已完成','已关闭'] %}
+                <span style="padding:4px 10px;border-radius:14px;font-size:12px;
+                    {% if st == item.status %}background:#2563eb;color:#fff;font-weight:600;
+                    {% elif st in ['待评审','评审通过','已采纳','开发中'] %}background:#eef2ff;color:#1d4ed8;
+                    {% else %}background:#dcfce7;color:#15803d;{% endif %}">{{ st }}</span>
+                {% if not loop.last %}<span style="color:#cbd5e1;">→</span>{% endif %}
+                {% endfor %}
+            </div>
+            {% if next_statuses %}
+            <form id="statusForm" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:13px;color:#475569;">流转到：</span>
+                <select id="nextStatus" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                    {% for st in next_statuses %}<option value="{{ st }}">{{ st }}</option>{% endfor %}
+                </select>
+                <button type="button" onclick="changeStatus()" style="padding:7px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">提交状态变更</button>
+                <span id="statusMsg" style="font-size:12px;"></span>
+            </form>
+            {% else %}
+            <span style="font-size:13px;color:#94a3b8;">该状态无下一步流转（终态或需先处理当前步骤）</span>
+            {% endif %}
+        </div>
+
+        <!-- 关联 WBS -->
+        <div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;margin-bottom:16px;">
+            <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">关联 WBS</h3>
+            {% if wbs_project or wbs_task %}
+            <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px;font-size:13px;margin-bottom:10px;">
+                {% if wbs_project %}项目：<a href="{{ url_for('wbs.wbs_project_detail', pid=wbs_project.id) }}" style="color:#0369a1;">{{ wbs_project.name }}</a>{% endif %}
+                {% if wbs_task %}· 任务：{{ wbs_task.name }}{% endif %}
+            </div>
+            {% endif %}
+            <form method="post" action="{{ url_for('requirements.req_link', rid=item.id) }}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;" onsubmit="return linkWbs(event)">
+                <select name="project_id" id="projectSelect" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                    <option value="">不关联项目</option>
+                    {% for p in wbs_projects %}<option value="{{ p.id }}" {% if item.wbs_project_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+                </select>
+                <input type="number" name="task_id" placeholder="任务ID（可选）" value="{{ item.wbs_task_id or '' }}" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;width:130px;">
+                <button type="submit" style="padding:7px 14px;background:#f1f5f9;color:#475569;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-size:13px;">保存关联</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 右侧：评审记录 + 变更留痕 -->
+    <div>
+        <div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;margin-bottom:16px;">
+            <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">评审记录</h3>
+            {% for rv in reviews %}
+            <div style="border-left:3px solid {% if rv.conclusion == '已通过' %}#22c55e{% else %}#f59e0b{% endif %};padding:8px 12px;margin-bottom:8px;background:#f8fafc;border-radius:0 6px 6px 0;">
+                <div style="font-size:13px;color:#1e293b;font-weight:500;">{{ rv.conclusion }} <span style="color:#94a3b8;font-weight:400;">· {{ rv.reviewer }} · {{ rv.review_date }}</span></div>
+                <div style="font-size:12px;color:#64748b;margin-top:2px;">{{ rv.opinion or '-' }}</div>
+            </div>
+            {% else %}
+            <div style="font-size:13px;color:#94a3b8;">暂无评审记录</div>
+            {% endfor %}
+        </div>
+
+        <div style="background:#fff;border:1px solid #e5e9f0;border-radius:8px;padding:18px;">
+            <h3 style="margin:0 0 14px;font-size:15px;color:#1e293b;">变更留痕</h3>
+            {% for ch in changes %}
+            <div style="font-size:12px;color:#475569;padding:6px 0;border-bottom:1px dashed #eef1f5;">
+                <span style="color:#2563eb;">{{ ch.change_by }}</span> 于 {{ ch.change_at }} 修改「{{ ch.field_name }}」：{{ ch.old_value or '空' }} → <b>{{ ch.new_value or '空' }}</b>
+                {% if ch.approval_id %}<span style="background:#eef2ff;color:#1d4ed8;border-radius:4px;padding:1px 6px;margin-left:6px;">审批单#{{ ch.approval_id }}</span>{% endif %}
+            </div>
+            {% else %}
+            <div style="font-size:13px;color:#94a3b8;">暂无变更记录</div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<script>
+function changeStatus() {
+    const sel = document.getElementById('nextStatus');
+    const msg = document.getElementById('statusMsg');
+    if (!sel || !sel.value) return;
+    msg.textContent = '提交中…';
+    fetch('{{ url_for("requirements.req_status_change", rid=item.id) }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'status=' + encodeURIComponent(sel.value)
+    }).then(r => r.json()).then(d => {
+        if (d.success && d.pending) {
+            msg.style.color = '#1d4ed8';
+            msg.textContent = d.msg + '，可到「审批中心」跟踪';
+        } else if (d.success) {
+            msg.style.color = '#15803d';
+            msg.textContent = '状态已变更为：' + d.status;
+            setTimeout(() => location.reload(), 800);
+        } else {
+            msg.style.color = '#dc2626';
+            msg.textContent = d.error || '操作失败';
+        }
+    }).catch(() => {
+        msg.style.color = '#dc2626';
+        msg.textContent = '请求失败，请重试';
+    });
+}
+function linkWbs(e) {
+    e.preventDefault();
+    const form = e.target;
+    fetch(form.action, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams(new FormData(form))
+    }).then(r => r.json()).then(d => {
+        if (d.success) { alert('关联已保存'); location.reload(); }
+        else alert(d.error || '保存失败');
+    });
+    return false;
+}
+</script>
+{% endblock %}
