@@ -576,24 +576,39 @@ function captureWbsZoomBase() {
 }
 function setZoom(z) {
     var tbl = document.getElementById('wbsTable');
+    var wrap = document.getElementById('wbsWrap');
     if (!tbl) return;
     if (!wbsZoomBase) captureWbsZoomBase();
+    var scroll = z > 1.25; // 100%/125% 页内换行显示不横滚；150%/200% 表格等比放大允许横向滚动
     tbl.style.fontSize = (13 * z) + 'px';
-    // 关键修复：表格整体宽度随比例等比放大（100% 保持填满视口，>100% 超出部分横向滚动）
-    tbl.style.width = Math.round(wbsTableBaseW * z) + 'px';
-    // 表头固定/最小列宽等比放大，保证列宽与字号同步协调
+    if (scroll) {
+        // 150/200%：fixed 布局 + 表格整体等比放大，超出部分由 wbsWrap 横向滚动
+        tbl.style.tableLayout = 'fixed';
+        tbl.style.width = Math.round(wbsTableBaseW * z) + 'px';
+        if (wrap) wrap.style.overflowX = 'auto';
+    } else {
+        // 100/125%：auto 布局严格贴合视口宽度，列按内容自适应，长内容通过换行显示（不横向滚动）
+        tbl.style.tableLayout = 'auto';
+        tbl.style.width = '100%';
+        if (wrap) wrap.style.overflowX = 'hidden';
+    }
     wbsZoomBase.forEach(function(b){
-        if (b.ow) b.el.style.width = (b.ow * z) + 'px';
-        if (b.omw) b.el.style.minWidth = (b.omw * z) + 'px';
+        if (scroll) {
+            if (b.ow) b.el.style.width = (b.ow * z) + 'px';
+            if (b.omw) b.el.style.minWidth = (b.omw * z) + 'px';
+        } else {
+            if (b.ow) b.el.style.width = b.ow + 'px';
+            if (b.omw) b.el.style.minWidth = b.omw + 'px';
+        }
     });
-    // 单元格内边距等比放大，保证行高与字号协调
+    // 单元格内边距：滚动档等比放大；页内档保持基准（避免内容最小宽度撑破容器产生横滚）
     tbl.querySelectorAll('th, td').forEach(function(c){
         var tag = c.tagName === 'TH' ? 9 : 7;
-        c.style.padding = (tag * z) + 'px ' + (6 * z) + 'px';
+        c.style.padding = scroll ? ((tag * z) + 'px ' + (6 * z) + 'px') : (tag + 'px 6px');
     });
-    // 进度条、可编辑单元格同步放大
+    // 进度条：滚动模式等比放大；页内模式保持基准，避免挤破列宽
     tbl.querySelectorAll('.prog-range').forEach(function(r){
-        r.style.width = (90 * z) + 'px';
+        r.style.width = scroll ? ((90 * z) + 'px') : '90px';
     });
     tbl.querySelectorAll('.cell').forEach(function(c){
         c.style.minHeight = (22 * z) + 'px';
