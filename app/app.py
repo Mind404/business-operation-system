@@ -256,6 +256,7 @@ def submit_status_change(plugin_id, record_type, record_id, new_status, payload_
 
 # ---- 审批落地函数：审批通过后按插件/记录类型分派执行状态变更 ----
 def _apply_requirement_status(db, rid, payload):
+    from plugins.requirements.routes import sync_requirement_status
     ns = payload.get('new_status')
     db.execute("UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (ns, rid))
     db.commit()

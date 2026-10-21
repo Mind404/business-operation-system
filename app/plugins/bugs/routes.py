@@ -69,6 +69,7 @@ def bug_add():
 
 @blueprint.route('/bugs/<int:bid>')
 def bug_detail(bid):
+    from app import validation_error
     """Bug详情（含流转记录）"""
     db = get_db()
     bug = db.execute('''SELECT b.*, p.name as product_name, sv.version_no
@@ -83,6 +84,7 @@ def bug_detail(bid):
 
 @blueprint.route('/bugs/<int:bid>/update', methods=['POST'])
 def bug_update(bid):
+    from app import validation_error, submit_status_change
     """Bug状态流转（完整生命周期：新建→已分配→处理中→已修复→验证中→已关闭/重新打开，可取消）"""
     new_status = request.form.get('status', '')
     valid = ['新建', '已分配', '处理中', '已修复', '验证中', '已关闭', '重新打开', '已取消']
@@ -155,6 +157,7 @@ def bug_update(bid):
 
 @blueprint.route('/bugs/<int:bid>/escalate', methods=['POST'])
 def bug_escalate(bid):
+    from app import submit_status_change
     """Bug升级为质量问题"""
     db = get_db()
     db.execute('UPDATE bug_records SET is_quality_issue=1 WHERE id=?', (bid,))

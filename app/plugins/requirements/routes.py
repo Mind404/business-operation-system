@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """需求管理插件路由：外部技术需求统计（从 ext_routes.py 迁移）+ 需求库（从 app.py 迁移）"""
-from flask import Blueprint, render_template, request, redirect, url_for, g, flash, jsonify, current_app, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, g, flash, jsonify, current_app, session
 from datetime import datetime
 import io, json, random
 from plugin_system import log_operation
@@ -52,6 +52,7 @@ def tech_req_list():
 
 @blueprint.route('/tech-reqs/add', methods=['GET', 'POST'])
 def tech_req_add():
+    from app import is_admin
     db = get_db()
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -70,6 +71,7 @@ def tech_req_add():
 
 @blueprint.route('/tech-reqs/<int:rid>/edit', methods=['GET', 'POST'])
 def tech_req_edit(rid):
+    from app import is_admin
     db = get_db()
     r = db.execute('SELECT * FROM tech_requirements WHERE id=?', (rid,)).fetchone()
     if not r:
@@ -99,6 +101,7 @@ def tech_req_detail(rid):
 
 @blueprint.route('/tech-reqs/<int:rid>/log', methods=['POST'])
 def tech_req_add_log(rid):
+    from app import is_admin
     db = get_db()
     content = request.form.get('content','').strip()
     log_date = request.form.get('log_date','') or datetime.now().strftime('%Y-%m-%d')
@@ -225,6 +228,7 @@ def requirements_list():
 
 @blueprint.route('/requirements/add', methods=['GET', 'POST'])
 def requirement_add():
+    from app import validate_positive_int, validation_error
     if request.method == 'POST':
         # 输入校验
         qty, err = validate_positive_int(request.form.get('quantity', 0), '需求数量')
@@ -259,6 +263,7 @@ def requirement_add():
 
 @blueprint.route('/requirements/<int:req_id>/edit', methods=['GET', 'POST'])
 def requirement_edit(req_id):
+    from app import validate_positive_int, validation_error
     db = get_db()
     item = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
     if request.method == 'POST':
@@ -296,6 +301,7 @@ def requirement_edit(req_id):
 
 @blueprint.route('/requirements/<int:req_id>/delete', methods=['POST'])
 def requirement_delete(req_id):
+    from app import is_admin, validation_error
     """软删除需求（v8.6.0）：标记 is_deleted=1，保留历史追溯，防止外键崩溃"""
     if not is_admin():
         flash('仅管理员可删除需求', 'error')
@@ -311,6 +317,7 @@ def requirement_delete(req_id):
 
 @blueprint.route('/requirements/<int:req_id>/status', methods=['POST'])
 def requirement_update_status(req_id):
+    from app import submit_status_change
     """需求状态快速更新（AJAX）"""
     new_status = request.form.get('status', '')
     valid_statuses = ['待评审', '已评审', '进行中', '已完成', '已取消', '已交付']
@@ -348,10 +355,11 @@ def sync_requirement_status(db, req_id, new_status):
         db.commit()
     except Exception as e:
         db.rollback()
-        app.logger.error(f'状态联动失败: {e}')
+        current_app.logger.error(f'状态联动失败: {e}')
 
 @blueprint.route('/requirements/<int:req_id>')
 def requirement_detail(req_id):
+    from app import validation_error
     """需求详情（端到端追溯：需求→版本→任务→Bug→测试→排程→订单→交付→收入）"""
     db = get_db()
     requirement = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
@@ -424,24 +432,3 @@ def requirement_detail(req_id):
 
 # ============================================================
 # 状态联动辅助函数
-# ============================================================
-def sync_requirement_status(db, req_id, new_status):
-    """状态联动：需求状态变更时同步关联版本状态"""
-    try:
-        # 查询关联的版本
-        versions = db.execute('''
-            SELECT sv.id, sv.status FROM software_versions sv
-            JOIN version_requirements vr ON sv.id = vr.version_id
-            WHERE vr.requirement_id = ?
-        ''', (req_id,)).fetchall()
-        for v in versions:
-            if new_status == '已交付' and v['status'] != '已发布':
-                db.execute('UPDATE software_versions SET status=? WHERE id=?', ('已发布', v['id']))
-                log_operation('版本规划', '状态联动', f'版本ID {v["id"]} 因需求交付自动更新为已发布')
-            elif new_status == '进行中' and v['status'] == '规划中':
-                db.execute('UPDATE software_versions SET status=? WHERE id=?', ('开发中', v['id']))
-                log_operation('版本规划', '状态联动', f'版本ID {v["id"]} 因需求进行中自动更新为开发中')
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        current_app.logger.error(f'状态联动失败: {e}')

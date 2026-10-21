@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """交付管理插件路由（从 app.py 迁移，v10.4.0）"""
 from flask import Blueprint, render_template, request, redirect, url_for, g, flash, jsonify
-from datetime import datetime
+from datetime import datetime, date
 import io, os, json, random
 from plugin_system import log_operation
 from plugins.base import make_blueprint
@@ -40,6 +40,7 @@ def delivery_plan_list():
 
 @blueprint.route('/delivery/receipt/add', methods=['GET', 'POST'])
 def receipt_add():
+    from app import validate_positive_int, validation_error
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     orders = db.execute("SELECT id, order_no FROM production_orders WHERE status='已完成'").fetchall()
@@ -64,6 +65,7 @@ def receipt_add():
 
 @blueprint.route('/delivery/receipt/<int:rid>/approve', methods=['POST'])
 def receipt_approve(rid):
+    from app import is_admin
     if not is_admin():
         flash('仅管理员可审批入库', 'error')
         return redirect(url_for('delivery.delivery_dashboard', tab='receipts'))
@@ -95,6 +97,7 @@ def receipt_approve(rid):
 
 @blueprint.route('/delivery/deliver/add', methods=['GET', 'POST'])
 def deliver_add():
+    from app import is_admin, validate_positive_int, validation_error
     db = get_db()
     products = db.execute('SELECT id, name, model FROM products').fetchall()
     if request.method == 'POST':

@@ -121,6 +121,7 @@ def product_edit(pid):
 
 @blueprint.route('/planning/<int:pid>/delete', methods=['POST'])
 def product_delete(pid):
+    from app import is_admin
     if not is_admin():
         flash('仅管理员可删除产品', 'error')
         return redirect(url_for('planning.planning_list'))
@@ -194,6 +195,7 @@ def version_add():
 
 @blueprint.route('/planning/versions/<int:vid>')
 def version_detail(vid):
+    from app import validation_error
     """版本详情（含功能、开发任务、关联需求、Bug、测试用例）"""
     db = get_db()
     version = db.execute('''SELECT sv.*, p.name as product_name, p.model
@@ -214,6 +216,7 @@ def version_detail(vid):
 
 @blueprint.route('/planning/versions/<int:vid>/status', methods=['POST'])
 def version_status_update(vid):
+    from app import submit_status_change
     """版本状态人工流转（规划中→开发中→测试中→已发布，任意→已取消）"""
     new_status = request.form.get('status', '')
     valid = ['规划中', '开发中', '测试中', '已发布', '已取消']
@@ -254,6 +257,7 @@ def version_task_add(vid):
 
 @blueprint.route('/planning/versions/<int:vid>/tasks/<int:tid>/status', methods=['POST'])
 def version_task_status(vid, tid):
+    from app import submit_status_change
     """更新开发任务状态"""
     new_status = request.form.get('status', '')
     valid = ['待开发', '开发中', '已完成', '已取消']
