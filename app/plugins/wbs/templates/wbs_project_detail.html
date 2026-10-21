@@ -561,8 +561,13 @@ function submitNote() {
 </style>
 <script>
 var wbsZoomBase = null;
+var wbsTableBaseW = null;
 function captureWbsZoomBase() {
     wbsZoomBase = [];
+    var tbl = document.getElementById('wbsTable');
+    if (!tbl) return;
+    // 记录 100% 时表格实际宽度，放大时表格宽度同步等比放大（超出部分横向滚动），避免"列窄字大"
+    wbsTableBaseW = tbl.offsetWidth || 1400;
     document.querySelectorAll('#wbsTable th').forEach(function(th){
         var w = th.style.width || '';
         var mw = th.style.minWidth || '';
@@ -574,7 +579,9 @@ function setZoom(z) {
     if (!tbl) return;
     if (!wbsZoomBase) captureWbsZoomBase();
     tbl.style.fontSize = (13 * z) + 'px';
-    // 表头固定/最小列宽等比放大，150/200% 时表格整体同步放大（超出部分由 wbsWrap 横向滚动）
+    // 关键修复：表格整体宽度随比例等比放大（100% 保持填满视口，>100% 超出部分横向滚动）
+    tbl.style.width = Math.round(wbsTableBaseW * z) + 'px';
+    // 表头固定/最小列宽等比放大，保证列宽与字号同步协调
     wbsZoomBase.forEach(function(b){
         if (b.ow) b.el.style.width = (b.ow * z) + 'px';
         if (b.omw) b.el.style.minWidth = (b.omw * z) + 'px';
