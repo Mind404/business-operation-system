@@ -1,16 +1,19 @@
 {% extends "base.html" %}
-{% block title %}个人中心 - 业务高效运转系统{% endblock %}
+{% block title %}个人中心 - 业务运转系统{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>👤 个人中心</h1>
-    <p class="page-desc">我的账号信息、我的待办、我订阅的功能插件</p>
+    <p class="page-desc">我的账号信息、我的待办、我的可用功能、修改密码</p>
 </div>
 
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
     <div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
         <div style="font-size:12px;color:#999;margin-bottom:6px;">当前账号</div>
-        <div style="font-size:20px;font-weight:600;color:#222;">{{ current_user or '-' }}</div>
-        <div style="font-size:12px;color:#666;margin-top:4px;">角色：{{ current_role or '-' }}</div>
+        <div style="font-size:20px;font-weight:600;color:#222;">{{ user_info.display_name or current_user or '-' }}</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;">
+            登录名：{{ user_info.username or '-' }} · 角色：{{ '管理员' if user_info.role == 'admin' else ('普通用户' if user_info.role == 'user' else user_info.role) }}
+        </div>
+        <div style="font-size:12px;color:#666;margin-top:4px;">部门：{{ user_info.department or '-' }}</div>
     </div>
     <div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
         <div style="font-size:12px;color:#999;margin-bottom:6px;">我的待办任务</div>
@@ -18,29 +21,47 @@
         <div style="font-size:12px;color:#666;margin-top:4px;">未完成的任务</div>
     </div>
     <div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
-        <div style="font-size:12px;color:#999;margin-bottom:6px;">已订阅插件</div>
-        <div style="font-size:20px;font-weight:600;color:#2a7a2a;">{{ subscribed_count }}</div>
-        <div style="font-size:12px;color:#666;margin-top:4px;">
-            <a href="{{ url_for('plugin_center') }}" style="color:#2563eb;text-decoration:none;">去插件中心管理 →</a>
-        </div>
+        <div style="font-size:12px;color:#999;margin-bottom:6px;">可用功能</div>
+        <div style="font-size:20px;font-weight:600;color:#2a7a2a;">{{ my_plugins|length }}</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;">核心平台 + WBS 计划管理</div>
     </div>
 </div>
 
-<div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
-    <h3 style="margin:0 0 12px;font-size:15px;">我订阅的功能</h3>
-    {% if my_plugins %}
-    <div style="display:flex;flex-wrap:wrap;gap:10px;">
-        {% for p in my_plugins %}
-        <a href="{{ url_for(p.endpoint) }}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#f0f5ff;border:1px solid #cdd9f5;border-radius:6px;text-decoration:none;color:#2563eb;font-size:13px;">
-            <span>{{ p.icon }}</span> {{ p.name }}
-        </a>
-        {% endfor %}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+    <!-- 可用功能 -->
+    <div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
+        <h3 style="margin:0 0 12px;font-size:15px;">我的功能</h3>
+        {% if my_plugins %}
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            {% for p in my_plugins %}
+            <a href="{{ url_for(p.endpoint) }}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#f0f5ff;border:1px solid #cdd9f5;border-radius:6px;text-decoration:none;color:#2563eb;font-size:13px;">
+                <span>{{ p.icon }}</span> {{ p.name }}
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:#999;font-size:13px;margin:0;">暂无可用功能</p>
+        {% endif %}
     </div>
-    {% else %}
-    <p style="color:#999;font-size:13px;margin:0;">你还没有订阅任何业务插件。去
-        <a href="{{ url_for('plugin_center') }}" style="color:#2563eb;">插件中心</a>
-        开启你需要的功能（如外部技术需求统计、WBS计划管理等）。
-    </p>
-    {% endif %}
+
+    <!-- 修改密码 -->
+    <div style="background:#fff;padding:20px;border-radius:8px;border:1px solid #e0e4ea;">
+        <h3 style="margin:0 0 12px;font-size:15px;">🔒 修改密码</h3>
+        <form method="post" action="{{ url_for('profile_change_password') }}" style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+                <label style="font-size:12px;color:#6b7280;">原密码</label>
+                <input type="password" name="old_password" required style="display:block;width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#6b7280;">新密码（至少4位）</label>
+                <input type="password" name="new_password" required style="display:block;width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#6b7280;">确认新密码</label>
+                <input type="password" name="confirm_password" required style="display:block;width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+            </div>
+            <button type="submit" style="padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;">确认修改</button>
+        </form>
+    </div>
 </div>
 {% endblock %}

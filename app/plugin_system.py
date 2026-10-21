@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 插件化基底：插件注册表 + 用户订阅 + 动态导航 + 路由守卫
-核心插件（总览看板/个人中心）常驻；其余全部业务插件，未订阅不显示也不可访问。
+v10.5.0 只保留 WBS：核心常驻（个人中心/工作台）+ 唯一业务插件 WBS（所有登录用户可用）
 """
 import json
 import sqlite3
@@ -10,75 +10,32 @@ from flask import g, session, current_app, redirect, url_for, request, flash
 
 # ============================================================
 # 插件清单
-# core=1 常驻不可关；core=0 业务插件，用户自行订阅
+# core=1 常驻不可关；core=0 业务插件
 # ============================================================
 PLUGINS = [
-    # --- 核心常驻（基底只看个人中心） ---
+    # --- 核心常驻 ---
     {'id': 'profile',      'name': '个人中心',         'icon': '👤', 'group': '核心', 'core': 1,
-     'desc': '我的信息、我的待办、我的插件订阅', 'endpoint': 'profile', 'nav_path': '/profile'},
-
-    # --- 业务插件（默认不订阅，去插件中心开启） ---
-    {'id': 'overview',    'name': '总览看板',         'icon': '🗺️', 'group': '业务', 'core': 0,
-     'desc': '领导视角：需求满足时间、版本/测试/生产进度、甘特图', 'endpoint': 'executive_dashboard', 'nav_path': '/executive',
-     'tables': ['timeline_events','gantt_projects','gantt_settings','milestone_checkpoints']},
-    {'id': 'workbench',   'name': '我的工作台',       'icon': '📊', 'group': '业务', 'core': 0,
-     'desc': '个人待办与快捷入口', 'endpoint': 'index', 'nav_path': '/',
+     'desc': '我的信息、我的待办、修改密码', 'endpoint': 'profile', 'nav_path': '/profile'},
+    {'id': 'workbench',    'name': '我的工作台',       'icon': '📊', 'group': '核心', 'core': 1,
+     'desc': '系统首页：WBS统计与快捷入口', 'endpoint': 'index', 'nav_path': '/',
      'tables': ['tasks']},
-    {'id': 'requirements','name': '需求数据库',       'icon': '📋', 'group': '业务', 'core': 0,
-     'desc': '用户需求/集团系统侧/应用侧/领导任务，全流程源头', 'endpoint': 'requirements.requirements_list', 'nav_path': '/requirements',
-     'tables': ['requirements','requirement_reviews','revenue_confirmations']},
-    {'id': 'tech_req',    'name': '外部技术需求统计', 'icon': '🔬', 'group': '业务', 'core': 0,
-     'desc': '集团系统侧技术特性跟踪：问题项 + 每日进展日志 + 版本响应要求', 'endpoint': 'requirements.tech_req_list', 'nav_path': '/tech-reqs',
-     'tables': ['tech_requirements','tech_req_logs']},
-    {'id': 'wbs',         'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
+
+    # --- 唯一业务插件：WBS（所有登录用户可用） ---
+    {'id': 'wbs',          'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
      'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物', 'endpoint': 'wbs.wbs_projects', 'nav_path': '/wbs',
      'tables': ['wbs_projects','wbs_tasks']},
-    {'id': 'planning',    'name': '产品与版本规划',   'icon': '📐', 'group': '业务', 'core': 0,
-     'desc': '产品定义、软件版本规划、开发任务分解', 'endpoint': 'planning.planning_list', 'nav_path': '/planning',
-     'tables': ['products','software_versions','version_features','version_requirements','dev_tasks','test_plans']},
-    {'id': 'production',  'name': '研发生产',         'icon': '🏭', 'group': '业务', 'core': 0,
-     'desc': '生产排程、工序、物料BOM', 'endpoint': 'production_dashboard', 'nav_path': '/production',
-     'tables': ['production_schedules','production_orders','production_processes','material_plans','material_requisitions','requisition_items','bom_items','inventory','warehouse_receipts','quality_inspections','deliveries','delivery_batches']},
-    {'id': 'bug',         'name': 'Bug管理',         'icon': '🐛', 'group': '业务', 'core': 0,
-     'desc': 'Bug全生命周期流转、质量问题根因闭环', 'endpoint': 'bugs.bug_list', 'nav_path': '/bugs',
-     'tables': ['bug_records','bug_workflow','defect_handling']},
-    {'id': 'test',        'name': '测试管理',         'icon': '🧪', 'group': '业务', 'core': 0,
-     'desc': '测试用例库、用例执行记录', 'endpoint': 'test.test_case_list', 'nav_path': '/test',
-     'tables': ['test_cases','test_executions','test_records','test_batches']},
-    {'id': 'delivery',    'name': '交付管理',         'icon': '📦', 'group': '业务', 'core': 0,
-     'desc': '交付跟踪、交付计划', 'endpoint': 'delivery.delivery_plan_list', 'nav_path': '/delivery',
-     'tables': ['delivery_plans']},
-    {'id': 'device',      'name': '设备运维与OTA',    'icon': '📡', 'group': '业务', 'core': 0,
-     'desc': '设备状态监控、版本变更记录、OTA版本发布', 'endpoint': 'device.device_center', 'nav_path': '/device',
-     'tables': ['devices','device_alerts','device_version_changes','ota_versions','ota_upgrades']},
-    {'id': 'contract',    'name': '合同跟进',         'icon': '📄', 'group': '业务', 'core': 0,
-     'desc': '生产合同、物料采购合同、付款节点', 'endpoint': 'contract.contract_list', 'nav_path': '/contracts',
-     'tables': ['contracts','contract_payments']},
-    {'id': 'data_mgmt',   'name': '数据管理',         'icon': '💾', 'group': '业务', 'core': 0,
-     'desc': 'Excel导入导出、操作日志查询', 'endpoint': 'data_management', 'nav_path': '/data'},
 ]
 
 # 业务插件 endpoint → plugin_id 映射（用于路由守卫）
 _BIZ_ENDPOINTS = {p['endpoint']: p['id'] for p in PLUGINS if not p['core']}
 
-# v10.3.2 前缀守卫：插件子路由也纳入订阅校验（防 URL 直连绕过）
+# v10.3.2 前缀守卫：插件子路由也纳入校验（防 URL 直连绕过）
 _PLUGIN_PATH_PREFIXES = {
-    'overview': ('/executive',),
-    'requirements': ('/requirements',),
-    'tech_req': ('/tech-reqs',),
     'wbs': ('/wbs',),
-    'planning': ('/planning',),
-    'production': ('/production',),
-    'bug': ('/bugs',),
-    'test': ('/test',),
-    'delivery': ('/delivery',),
-    'device': ('/device', '/devices', '/ota'),
-    'contract': ('/contracts',),
-    'data_mgmt': ('/data',),
 }
 
-# 免前缀守卫的全局路径（登录/静态/个人中心/插件中心/审批中心本身）
-_GUARD_FREE_PATHS = ('/login', '/static', '/plugins', '/profile', '/logout', '/approvals', '/')
+# 免前缀守卫的全局路径（登录/静态/个人中心/插件中心/工作台）
+_GUARD_FREE_PATHS = ('/login', '/static', '/plugins', '/profile', '/logout', '/approvals', '/', '/admin')
 
 
 def _plugin_id_for_path(path):
@@ -102,13 +59,12 @@ def get_db():
 
 def init_plugin_tables():
     """建表并注册插件（幂等）。每个插件自己管自己的表。"""
-    from db_migrations import init_core_tables, init_wbs_tables, init_tech_req_tables, run_migrations
+    from db_migrations import init_core_tables, init_wbs_tables, run_migrations
     db = get_db()
     # 核心表（用户、插件注册、订阅、版本记录）
     init_core_tables()
-    # 两个业务插件的表
+    # WBS 业务表
     init_wbs_tables()
-    init_tech_req_tables()
     # 跑增量迁移
     run_migrations()
     # 注册插件清单（UPSERT：新库插入，旧库已有行刷新 desc/tables，保证表清单登记生效）
@@ -120,6 +76,11 @@ def init_plugin_tables():
                 description=excluded.description, endpoint=excluded.endpoint, tables=excluded.tables''',
             (p['id'], p['name'], p['icon'], p['group'], p['core'], p['desc'], p['endpoint'],
              json.dumps(p.get('tables', []), ensure_ascii=False)))
+    # v10.5.0：清理已下线插件的注册与订阅记录（业务数据表保留不动）
+    valid_ids = [p['id'] for p in PLUGINS]
+    placeholders = ','.join('?' * len(valid_ids))
+    db.execute(f'DELETE FROM plugin_registry WHERE id NOT IN ({placeholders})', valid_ids)
+    db.execute(f'DELETE FROM user_plugins WHERE plugin_id NOT IN ({placeholders})', valid_ids)
     db.commit()
 
 
@@ -131,49 +92,47 @@ def get_user_plugin_ids(user_id):
 
 
 def inject_nav_context():
-    """注入模板导航：核心2个 + 用户订阅的业务插件（仅含路由已注册的）"""
+    """注入模板导航：核心（个人中心/工作台）常驻 + WBS（所有登录用户可见，无需订阅）"""
     user_id = session.get('user_id')
     if not user_id:
         return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
-    subscribed = get_user_plugin_ids(user_id)
     registered = set(current_app.view_functions.keys())
     available = [p for p in PLUGINS if p['endpoint'] in registered]
     core_plugins = [p for p in available if p['core']]
-    biz_plugins = [p for p in available if not p['core'] and p['id'] in subscribed]
+    # v10.5.0：WBS 为唯一业务插件，所有登录用户常驻可见（无需订阅）
+    biz_plugins = [p for p in available if not p['core'] and p['id'] == 'wbs']
     return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
-            'nav_all_plugins': available, 'user_subscribed': subscribed}
+            'nav_all_plugins': available, 'user_subscribed': set()}
 
 
 def register_plugin_guard(app):
-    """路由守卫：未订阅的业务插件路由直接跳插件中心，不进视图。"""
+    """路由守卫（v10.5.0）：WBS 为唯一业务插件，所有登录用户可用，不设订阅墙"""
     @app.before_request
     def _guard():
         if request.path.startswith(_WHITELIST_PREFIX):
             return None
-        # 静态资源、POST 表单提交里的 toggle 等放行
+        # 静态资源、核心路由等放行
         ep = request.endpoint
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
-                            'login', 'logout'):
+                            'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search'):
             return None
-        # v10.3.2：前缀守卫兜底——子路由（URL 直连）也按路径判归属
+        # 前缀守卫兜底——子路由（URL 直连）也按路径判归属
         for free in _GUARD_FREE_PATHS:
             if request.path == free or request.path.startswith(free + '/'):
                 return None
-        # 该 endpoint 属于某个业务插件？
+        # 该 endpoint 属于某个业务插件？（仅 wbs）
         pid = _BIZ_ENDPOINTS.get(ep)
         if not pid:
             pid = _plugin_id_for_path(request.path)
         if not pid:
             return None
-        # 核心插件 endpoint 放行（只有个人中心常驻）
-        if pid in ('profile',):
+        # 核心插件 endpoint 放行
+        if pid in ('profile', 'wbs'):
             return None
+        # 其他业务插件（已删除）不应再出现：直接拒绝
         user_id = session.get('user_id')
         if not user_id:
             return redirect(url_for('login'))
-        if pid not in get_user_plugin_ids(user_id):
-            flash('请先在插件中心开启该功能', 'info')
-            return redirect(url_for('plugin_center'))
         return None
 
 

@@ -19,39 +19,55 @@
                 </div>
             </div>
             <nav class="nav-menu">
-                {# 核心插件：总览看板 + 个人中心（常驻） #}
+                {# 核心插件：个人中心 + 我的工作台（常驻） #}
                 <div class="nav-group">
                     {% for p in nav_core %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if request.path.startswith(p.nav_path) %}active{% endif %}">
+                    {% set np = p.nav_path %}
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
                 </div>
 
-                {# 业务插件：按用户订阅动态显示 #}
+                {# 业务插件：WBS（所有登录用户常驻显示） #}
                 {% if nav_biz %}
                 <div class="nav-group">
                     <div class="nav-group-title">我的工作</div>
                     {% for p in nav_biz %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if request.path.startswith(p.nav_path) %}active{% endif %}">
+                    {% set np = p.nav_path %}
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
                 </div>
                 {% endif %}
 
+                {# v10.5.0 用户管理（仅管理员可见） #}
+                {% if current_role == 'admin' %}
+                <div class="nav-group">
+                    <div class="nav-group-title">系统管理</div>
+                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin') %}active{% endif %}">
+                        <span class="nav-icon">👥</span> 用户管理
+                    </a>
+                </div>
+                {% endif %}
+
                 {# 审批中心（v10.3.6 暂下线：用户反馈未关联使用，代码保留便于日后恢复） #}
 
-                {# 插件中心 #}
+                {# 插件中心（v10.5.0 软下线：系统仅保留 WBS，订阅机制无实际意义，代码保留可恢复） #}
+                {% if false %}
                 <div class="nav-group">
                     <a href="{{ url_for('plugin_center') }}" class="nav-item {% if request.endpoint == 'plugin_center' %}active{% endif %}">
                         <span class="nav-icon">🧩</span> 插件中心
                     </a>
                 </div>
+                {% endif %}
             </nav>
             <div class="sidebar-footer">
                 <div class="data-flow-hint">
-                    <span class="dot dot-blue"></span> 需求 → 规划 → 生产 → 测试 → 交付
+                    <span class="dot dot-blue"></span> WBS计划 → 任务执行 → 交付物
                     <span class="dot dot-orange"></span> 数据闭环反哺
                 </div>
             </div>
@@ -63,7 +79,7 @@
                 <h2>{% block page_title %}{% endblock %}</h2>
                 <div class="global-search-container">
                     <span class="global-search-icon">🔍</span>
-                    <input type="text" class="global-search-input" id="globalSearchInput" placeholder="全局搜索：需求、Bug、任务、合同、设备..." oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
+                    <input type="text" class="global-search-input" id="globalSearchInput" placeholder="全局搜索：WBS项目、任务..." oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
                     <div class="global-search-results" id="globalSearchResults"></div>
                 </div>
                 <div class="header-actions">
