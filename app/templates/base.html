@@ -40,12 +40,7 @@
                 </div>
                 {% endif %}
 
-                {# 审批中心（仅管理员） #}
-                {% if current_role == 'admin' %}
-                <a href="{{ url_for('approval_center') }}" class="nav-item {% if request.path.startswith('/approvals') %}active{% endif %}">
-                    <span class="nav-icon">📋</span> 审批中心
-                </a>
-                {% endif %}
+                {# 审批中心（v10.3.6 暂下线：用户反馈未关联使用，代码保留便于日后恢复） #}
 
                 {# 插件中心 #}
                 <div class="nav-group">

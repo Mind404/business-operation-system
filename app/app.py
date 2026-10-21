@@ -240,20 +240,14 @@ def is_admin():
 
 
 def submit_status_change(plugin_id, record_type, record_id, new_status, payload_extra=None):
-    """状态类变更统一入口：
-    - 管理员：返回 ('direct', None)，调用方直接执行 UPDATE
-    - 普通用户：写入 approval_requests 待审批，返回 ('pending', approval_id)
+    """状态类变更统一入口（v10.3.6 暂下线审批：所有角色直接生效）
+
+    原审批流程：普通用户写入 approval_requests 待管理员审批；
+    用户反馈统一审批中心未关联使用，暂恢复直接变更模式。
+    审批相关代码（plugin_system.submit_approval / approval_center / approval_review）
+    均保留，日后要恢复审批只需改回本函数即可。
     """
-    if is_admin():
-        return 'direct', None
-    payload = {'new_status': new_status}
-    if payload_extra:
-        payload.update(payload_extra)
-    aid = plugin_system.submit_approval(plugin_id, record_type, record_id,
-                                        session.get('user_id'), f'状态变更→{new_status}', payload)
-    log_operation(plugin_id, '提交审批', f'{record_type}#{record_id} 申请状态变更→{new_status}',
-                  session.get('username', ''))
-    return 'pending', aid
+    return 'direct', None
 
 
 # ---- 审批落地函数：审批通过后按插件/记录类型分派执行状态变更 ----
@@ -2535,7 +2529,11 @@ app.jinja_env.globals['get_field_desc'] = get_field_desc
 
 @app.route('/approvals')
 def approval_center():
-    """统一审批中心：管理员查看/处理全部待审批状态变更申请"""
+    """统一审批中心（v10.3.6 暂下线：重定向工作台，原逻辑保留在下方注释便于恢复）
+    原实现：管理员查看/处理全部待审批状态变更申请
+    """
+    return redirect(url_for('index'))
+    # ===== 原实现（恢复时取消上方 return 并启用下方代码） =====
     if not is_admin():
         flash('仅管理员可访问审批中心', 'error')
         return redirect(url_for('index'))
