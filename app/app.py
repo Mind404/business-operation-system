@@ -37,6 +37,10 @@ def from_json_filter(value):
 from ext_routes import ext_bp
 app.register_blueprint(ext_bp)
 
+# v10.4.0 插件包化：自动加载 plugins/ 下的独立插件包
+from plugins import load_plugins
+load_plugins(app)
+
 # 插件化基底：建表 + 注册插件 + 路由守卫
 import plugin_system
 from plugin_system import log_operation

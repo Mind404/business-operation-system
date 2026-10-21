@@ -1,16 +1,16 @@
 {% extends "ext/_base.html" %}
 {% set page_title = '交付管理' %}
 {% block header_actions %}
-<a href="{{ url_for('ext.delivery_plan_list') }}" class="btn btn-outline">← 返回交付列表</a>
+<a href="{{ url_for('delivery.delivery_plan_list') }}" class="btn btn-outline">← 返回交付列表</a>
 {% endblock %}
 {% block ext_content %}
 <div class="module-tabs">
-    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
+    <a href="{{ url_for('delivery.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
 </div>
 
 {% if plan %}
 <h3 style="margin:6px 0 14px;">编辑交付记录 · <span class="mono">{{ plan.plan_no }}</span></h3>
-<form method="POST" action="{{ url_for('ext.delivery_plan_edit', plan_id=plan.id) }}" class="form-card">
+<form method="POST" action="{{ url_for('delivery.delivery_plan_edit', plan_id=plan.id) }}" class="form-card">
     <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:16px;">
         <div>
             <label class="form-label">关联需求</label>
@@ -52,7 +52,7 @@
 </form>
 {% else %}
 <h3 style="margin:6px 0 14px;">新增交付计划</h3>
-<form method="POST" action="{{ url_for('ext.delivery_plan_add') }}" class="form-card">
+<form method="POST" action="{{ url_for('delivery.delivery_plan_add') }}" class="form-card">
     <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-bottom:16px;">
         <div style="grid-column:1/-1;">
             <label class="form-label">关联需求 <span style="color:#ef4444;">*</span></label>

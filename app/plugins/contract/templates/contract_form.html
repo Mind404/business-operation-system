@@ -123,7 +123,7 @@
     <!-- 添加付款节点 -->
     <div class="add-payment-form">
         <h4>添加{% if contract.contract_type == '用户合同' %}收款{% else %}付款{% endif %}节点</h4>
-        <form method="post" action="{{ url_for('ext.contract_payment_add', cid=contract.id) }}" class="form-grid">
+        <form method="post" action="{{ url_for('contract.contract_payment_add', cid=contract.id) }}" class="form-grid">
             <div class="form-group">
                 <label>节点名称 <span class="required">*</span></label>
                 <input type="text" name="node_name" required class="form-control" placeholder="如：预付款、到货款、验收款、质保金">
@@ -175,7 +175,7 @@
                 <td class="mono">{{ p.plan_date or '-' }}</td>
                 <td class="text-right">¥{{ '%.2f'|format(p.amount) }}</td>
                 <td class="text-center">
-                    <form method="post" action="{{ url_for('ext.contract_payment_update', cid=contract.id, pid=p.id) }}" style="display:inline;">
+                    <form method="post" action="{{ url_for('contract.contract_payment_update', cid=contract.id, pid=p.id) }}" style="display:inline;">
                         <select name="status" class="status-select status-select-{% if p.status == '已付款' %}done{% else %}pending{% endif %}" onchange="this.form.submit()">
                             <option value="待付款" {% if p.status == '待付款' %}selected{% endif %}>待{% if contract.contract_type == '用户合同' %}收款{% else %}付款{% endif %}</option>
                             <option value="已付款" {% if p.status == '已付款' %}selected{% endif %}>已{% if contract.contract_type == '用户合同' %}收款{% else %}付款{% endif %}</option>
@@ -185,7 +185,7 @@
                 <td class="mono">{{ p.actual_date or '-' }}</td>
                 <td>{{ p.remark or '-' }}</td>
                 <td>
-                    <form method="post" action="{{ url_for('ext.contract_payment_delete', cid=contract.id, pid=p.id) }}" style="display:inline;" onsubmit="return confirm('确认删除此付款节点？');">
+                    <form method="post" action="{{ url_for('contract.contract_payment_delete', cid=contract.id, pid=p.id) }}" style="display:inline;" onsubmit="return confirm('确认删除此付款节点？');">
                         <button type="submit" class="btn btn-sm btn-danger">删除</button>
                     </form>
                 </td>

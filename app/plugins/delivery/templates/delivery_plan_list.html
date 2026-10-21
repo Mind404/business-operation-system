@@ -1,11 +1,11 @@
 {% extends "ext/_base.html" %}
 {% set page_title = '交付管理' %}
 {% block header_actions %}
-<a href="{{ url_for('ext.delivery_plan_add') }}" class="btn btn-primary">+ 新增交付计划</a>
+<a href="{{ url_for('delivery.delivery_plan_add') }}" class="btn btn-primary">+ 新增交付计划</a>
 {% endblock %}
 {% block ext_content %}
 <div class="module-tabs">
-    <a href="{{ url_for('ext.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
+    <a href="{{ url_for('delivery.delivery_plan_list') }}" class="module-tab {% if request.endpoint.startswith('ext.delivery_plan_') %}active{% endif %}">📦 交付跟踪</a>
 </div>
 
 <!-- 概览统计 -->
@@ -30,20 +30,20 @@
 
 <!-- 搜索与状态筛选 -->
 <div class="filter-bar">
-    <a href="{{ url_for('ext.delivery_plan_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部({{ stats.total }})</a>
-    <a href="{{ url_for('ext.delivery_plan_list', status='计划中') }}" class="filter-tag {% if current_status == '计划中' %}active{% endif %}">计划中</a>
-    <a href="{{ url_for('ext.delivery_plan_list', status='生产中') }}" class="filter-tag {% if current_status == '生产中' %}active{% endif %}">生产中</a>
-    <a href="{{ url_for('ext.delivery_plan_list', status='已入库') }}" class="filter-tag {% if current_status == '已入库' %}active{% endif %}">已入库</a>
-    <a href="{{ url_for('ext.delivery_plan_list', status='已交付') }}" class="filter-tag {% if current_status == '已交付' %}active{% endif %}">已交付</a>
+    <a href="{{ url_for('delivery.delivery_plan_list') }}" class="filter-tag {% if not current_status %}active{% endif %}">全部({{ stats.total }})</a>
+    <a href="{{ url_for('delivery.delivery_plan_list', status='计划中') }}" class="filter-tag {% if current_status == '计划中' %}active{% endif %}">计划中</a>
+    <a href="{{ url_for('delivery.delivery_plan_list', status='生产中') }}" class="filter-tag {% if current_status == '生产中' %}active{% endif %}">生产中</a>
+    <a href="{{ url_for('delivery.delivery_plan_list', status='已入库') }}" class="filter-tag {% if current_status == '已入库' %}active{% endif %}">已入库</a>
+    <a href="{{ url_for('delivery.delivery_plan_list', status='已交付') }}" class="filter-tag {% if current_status == '已交付' %}active{% endif %}">已交付</a>
     <span class="filter-desc">跟踪：关联需求 → 数量 → 生产 → 入库 → 可交付</span>
 </div>
 
 <div class="search-bar">
-    <form method="GET" action="{{ url_for('ext.delivery_plan_list') }}">
+    <form method="GET" action="{{ url_for('delivery.delivery_plan_list') }}">
         {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
         <input type="text" name="search" class="search-input" placeholder="搜索需求标题、客户、产品型号..." value="{{ search }}">
         <button type="submit" class="search-btn">搜索</button>
-        {% if search %}<a href="{{ url_for('ext.delivery_plan_list') }}" class="search-clear">清除</a>{% endif %}
+        {% if search %}<a href="{{ url_for('delivery.delivery_plan_list') }}" class="search-clear">清除</a>{% endif %}
     </form>
 </div>
 
@@ -73,8 +73,8 @@
                 {% else %}<span class="status-tag" style="background:#f1f5f9;color:#64748b;">计划中</span>{% endif %}
             </td>
             <td class="text-center">
-                <a href="{{ url_for('ext.delivery_plan_edit', plan_id=p.id) }}" class="btn btn-sm btn-outline">编辑</a>
-                <form method="POST" action="{{ url_for('ext.delivery_plan_delete', plan_id=p.id) }}" style="display:inline;" onsubmit="return confirm('确定删除该交付记录？');">
+                <a href="{{ url_for('delivery.delivery_plan_edit', plan_id=p.id) }}" class="btn btn-sm btn-outline">编辑</a>
+                <form method="POST" action="{{ url_for('delivery.delivery_plan_delete', plan_id=p.id) }}" style="display:inline;" onsubmit="return confirm('确定删除该交付记录？');">
                     <button type="submit" class="btn btn-sm btn-danger">删除</button>
                 </form>
             </td>
@@ -89,11 +89,11 @@
 <div class="pagination">
     <span class="page-info">第 {{ page }} / {{ total_pages }} 页</span>
     <div class="page-buttons">
-        {% if page > 1 %}<a href="{{ url_for('ext.delivery_plan_list', status=current_status, search=search, page=page-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% if page > 1 %}<a href="{{ url_for('delivery.delivery_plan_list', status=current_status, search=search, page=page-1) }}" class="page-btn">上一页</a>{% endif %}
         {% for pn in range(1, total_pages+1) %}
-        {% if pn == page %}<span class="page-btn active">{{ pn }}</span>{% else %}<a href="{{ url_for('ext.delivery_plan_list', status=current_status, search=search, page=pn) }}" class="page-btn">{{ pn }}</a>{% endif %}
+        {% if pn == page %}<span class="page-btn active">{{ pn }}</span>{% else %}<a href="{{ url_for('delivery.delivery_plan_list', status=current_status, search=search, page=pn) }}" class="page-btn">{{ pn }}</a>{% endif %}
         {% endfor %}
-        {% if page < total_pages %}<a href="{{ url_for('ext.delivery_plan_list', status=current_status, search=search, page=page+1) }}" class="page-btn">下一页</a>{% endif %}
+        {% if page < total_pages %}<a href="{{ url_for('delivery.delivery_plan_list', status=current_status, search=search, page=page+1) }}" class="page-btn">下一页</a>{% endif %}
     </div>
 </div>
 {% endif %}
