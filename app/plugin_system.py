@@ -111,10 +111,13 @@ def init_plugin_tables():
     init_tech_req_tables()
     # 跑增量迁移
     run_migrations()
-    # 注册插件清单
+    # 注册插件清单（UPSERT：新库插入，旧库已有行刷新 desc/tables，保证表清单登记生效）
     for p in PLUGINS:
-        db.execute('''INSERT OR IGNORE INTO plugin_registry
-            (id, name, icon, grp, core, description, endpoint, tables) VALUES (?,?,?,?,?,?,?,?)''',
+        db.execute('''INSERT INTO plugin_registry
+            (id, name, icon, grp, core, description, endpoint, tables) VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name, icon=excluded.icon, grp=excluded.grp, core=excluded.core,
+                description=excluded.description, endpoint=excluded.endpoint, tables=excluded.tables''',
             (p['id'], p['name'], p['icon'], p['group'], p['core'], p['desc'], p['endpoint'],
              json.dumps(p.get('tables', []), ensure_ascii=False)))
     db.commit()

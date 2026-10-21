@@ -52,7 +52,7 @@ def init_core_tables():
         db.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
     db.execute('''CREATE TABLE IF NOT EXISTS plugin_registry (
         id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
-        description TEXT, endpoint TEXT)''')
+        description TEXT, endpoint TEXT, tables TEXT)''')
     db.execute('''CREATE TABLE IF NOT EXISTS user_plugins (
         user_id INTEGER, plugin_id TEXT, subscribed_at TEXT,
         PRIMARY KEY (user_id, plugin_id))''')
@@ -120,6 +120,8 @@ MIGRATIONS = [
     (3, 'wbs_projects 加 participants', None),
     # v4: wbs_tasks 加 approval_status / wbs_projects 加 approver+approval_status / wbs_tasks 加 remark
     (4, '两级审批字段+任务备注', None),
+    # v5: 方案A数据库地基 —— plugin_registry 加 tables 列（表清单登记）+ 新建 approval_requests 统一审批表
+    (5, 'v10.3.1: plugin_registry.tables + approval_requests 统一审批表', None),
 ]
 
 
@@ -158,6 +160,23 @@ def run_migrations():
                     db.execute(f'ALTER TABLE wbs_projects ADD COLUMN {col} {ddl}')
                 except sqlite3.OperationalError:
                     pass
+        elif ver == 5:
+            # 方案A地基：plugin_registry 加 tables 列（表清单登记）
+            cols = [r[1] for r in db.execute('PRAGMA table_info(plugin_registry)').fetchall()]
+            if 'tables' not in cols:
+                try:
+                    db.execute('ALTER TABLE plugin_registry ADD COLUMN tables TEXT')
+                except sqlite3.OperationalError:
+                    pass
+            # 统一审批表（旧库升级时补建，幂等）
+            db.execute('''CREATE TABLE IF NOT EXISTS approval_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id TEXT, record_type TEXT, record_id INTEGER,
+                requester_id INTEGER, action TEXT, payload TEXT,
+                status TEXT DEFAULT '待审批', reviewer_id INTEGER,
+                review_comment TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                reviewed_at TEXT)''')
         _set_version(db, ver, note)
     db.commit()
 
