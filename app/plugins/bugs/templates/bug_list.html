@@ -4,7 +4,7 @@
 
 {% block header_actions %}
 {% if can_write('bug') %}
-<a href="{{ url_for('bug_add') }}" class="btn btn-primary">+ 登记Bug</a>
+<a href="{{ url_for('bugs.bug_add') }}" class="btn btn-primary">+ 登记Bug</a>
 <div class="batch-actions">
     <a href="{{ url_for('download_template', table_name='bug_records') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
     <form method="POST" action="{{ url_for('excel_import', table_name='bug_records') }}" enctype="multipart/form-data" style="display:inline;">
@@ -19,9 +19,9 @@
 
 {% block content %}
 <div class="filter-bar">
-    <a href="{{ url_for('bug_list', tab='all') }}" class="filter-tag {% if tab == 'all' %}active{% endif %}">全部</a>
-    <a href="{{ url_for('bug_list', tab='open') }}" class="filter-tag {% if tab == 'open' %}active{% endif %}">未关闭</a>
-    <a href="{{ url_for('bug_list', tab='quality') }}" class="filter-tag {% if tab == 'quality' %}active{% endif %}">质量问题</a>
+    <a href="{{ url_for('bugs.bug_list', tab='all') }}" class="filter-tag {% if tab == 'all' %}active{% endif %}">全部</a>
+    <a href="{{ url_for('bugs.bug_list', tab='open') }}" class="filter-tag {% if tab == 'open' %}active{% endif %}">未关闭</a>
+    <a href="{{ url_for('bugs.bug_list', tab='quality') }}" class="filter-tag {% if tab == 'quality' %}active{% endif %}">质量问题</a>
     <span class="filter-divider"></span>
     <span class="filter-label">状态：</span>
     <span class="status-mini status-新建">新建</span>
@@ -61,7 +61,7 @@
                 <td><span class="status-tag status-{{ b.status }}">{{ b.status }}</span></td>
                 <td>{{ b.assignee or '-' }}</td>
                 <td>{% if b.is_quality_issue %}<span class="quality-badge">是</span>{% else %}-{% endif %}</td>
-                <td><a href="{{ url_for('bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+                <td><a href="{{ url_for('bugs.bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
             </tr>
             {% else %}
             <tr><td colspan="10" class="empty-cell">暂无Bug记录</td></tr>

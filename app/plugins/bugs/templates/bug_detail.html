@@ -4,7 +4,7 @@
 
 {% block header_actions %}
 <a href="javascript:history.back()" class="btn btn-secondary">← 返回上一页</a>
-<a href="{{ url_for('bug_list') }}" class="btn btn-outline">Bug列表</a>
+<a href="{{ url_for('bugs.bug_list') }}" class="btn btn-outline">Bug列表</a>
 {% endblock %}
 
 {% block content %}
@@ -50,7 +50,7 @@
 {% if bug.status not in ['已关闭', '已取消'] and can_write('bug') %}
 <div class="panel">
     <h3 class="panel-title">状态流转</h3>
-    <form method="post" action="{{ url_for('bug_update', bid=bug.id) }}" class="form-grid">
+    <form method="post" action="{{ url_for('bugs.bug_update', bid=bug.id) }}" class="form-grid">
         <div class="form-group">
             <label>变更状态 *</label>
             <select name="status" required class="form-control" id="statusSelect" onchange="onStatusChange()">
@@ -143,7 +143,7 @@
 <div class="panel panel-warning">
     <h3 class="panel-title">升级为质量问题</h3>
     <p class="warning-text">如果此Bug影响范围大、涉及产品质量，可升级为质量问题进行专项根因分析与举一反三。</p>
-    <form method="post" action="{{ url_for('bug_escalate', bid=bug.id) }}" class="form-inline">
+    <form method="post" action="{{ url_for('bugs.bug_escalate', bid=bug.id) }}" class="form-inline">
         <input type="text" name="reason" class="form-control-lg" placeholder="升级原因（可选）">
         <input type="text" name="operator" class="form-control-sm" placeholder="操作人">
         <button type="submit" class="btn btn-danger" onclick="return confirm('确认将此Bug升级为质量问题？升级后将触发专项根因分析流程。')">升级为质量问题</button>

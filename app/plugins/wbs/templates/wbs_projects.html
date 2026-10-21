@@ -7,9 +7,9 @@
 </div>
 
 <div style="margin-bottom:16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-    <a href="{{ url_for('ext.wbs_project_add') }}" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;text-decoration:none;font-size:13px;">+ 新建项目</a>
+    <a href="{{ url_for('wbs.wbs_project_add') }}" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;text-decoration:none;font-size:13px;">+ 新建项目</a>
     {% if overdue > 0 or due3 > 0 or due7 > 0 %}
-    <a href="{{ url_for('ext.wbs_alerts') }}" style="padding:8px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;text-decoration:none;color:#856404;font-size:13px;display:flex;gap:8px;align-items:center;">
+    <a href="{{ url_for('wbs.wbs_alerts') }}" style="padding:8px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;text-decoration:none;color:#856404;font-size:13px;display:flex;gap:8px;align-items:center;">
         ⚠️ 到期预警
         {% if overdue > 0 %}<span style="background:#dc3545;color:#fff;border-radius:10px;padding:1px 8px;font-size:12px;">{{ overdue }} 已逾期</span>{% endif %}
         {% if due3 > 0 %}<span style="background:#fd7e14;color:#fff;border-radius:10px;padding:1px 8px;font-size:12px;">{{ due3 }} 三天内</span>{% endif %}
@@ -34,7 +34,7 @@
     {% for r in rows %}
         <tr style="border-bottom:1px solid #eef;{% if r.approval_status == '待审批' %}background:#fffbe6;{% elif r.approval_status == '已驳回' %}background:#fff0f0;{% endif %}">
             <td style="padding:10px;">
-                <a href="{{ url_for('ext.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;font-weight:500;">{{ r.name }}</a>
+                <a href="{{ url_for('wbs.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;font-weight:500;">{{ r.name }}</a>
                 {% if r.approval_status == '待审批' %}<span style="background:#faad14;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:6px;">待审批</span>
                 {% elif r.approval_status == '已驳回' %}<span style="background:#dc3545;color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:6px;">已驳回</span>{% endif %}
             </td>
@@ -44,19 +44,19 @@
             <td style="padding:10px;">{{ r.task_count }}</td>
             <td style="padding:10px;">{{ r.status }}</td>
             <td style="padding:10px;">
-                <a href="{{ url_for('ext.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;margin-right:10px;">进入 →</a>
+                <a href="{{ url_for('wbs.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;margin-right:10px;">进入 →</a>
                 {% if current_role == 'admin' and r.approval_status == '待审批' %}
-                <form method="post" action="{{ url_for('ext.wbs_project_approve', pid=r.id) }}" style="display:inline;">
+                <form method="post" action="{{ url_for('wbs.wbs_project_approve', pid=r.id) }}" style="display:inline;">
                     <button name="action" value="approve" style="padding:3px 10px;background:#52c41a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">通过</button>
                     <button name="action" value="reject" style="padding:3px 10px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-left:4px;">驳回</button>
                 </form>
                 {% elif current_role != 'admin' and r.approval_status == '已驳回' %}
-                <form method="post" action="{{ url_for('ext.wbs_project_resubmit', pid=r.id) }}" style="display:inline;">
+                <form method="post" action="{{ url_for('wbs.wbs_project_resubmit', pid=r.id) }}" style="display:inline;">
                     <button style="padding:3px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">重新提交审批</button>
                 </form>
                 {% endif %}
                 {% if current_role == 'admin' %}
-                <form method="post" action="{{ url_for('ext.wbs_project_delete', pid=r.id) }}" style="display:inline;margin-left:6px;"
+                <form method="post" action="{{ url_for('wbs.wbs_project_delete', pid=r.id) }}" style="display:inline;margin-left:6px;"
                       onsubmit="return confirm('确认删除项目「{{ r.name }}」及其下所有任务？此操作不可恢复！');">
                     <button style="padding:3px 10px;background:#fff;color:#dc3545;border:1px solid #dc3545;border-radius:4px;cursor:pointer;font-size:12px;">删除</button>
                 </form>

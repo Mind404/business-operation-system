@@ -3,8 +3,8 @@
 {% block page_title %}需求详情 - 端到端全流程追溯{% endblock %}
 
 {% block header_actions %}
-<a href="{{ url_for('requirements_list') }}" class="btn btn-secondary">返回列表</a>
-{% if can_write('requirements') %}<a href="{{ url_for('requirement_edit', req_id=requirement.id) }}" class="btn btn-primary">编辑需求</a>{% endif %}
+<a href="{{ url_for('requirements.requirements_list') }}" class="btn btn-secondary">返回列表</a>
+{% if can_write('requirements') %}<a href="{{ url_for('requirements.requirement_edit', req_id=requirement.id) }}" class="btn btn-primary">编辑需求</a>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -149,7 +149,7 @@
         <tbody>
             {% for v in versions %}
             <tr>
-                <td class="cell-bold mono"><a href="{{ url_for('version_detail', vid=v.id) }}" style="color:#2563eb;">{{ v.version_no }}</a></td>
+                <td class="cell-bold mono"><a href="{{ url_for('planning.version_detail', vid=v.id) }}" style="color:#2563eb;">{{ v.version_no }}</a></td>
                 <td>{{ v.product_name or '-' }}</td>
                 <td>{{ v.version_type or '-' }}</td>
                 <td class="mono">{{ v.planned_release or '-' }}</td>
@@ -199,7 +199,7 @@
         <tbody>
             {% for b in bugs %}
             <tr>
-                <td class="cell-bold mono"><a href="{{ url_for('bug_detail', bid=b.id) }}" style="color:#2563eb;">{{ b.bug_no }}</a></td>
+                <td class="cell-bold mono"><a href="{{ url_for('bugs.bug_detail', bid=b.id) }}" style="color:#2563eb;">{{ b.bug_no }}</a></td>
                 <td class="cell-bold">{{ b.title }}</td>
                 <td><span class="priority priority-{{ b.severity }}">{{ b.severity }}</span></td>
                 <td><span class="priority priority-{{ b.priority }}">{{ b.priority }}</span></td>

@@ -3,7 +3,7 @@
 {% block page_title %}{{ version.version_no }} {{ version.version_name or '' }}{% endblock %}
 
 {% block header_actions %}
-<a href="{{ url_for('version_list') }}" class="btn btn-secondary">返回列表</a>
+<a href="{{ url_for('planning.version_list') }}" class="btn btn-secondary">返回列表</a>
 {% endblock %}
 
 {% block content %}
@@ -33,7 +33,7 @@
     </div>
     <div class="detail-section" style="margin-top:12px;">
         {% if can_write('version') %}
-        <form id="versionStatusForm" method="post" action="{{ url_for('version_status_update', vid=version.id) }}" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <form id="versionStatusForm" method="post" action="{{ url_for('planning.version_status_update', vid=version.id) }}" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
             <strong style="font-size:13px;">状态流转：</strong>
             <select name="status" id="versionStatusSelect" class="form-control" style="width:auto; min-width:120px;">
                 <option value="规划中" {% if version.status=='规划中' %}selected{% endif %}>规划中</option>
@@ -156,7 +156,7 @@
     {% if can_write('version') %}
     <div class="add-task-form">
         <h4>+ 新增开发任务</h4>
-        <form method="post" action="{{ url_for('version_task_add', vid=version.id) }}" class="form-inline">
+        <form method="post" action="{{ url_for('planning.version_task_add', vid=version.id) }}" class="form-inline">
             <input type="text" name="task_name" placeholder="任务名称 *" required class="form-control-sm" style="min-width:180px;">
             <select name="requirement_id" class="form-control-sm" title="关联需求">
                 <option value="">不关联需求</option>
@@ -192,7 +192,7 @@
                 <td style="max-width:300px; font-size:12px; color:#6b7280;">{{ b.description[:80] if b.description else '—' }}{% if b.description and b.description|length > 80 %}...{% endif %}</td>
                 <td><span class="priority priority-{{ b.severity }}">{{ b.severity }}</span></td>
                 <td><span class="status-tag status-{{ b.status }}">{{ b.status }}</span></td>
-                <td><a href="{{ url_for('bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
+                <td><a href="{{ url_for('bugs.bug_detail', bid=b.id) }}" class="btn btn-sm btn-outline">详情</a></td>
             </tr>
             {% else %}
             <tr><td colspan="6" class="empty-cell">暂无关联Bug</td></tr>

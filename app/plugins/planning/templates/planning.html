@@ -4,8 +4,8 @@
 
 {% block header_actions %}
 {% if can_write('planning') %}
-<a href="{{ url_for('product_add') }}" class="btn btn-primary">+ 新增产品</a>
-<a href="{{ url_for('version_add') }}" class="btn btn-info">+ 新增版本</a>
+<a href="{{ url_for('planning.product_add') }}" class="btn btn-primary">+ 新增产品</a>
+<a href="{{ url_for('planning.version_add') }}" class="btn btn-info">+ 新增版本</a>
 <div class="batch-actions">
     <a href="{{ url_for('download_template', table_name='products') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
 </div>
@@ -14,7 +14,7 @@
 
 {% block content %}
 <div class="module-tabs">
-    <a href="{{ url_for('planning_list') }}" class="module-tab {% if request.endpoint in ['planning_list','product_add','product_edit'] or request.endpoint.startswith('version_') %}active{% endif %}">📐 产品与版本规划</a>
+    <a href="{{ url_for('planning.planning_list') }}" class="module-tab {% if request.endpoint in ['planning_list','product_add','product_edit'] or request.endpoint.startswith('version_') %}active{% endif %}">📐 产品与版本规划</a>
 </div>
 
 <!-- 概览统计卡片 -->
@@ -74,9 +74,9 @@
             </div>
             <div style="margin-top:12px; display:flex; gap:8px;">
                 {% if can_write('planning') %}
-                <a href="{{ url_for('product_edit', pid=p.id) }}" class="btn btn-sm btn-outline" style="flex:1; text-align:center;">编辑</a>
+                <a href="{{ url_for('planning.product_edit', pid=p.id) }}" class="btn btn-sm btn-outline" style="flex:1; text-align:center;">编辑</a>
                 {% endif %}
-                <a href="{{ url_for('version_list') }}?product_id={{ p.id }}" class="btn btn-sm btn-info" style="flex:1; text-align:center;">版本</a>
+                <a href="{{ url_for('planning.version_list') }}?product_id={{ p.id }}" class="btn btn-sm btn-info" style="flex:1; text-align:center;">版本</a>
             </div>
         </div>
         {% else %}
@@ -94,7 +94,7 @@
             <h3 class="panel-title" style="margin:0; font-size:16px; color:#6d28d9;">🔖 版本规划（{{ versions|length }}个版本，按产品分组）</h3>
             <div style="font-size:12px; color:#6b7280; margin-top:4px;">基于 <span style="background:#e0e7ff; color:#3730a3; padding:1px 6px; border-radius:6px; font-weight:600;">所有类型需求</span>（用户需求+系统侧+应用侧+其他）进行软件版本演进 | 不直接影响生产</div>
         </div>
-        <a href="{{ url_for('version_list') }}" style="font-size:12px; color:#6b7280; text-decoration:underline;">查看全部版本 →</a>
+        <a href="{{ url_for('planning.version_list') }}" style="font-size:12px; color:#6b7280; text-decoration:underline;">查看全部版本 →</a>
     </div>
 
     {% for p in products %}
@@ -136,7 +136,7 @@
                     <span>🐛 {{ v.bug_count or 0 }}Bug</span>
                 </div>
                 <div style="margin-top:10px;">
-                    <a href="{{ url_for('version_detail', vid=v.id) }}" class="btn btn-sm btn-outline" style="width:100%; text-align:center; font-size:11px;">查看详情</a>
+                    <a href="{{ url_for('planning.version_detail', vid=v.id) }}" class="btn btn-sm btn-outline" style="width:100%; text-align:center; font-size:11px;">查看详情</a>
                 </div>
             </div>
             {% endfor %}

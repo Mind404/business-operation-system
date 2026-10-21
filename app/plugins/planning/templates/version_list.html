@@ -4,7 +4,7 @@
 
 {% block header_actions %}
 {% if can_write('version') %}
-<a href="{{ url_for('version_add') }}" class="btn btn-primary">+ 新增版本</a>
+<a href="{{ url_for('planning.version_add') }}" class="btn btn-primary">+ 新增版本</a>
 <div class="batch-actions">
     <a href="{{ url_for('download_template', table_name='software_versions') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
     <form method="POST" action="{{ url_for('excel_import', table_name='software_versions') }}" enctype="multipart/form-data" style="display:inline;">
@@ -23,10 +23,10 @@
 </div>
 
 <div class="search-bar">
-    <form method="get" action="{{ url_for('version_list') }}">
+    <form method="get" action="{{ url_for('planning.version_list') }}">
         <input type="text" name="search" class="search-input" placeholder="搜索版本号、版本名称、产品..." value="{{ search }}">
         <button type="submit" class="search-btn">搜索</button>
-        {% if search %}<a href="{{ url_for('version_list') }}" class="search-clear">清除</a>{% endif %}
+        {% if search %}<a href="{{ url_for('planning.version_list') }}" class="search-clear">清除</a>{% endif %}
         <span class="search-count">共 {{ total }} 个版本</span>
     </form>
 </div>
@@ -60,7 +60,7 @@
                 <td class="text-center">{{ v.task_count }}</td>
                 <td class="text-center">{{ v.bug_count }}</td>
                 <td>
-                    <a href="{{ url_for('version_detail', vid=v.id) }}" class="btn btn-sm btn-outline">详情</a>
+                    <a href="{{ url_for('planning.version_detail', vid=v.id) }}" class="btn btn-sm btn-outline">详情</a>
                 </td>
             </tr>
             {% else %}
@@ -75,19 +75,19 @@
     <span class="page-info">第 {{ page }} / {{ total_pages }} 页，共 {{ total }} 个版本</span>
     <div class="page-buttons">
         {% if page > 1 %}
-        <a href="{{ url_for('version_list', search=search, page=page-1) }}" class="page-btn">上一页</a>
+        <a href="{{ url_for('planning.version_list', search=search, page=page-1) }}" class="page-btn">上一页</a>
         {% endif %}
         {% for p in range(1, total_pages+1) %}
         {% if p == page %}
         <span class="page-btn page-active">{{ p }}</span>
         {% elif p <= 3 or p > total_pages-3 or (p >= page-1 and p <= page+1) %}
-        <a href="{{ url_for('version_list', search=search, page=p) }}" class="page-btn">{{ p }}</a>
+        <a href="{{ url_for('planning.version_list', search=search, page=p) }}" class="page-btn">{{ p }}</a>
         {% elif p == 4 or p == total_pages-3 %}
         <span class="page-ellipsis">...</span>
         {% endif %}
         {% endfor %}
         {% if page < total_pages %}
-        <a href="{{ url_for('version_list', search=search, page=page+1) }}" class="page-btn">下一页</a>
+        <a href="{{ url_for('planning.version_list', search=search, page=page+1) }}" class="page-btn">下一页</a>
         {% endif %}
     </div>
 </div>

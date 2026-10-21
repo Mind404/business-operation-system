@@ -2,7 +2,7 @@
 {% block title %}{{ r.item }} - 技术需求详情{% endblock %}
 {% block content %}
 <div style="margin-bottom:16px;">
-    <a href="{{ url_for('ext.tech_req_list') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回列表</a>
+    <a href="{{ url_for('requirements.tech_req_list') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回列表</a>
 </div>
 
 <div class="page-header">
@@ -23,11 +23,11 @@
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
     <h2 style="font-size:16px;margin:0;">📋 优化事项及进展（{{ logs|length }}条）</h2>
-    <a href="{{ url_for('ext.tech_req_edit', rid=r.id) }}" style="padding:6px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑基本信息</a>
+    <a href="{{ url_for('requirements.tech_req_edit', rid=r.id) }}" style="padding:6px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑基本信息</a>
 </div>
 
 <!-- 追加进展表单 -->
-<form method="post" action="{{ url_for('ext.tech_req_add_log', rid=r.id) }}" style="background:#f5f7fa;padding:14px;border-radius:8px;margin-bottom:16px;">
+<form method="post" action="{{ url_for('requirements.tech_req_add_log', rid=r.id) }}" style="background:#f5f7fa;padding:14px;border-radius:8px;margin-bottom:16px;">
     <div style="display:flex;gap:10px;align-items:flex-start;">
         <input type="date" name="log_date" value="{{ '' }}" style="padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;">
         <textarea name="content" rows="2" placeholder="记录今日进展，如：9.24日晚在轨已更新参数配置..." style="flex:1;padding:8px;border:1px solid #ccd;border-radius:6px;font-size:13px;" required></textarea>

@@ -2,9 +2,9 @@
 {% set page_title = '设备详情 - ' + device.device_sn %}
 {% block ext_content %}
 <div class="module-tabs">
-    <a href="{{ url_for('ext.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
-    <a href="{{ url_for('ext.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
-    <a href="{{ url_for('ext.ota_list') }}" class="module-tab">📦 OTA版本</a>
+    <a href="{{ url_for('device.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
+    <a href="{{ url_for('device.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
+    <a href="{{ url_for('device.ota_list') }}" class="module-tab">📦 OTA版本</a>
 </div>
 <style>
 .dc-form-inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 0; }
@@ -35,7 +35,7 @@
     <div class="detail-section">
         <h3>运维操作</h3>
         <div class="dc-form-inline">
-            <form method="post" action="{{ url_for('ext.device_status_update', did=device.id) }}" style="display:flex;gap:8px;align-items:center;">
+            <form method="post" action="{{ url_for('device.device_status_update', did=device.id) }}" style="display:flex;gap:8px;align-items:center;">
                 <select name="status">
                     <option value="在线" {% if device.status == '在线' %}selected{% endif %}>在线</option>
                     <option value="离线" {% if device.status == '离线' %}selected{% endif %}>离线</option>
@@ -44,7 +44,7 @@
                 <button type="submit" class="btn btn-sm btn-outline">更新状态</button>
             </form>
             <span style="color:#e5e7eb;">|</span>
-            <form method="post" action="{{ url_for('ext.device_firmware_update', did=device.id) }}" style="display:flex;gap:8px;align-items:center;flex:1;">
+            <form method="post" action="{{ url_for('device.device_firmware_update', did=device.id) }}" style="display:flex;gap:8px;align-items:center;flex:1;">
                 <select name="change_type">
                     <option value="OTA升级">OTA升级</option>
                     <option value="手动刷新">手动刷新</option>
@@ -134,7 +134,7 @@
         {% endif %}
     </div>
     <div style="text-align:center;padding-top:16px;">
-        <a href="{{ url_for('ext.device_center', tab='device') }}" class="btn btn-secondary">返回设备运维</a>
+        <a href="{{ url_for('device.device_center', tab='device') }}" class="btn btn-secondary">返回设备运维</a>
     </div>
 </div>
 {% endblock %}

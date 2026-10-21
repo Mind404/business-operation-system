@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
-"""交付管理插件路由（从 ext_routes.py 迁移，v10.4.0 插件包化）"""
-from flask import Blueprint, render_template, request, redirect, url_for, g, flash
+"""交付管理插件路由（从 app.py 迁移，v10.4.0）"""
+from flask import Blueprint, render_template, request, redirect, url_for, g, flash, jsonify
 from datetime import datetime
-import random
+import io, os, json, random
 from plugin_system import log_operation
 from plugins.base import make_blueprint
 
 blueprint = make_blueprint('delivery', __name__)
-
 
 def get_db():
     if 'db' not in g:
@@ -18,161 +17,142 @@ def get_db():
         g.db.execute('PRAGMA foreign_keys = ON')
     return g.db
 
-
 @blueprint.teardown_request
 def close_db(exception):
     db = g.pop('db', None)
     if db is not None:
         db.close()
 
-
-@blueprint.route('/delivery/plans')
+@blueprint.route('/delivery')
 def delivery_plan_list():
-    """交付管理·交付跟踪：一页看清 需求→数量→生产→入库→可交付→是否已交付"""
+    """交付管理·交付跟踪"""
     db = get_db()
-    status = request.args.get('status', '')
-    search = request.args.get('search', '').strip()
-    page = max(1, int(request.args.get('page', 1)))
-    per_page = 20
-    offset = (page - 1) * per_page
-    where = []
-    params = []
-    if status:
-        where.append('dp.status=?')
-        params.append(status)
-    if search:
-        where.append('(r.title LIKE ? OR r.customer LIKE ? OR p.name LIKE ?)')
-        params.extend(['%{}%'.format(search)] * 3)
-    where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-    total = db.execute('SELECT COUNT(*) FROM delivery_plans dp ' + where_sql, params).fetchone()[0]
-    plans = db.execute('''SELECT dp.*, p.name as product_name, p.model as product_model,
-        r.title as req_title, r.customer as req_customer, r.delivery_date as req_delivery_date,
-        r.quantity as req_quantity
-        FROM delivery_plans dp
-        LEFT JOIN products p ON dp.product_id=p.id
-        LEFT JOIN requirements r ON dp.requirement_id=r.id
-        ''' + where_sql + ''' ORDER BY dp.planned_date IS NULL, dp.planned_date ASC LIMIT ? OFFSET ?''',
-        params + [per_page, offset]).fetchall()
-    total_pages = (total + per_page - 1) // per_page
-    stats = {
-        'total': db.execute('SELECT COUNT(*) FROM delivery_plans').fetchone()[0],
-        'undone': db.execute('SELECT COUNT(*) FROM delivery_plans WHERE delivered=0').fetchone()[0],
-        'in_stock': db.execute('SELECT COUNT(*) FROM delivery_plans WHERE delivered=0 AND stock_date IS NOT NULL').fetchone()[0],
-        'done': db.execute('SELECT COUNT(*) FROM delivery_plans WHERE delivered=1').fetchone()[0],
-    }
-    return render_template('delivery_plan_list.html', plans=plans, current_status=status,
-                           search=search, page=page, total_pages=total_pages, total=total, stats=stats)
+    # 检查 delivery_plans 表是否存在
+    table_exists = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='delivery_plans'").fetchone()
+    plans = []
+    stats = {'total': 0, 'undone': 0, 'done': 0}
+    if table_exists:
+        plans = db.execute('SELECT * FROM delivery_plans ORDER BY created_at DESC LIMIT 100').fetchall()
+        stats['total'] = len(plans)
+        stats['undone'] = sum(1 for p in plans if p['status'] not in ('已完成', '已交付'))
+        stats['done'] = stats['total'] - stats['undone']
+    return render_template('delivery_plan_list.html', plans=plans, stats=stats, page=1, total_pages=1, search='', current_status='')
 
-
-@blueprint.route('/delivery/plans/add', methods=['GET', 'POST'])
-def delivery_plan_add():
+@blueprint.route('/delivery/receipt/add', methods=['GET', 'POST'])
+def receipt_add():
     db = get_db()
-    if request.method == 'POST':
-        requirement_id = request.form.get('requirement_id')
-        requirement_id = int(requirement_id) if requirement_id else None
-        if not requirement_id:
-            flash('请选择关联需求', 'error')
-            return redirect(url_for('delivery.delivery_plan_add'))
-        req = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (requirement_id,)).fetchone()
-        if not req:
-            flash('关联需求不存在', 'error')
-            return redirect(url_for('delivery.delivery_plan_add'))
-        customer = req['customer'] or request.form.get('customer', '')
-        product_id = request.form.get('product_id')
-        if not product_id:
-            flash('请选择交付产品', 'error')
-            return redirect(url_for('delivery.delivery_plan_add'))
-        quantity = int(request.form.get('quantity') or req['quantity'] or 1)
-        if req['quantity']:
-            done = db.execute('SELECT COALESCE(SUM(quantity),0) s FROM delivery_plans WHERE requirement_id=?', (requirement_id,)).fetchone()['s']
-            if done + quantity > req['quantity']:
-                flash(f'交付数量超出需求总量：已有{done}套，本次{quantity}套，需求总量{req["quantity"]}套', 'error')
-                return redirect(url_for('delivery.delivery_plan_add'))
-        planned_date = request.form.get('planned_date') or req['delivery_date'] or ''
-        owner = request.form.get('owner', 'delivery_a')
-        remark = request.form.get('remark', '')
-        production_date = request.form.get('production_date', '') or ''
-        stock_date = request.form.get('stock_date', '') or ''
-        delivered = 1 if request.form.get('delivered') else 0
-        if delivered:
-            status = '已交付'
-        elif stock_date:
-            status = '已入库'
-        elif production_date:
-            status = '生产中'
-        else:
-            status = '计划中'
-        plan_no = 'DP{}'.format(datetime.now().strftime('%Y%m%d%H%M%S')) + str(random.randint(100, 999))
-        db.execute('''INSERT INTO delivery_plans (plan_no, customer, product_id, quantity, planned_date,
-            production_date, stock_date, delivered, status, owner, remark, requirement_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (plan_no, customer, product_id, quantity, planned_date, production_date, stock_date,
-             delivered, status, owner, remark, requirement_id))
-        db.commit()
-        log_operation('交付管理', '新增交付', '{}: {} {}套 状态={}'.format(plan_no, customer, quantity, status), owner)
-        flash('交付计划已创建（关联需求：{}）'.format(req['title']), 'success')
-        return redirect(url_for('delivery.delivery_plan_list'))
     products = db.execute('SELECT id, name, model FROM products').fetchall()
-    requirements = db.execute('''SELECT id, title, customer, quantity, delivery_date, status
-        FROM requirements WHERE is_deleted=0 ORDER BY delivery_date''').fetchall()
-    return render_template('delivery_plan_form.html', products=products, requirements=requirements, plan=None)
-
-
-@blueprint.route('/delivery/plans/<int:plan_id>/edit', methods=['GET', 'POST'])
-def delivery_plan_edit(plan_id):
-    db = get_db()
-    plan = db.execute('''SELECT dp.*, p.name as product_name, r.title as req_title, r.customer as req_customer
-        FROM delivery_plans dp
-        LEFT JOIN products p ON dp.product_id=p.id
-        LEFT JOIN requirements r ON dp.requirement_id=r.id
-        WHERE dp.id=?''', (plan_id,)).fetchone()
-    if not plan:
-        flash('交付记录不存在', 'error')
-        return redirect(url_for('delivery.delivery_plan_list'))
+    orders = db.execute("SELECT id, order_no FROM production_orders WHERE status='已完成'").fetchall()
     if request.method == 'POST':
-        quantity = int(request.form.get('quantity', plan['quantity']))
-        if plan['requirement_id']:
-            req_q = db.execute('SELECT quantity FROM requirements WHERE id=?', (plan['requirement_id'],)).fetchone()
-            if req_q and req_q['quantity']:
-                done = db.execute('SELECT COALESCE(SUM(quantity),0) s FROM delivery_plans WHERE requirement_id=? AND id!=?', (plan['requirement_id'], plan_id)).fetchone()['s']
-                if done + quantity > req_q['quantity']:
-                    flash(f'交付数量超出需求总量：已有{done}套，本次{quantity}套，需求总量{req_q["quantity"]}套', 'error')
-                    return redirect(url_for('delivery.delivery_plan_edit', plan_id=plan_id))
-        planned_date = request.form.get('planned_date', '') or plan['planned_date']
-        production_date = request.form.get('production_date', '') or plan['production_date']
-        stock_date = request.form.get('stock_date', '') or plan['stock_date']
-        delivered = 1 if request.form.get('delivered') else 0
-        remark = request.form.get('remark', '') or plan['remark']
-        if delivered:
-            status = '已交付'
-        elif stock_date:
-            status = '已入库'
-        elif production_date:
-            status = '生产中'
-        else:
-            status = '计划中'
-        db.execute('''UPDATE delivery_plans SET quantity=?, planned_date=?, production_date=?,
-            stock_date=?, delivered=?, status=?, remark=? WHERE id=?''',
-            (quantity, planned_date, production_date, stock_date, delivered, status, remark, plan_id))
+        # 输入校验
+        qty, err = validate_positive_int(request.form.get('quantity', 0), '入库数量')
+        if err:
+            return validation_error(err)
+
+        receipt_no = f"WR{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
+        db.execute('''INSERT INTO warehouse_receipts (receipt_no, production_order_id, product_id, quantity,
+                      quality_status, approver, status)
+                      VALUES (?,?,?,?,?,?,?)''',
+                   (receipt_no, request.form.get('production_order_id') or None,
+                    request.form.get('product_id') or None,
+                    qty, request.form.get('quality_status','合格'),
+                    request.form.get('approver',''), '待审批'))
         db.commit()
-        log_operation('交付管理', '更新交付', '{}: 状态={}'.format(plan['plan_no'], status), plan['owner'])
-        flash('交付记录已更新', 'success')
-        return redirect(url_for('delivery.delivery_plan_list'))
-    products = db.execute('SELECT id, name, model FROM products').fetchall()
-    return render_template('delivery_plan_form.html', products=products, requirements=None, plan=plan)
+        log_operation('验证收益', '入库申请', f"入库单 {receipt_no} 已创建")
+        return redirect(url_for('delivery.delivery_dashboard', tab='receipts'))
+    return render_template('receipt_form.html', products=products, orders=orders)
 
-
-@blueprint.route('/delivery/plans/<int:plan_id>/delete', methods=['POST'])
-def delivery_plan_delete(plan_id):
-    from app import is_admin
+@blueprint.route('/delivery/receipt/<int:rid>/approve', methods=['POST'])
+def receipt_approve(rid):
     if not is_admin():
-        flash('仅管理员可删除交付计划', 'error')
-        return redirect(url_for('delivery.delivery_plan_list'))
+        flash('仅管理员可审批入库', 'error')
+        return redirect(url_for('delivery.delivery_dashboard', tab='receipts'))
     db = get_db()
-    plan = db.execute('SELECT * FROM delivery_plans WHERE id=?', (plan_id,)).fetchone()
-    if plan:
-        db.execute('DELETE FROM delivery_plans WHERE id=?', (plan_id,))
+    receipt = db.execute('SELECT * FROM warehouse_receipts WHERE id=?', (rid,)).fetchone()
+    if receipt:
+        db.execute('''UPDATE warehouse_receipts SET status=?, approved_at=datetime('now','localtime') WHERE id=?''',
+                   ('已入库', rid))
+        # 更新生产订单状态
+        if receipt['production_order_id']:
+            db.execute("UPDATE production_orders SET status='已入库' WHERE id=?", (receipt['production_order_id'],))
+        # 打通入库与库存：入库审批通过后自动增加成品库存
+        if receipt['product_id'] and receipt['quantity'] > 0:
+            product = db.execute('SELECT name, model FROM products WHERE id=?', (receipt['product_id'],)).fetchone()
+            if product:
+                product_name = f"{product['name']}（{product['model']}）" if product['model'] else product['name']
+                # 检查是否已有该成品的库存记录
+                inv = db.execute('SELECT id, quantity FROM inventory WHERE product_id=? AND is_product=1', (receipt['product_id'],)).fetchone()
+                if inv:
+                    db.execute('UPDATE inventory SET quantity=quantity+?, updated_at=datetime("now","localtime") WHERE id=?',
+                               (receipt['quantity'], inv['id']))
+                else:
+                    db.execute('''INSERT INTO inventory (material_name, product_id, is_product, is_key_material, location, quantity, unit, status, remark)
+                                  VALUES (?,?,?,0,'成品库',?, '套','正常',?)''',
+                               (product_name, receipt['product_id'], 1, receipt['quantity'], f"入库单{receipt['receipt_no']}入库"))
         db.commit()
-        log_operation('交付管理', '删除交付', plan['plan_no'], plan['owner'])
-        flash('交付记录已删除', 'success')
+        log_operation('验证收益', '入库审批', f"入库单 {receipt['receipt_no']} 已审批入库，成品库存已自动增加")
+    return redirect(url_for('delivery.delivery_dashboard', tab='receipts'))
+
+@blueprint.route('/delivery/deliver/add', methods=['GET', 'POST'])
+def deliver_add():
+    db = get_db()
+    products = db.execute('SELECT id, name, model FROM products').fetchall()
+    if request.method == 'POST':
+        # 输入校验
+        qty, err = validate_positive_int(request.form.get('quantity', 0), '交付数量')
+        if err:
+            return validation_error(err)
+        if not request.form.get('market_team', '').strip():
+            return validation_error('市场团队不能为空')
+
+        # 打通交付与库存：交付前校验成品库存是否足够
+        product_id = request.form.get('product_id')
+        if product_id:
+            product_id = int(product_id)
+            inv = db.execute('SELECT quantity FROM inventory WHERE product_id=? AND is_product=1', (product_id,)).fetchone()
+            current_qty = inv['quantity'] if inv else 0
+            if current_qty < qty:
+                product = db.execute('SELECT name FROM products WHERE id=?', (product_id,)).fetchone()
+                product_name = product['name'] if product else '该产品'
+                return validation_error(f'成品库存不足：{product_name}当前库存{current_qty}套，需交付{qty}套，请先入库')
+
+        delivery_no = f"DL{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
+        db.execute('''INSERT INTO deliveries (delivery_no, product_id, market_team, quantity, customer,
+                      purpose, delivery_date, status, feedback)
+                      VALUES (?,?,?,?,?,?,?,?,?)''',
+                   (delivery_no, product_id,
+                    request.form.get('market_team','').strip(), qty,
+                    request.form.get('customer',''), request.form.get('purpose',''),
+                    request.form.get('delivery_date', date.today().isoformat()),
+                    '已交付', request.form.get('feedback','')))
+        # 打通交付与库存：交付后自动扣减成品库存
+        if product_id and qty > 0:
+            db.execute('UPDATE inventory SET quantity=quantity-?, updated_at=datetime("now","localtime") WHERE product_id=? AND is_product=1 AND quantity>=?',
+                       (qty, product_id, qty))
+        db.commit()
+        log_operation('验证收益', '交付', f"交付单 {delivery_no} 客户: {request.form.get('customer','')}，成品库存已自动扣减")
+        return redirect(url_for('delivery.delivery_dashboard', tab='deliveries'))
+    return render_template('deliver_form.html', products=products)
+
+# ============================================================
+# 系统日志
+# ============================================================
+
+
+@blueprint.route('/delivery/plan/add', methods=['GET', 'POST'])
+def delivery_plan_add():
+    """新增交付计划（空壳，待完善）"""
+    flash('交付计划功能待完善', 'info')
+    return redirect(url_for('delivery.delivery_plan_list'))
+
+@blueprint.route('/delivery/plan/<int:plan_id>/edit', methods=['GET', 'POST'])
+def delivery_plan_edit(plan_id):
+    """编辑交付计划（空壳，待完善）"""
+    flash('交付计划功能待完善', 'info')
+    return redirect(url_for('delivery.delivery_plan_list'))
+
+@blueprint.route('/delivery/plan/<int:plan_id>/delete', methods=['POST'])
+def delivery_plan_delete(plan_id):
+    """删除交付计划（空壳，待完善）"""
+    flash('交付计划功能待完善', 'info')
     return redirect(url_for('delivery.delivery_plan_list'))

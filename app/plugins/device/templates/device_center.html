@@ -45,10 +45,10 @@
 <!-- 全局消息 -->
 <!-- 双子页切换 -->
 <div class="dc-tabs">
-    <a href="{{ url_for('ext.device_center', tab='device') }}" class="dc-tab {% if tab == 'device' %}active{% endif %}">
+    <a href="{{ url_for('device.device_center', tab='device') }}" class="dc-tab {% if tab == 'device' %}active{% endif %}">
         📡 设备运维（状态监控） <span class="cnt">{{ d_total }}</span>
     </a>
-    <a href="{{ url_for('ext.device_center', tab='ota') }}" class="dc-tab {% if tab == 'ota' %}active{% endif %}">
+    <a href="{{ url_for('device.device_center', tab='ota') }}" class="dc-tab {% if tab == 'ota' %}active{% endif %}">
         🔄 OTA版本管理 <span class="cnt">{{ o_total }}</span>
     </a>
 </div>
@@ -75,15 +75,15 @@
         <input type="text" name="d_search" value="{{ d_search }}" placeholder="搜索SN / 客户 / 固件版本"
                style="padding:6px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;width:240px;">
         <button type="submit" class="dc-btn primary">搜索</button>
-        {% if d_search or d_status %}<a href="{{ url_for('ext.device_center', tab='device') }}" class="dc-btn">清除</a>{% endif %}
+        {% if d_search or d_status %}<a href="{{ url_for('device.device_center', tab='device') }}" class="dc-btn">清除</a>{% endif %}
     </form>
     <div class="spacer"></div>
-    <a href="{{ url_for('ext.device_template') }}" class="dc-btn">📋 下载导入模板</a>
+    <a href="{{ url_for('device.device_template') }}" class="dc-btn">📋 下载导入模板</a>
     {% if can_write('ext.device') %}
     <label class="dc-btn green" style="cursor:pointer;">📥 批量导入<input type="file" class="dc-file" accept=".xlsx" onchange="uploadDevice(this)"></label>
     {% endif %}
-    <a href="{{ url_for('ext.device_export') }}" class="dc-btn">📤 导出Excel</a>
-    {% if can_write('ext.device') %}<a href="{{ url_for('ext.device_add') }}" class="dc-btn primary">+ 登记设备</a>{% endif %}
+    <a href="{{ url_for('device.device_export') }}" class="dc-btn">📤 导出Excel</a>
+    {% if can_write('ext.device') %}<a href="{{ url_for('device.device_add') }}" class="dc-btn primary">+ 登记设备</a>{% endif %}
 </div>
 
 <div class="panel">
@@ -99,7 +99,7 @@
                 <td class="text-center"><span class="status-tag status-{{ d.status }}">{% if d.status == '在线' %}● {% endif %}{{ d.status }}</span></td>
                 <td style="font-size:12px;">{{ d.last_online or '-' }}</td>
                 <td>{{ d.location or '-' }}</td>
-                <td><a href="{{ url_for('ext.device_detail', did=d.id) }}" class="btn btn-sm btn-outline">详情/变更</a></td>
+                <td><a href="{{ url_for('device.device_detail', did=d.id) }}" class="btn btn-sm btn-outline">详情/变更</a></td>
             </tr>
             {% else %}
             <tr><td colspan="8" class="empty-cell">暂无设备，可通过"批量导入"或"登记设备"录入</td></tr>
@@ -112,8 +112,8 @@
     <span class="page-info">第 {{ request.args.get('d_page', 1) }} / {{ d_pages }} 页</span>
     <div class="page-buttons">
         {% set cur = request.args.get('d_page', 1) | int %}
-        {% if cur > 1 %}<a href="{{ url_for('ext.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur-1) }}" class="page-btn">上一页</a>{% endif %}
-        {% if cur < d_pages %}<a href="{{ url_for('ext.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur+1) }}" class="page-btn">下一页</a>{% endif %}
+        {% if cur > 1 %}<a href="{{ url_for('device.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur-1) }}" class="page-btn">上一页</a>{% endif %}
+        {% if cur < d_pages %}<a href="{{ url_for('device.device_center', tab='device', d_status=d_status, d_search=d_search, d_page=cur+1) }}" class="page-btn">下一页</a>{% endif %}
     </div>
 </div>
 {% endif %}
@@ -167,15 +167,15 @@
         <input type="text" name="o_search" value="{{ o_search }}" placeholder="搜索版本号 / 文件名"
                style="padding:6px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;width:220px;">
         <button type="submit" class="dc-btn primary">搜索</button>
-        {% if o_search or o_status %}<a href="{{ url_for('ext.device_center', tab='ota') }}" class="dc-btn">清除</a>{% endif %}
+        {% if o_search or o_status %}<a href="{{ url_for('device.device_center', tab='ota') }}" class="dc-btn">清除</a>{% endif %}
     </form>
     <div class="spacer"></div>
-    <a href="{{ url_for('ext.ota_template') }}" class="dc-btn">📋 下载导入模板</a>
+    <a href="{{ url_for('device.ota_template') }}" class="dc-btn">📋 下载导入模板</a>
     {% if can_write('ext.ota') %}
     <label class="dc-btn green" style="cursor:pointer;">📥 批量导入<input type="file" class="dc-file" accept=".xlsx" onchange="uploadOta(this)"></label>
     {% endif %}
-    <a href="{{ url_for('ext.ota_export') }}" class="dc-btn">📤 导出Excel</a>
-    {% if can_write('ext.ota') %}<a href="{{ url_for('ext.ota_add') }}" class="dc-btn primary">+ 上传版本</a>{% endif %}
+    <a href="{{ url_for('device.ota_export') }}" class="dc-btn">📤 导出Excel</a>
+    {% if can_write('ext.ota') %}<a href="{{ url_for('device.ota_add') }}" class="dc-btn primary">+ 上传版本</a>{% endif %}
 </div>
 
 <div class="panel">
@@ -194,13 +194,13 @@
                 <td>{{ o.creator or '-' }}</td>
                 <td>
                     {% if o.status == '测试中' and can_write('ext.ota') %}
-                    <form method="post" action="{{ url_for('ext.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定发布此版本？将记录发布时间。')">
+                    <form method="post" action="{{ url_for('device.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定发布此版本？将记录发布时间。')">
                         <input type="hidden" name="status" value="已发布">
                         <input type="hidden" name="operator" value="{{ session.get('username', 'delivery_c') }}">
                         <button type="submit" class="btn btn-sm btn-success">发布</button>
                     </form>
                     {% elif o.status == '已发布' and can_write('ext.ota') %}
-                    <form method="post" action="{{ url_for('ext.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定回滚此版本？')">
+                    <form method="post" action="{{ url_for('device.ota_publish', oid=o.id) }}" style="display:inline;" onsubmit="return confirm('确定回滚此版本？')">
                         <input type="hidden" name="status" value="已回滚">
                         <button type="submit" class="btn btn-sm btn-outline">回滚</button>
                     </form>
@@ -225,16 +225,16 @@ function uploadDevice(input) {
     if (!input.files || !input.files.length) return;
     const fd = new FormData();
     fd.append('file', input.files[0]);
-    fetch('{{ url_for('ext.device_import') }}', { method: 'POST', body: fd })
-        .then(r => { window.location.href = '{{ url_for('ext.device_center', tab='device') }}'; })
+    fetch('{{ url_for('device.device_import') }}', { method: 'POST', body: fd })
+        .then(r => { window.location.href = '{{ url_for('device.device_center', tab='device') }}'; })
         .catch(() => window.location.reload());
 }
 function uploadOta(input) {
     if (!input.files || !input.files.length) return;
     const fd = new FormData();
     fd.append('file', input.files[0]);
-    fetch('{{ url_for('ext.ota_import') }}', { method: 'POST', body: fd })
-        .then(r => { window.location.href = '{{ url_for('ext.device_center', tab='ota') }}'; })
+    fetch('{{ url_for('device.ota_import') }}', { method: 'POST', body: fd })
+        .then(r => { window.location.href = '{{ url_for('device.device_center', tab='ota') }}'; })
         .catch(() => window.location.reload());
 }
 </script>

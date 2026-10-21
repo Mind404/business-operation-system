@@ -1594,346 +1594,6 @@ def executive_evolution():
 # ============================================================
 # 模块1：需求数据库
 # ============================================================
-@app.route('/requirements')
-def requirements_list():
-    db = get_db()
-    status = request.args.get('status', '')
-    req_type = request.args.get('req_type', '')
-    search = request.args.get('search', '').strip()
-    page = max(1, int(request.args.get('page', 1)))
-    per_page = 15
-    offset = (page - 1) * per_page
-
-    where = ['is_deleted=0']
-    params = []
-    if status:
-        where.append('status=?')
-        params.append(status)
-    if req_type:
-        where.append('req_type=?')
-        params.append(req_type)
-    if search:
-        where.append('(title LIKE ? OR customer LIKE ? OR source_dept LIKE ? OR description LIKE ? OR product_model LIKE ?)')
-        params.extend([f'%{search}%']*5)
-
-    where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-    total = db.execute(f'SELECT COUNT(*) FROM requirements{where_sql}', params).fetchone()[0]
-    items = db.execute(f'SELECT * FROM requirements{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?',
-                       params + [per_page, offset]).fetchall()
-    total_pages = (total + per_page - 1) // per_page
-    # 统计各类型数量
-    type_stats = db.execute('''SELECT req_type, COUNT(*) as cnt FROM requirements WHERE is_deleted=0 GROUP BY req_type''').fetchall()
-    type_count = {t['req_type']: t['cnt'] for t in type_stats}
-    return render_template('requirements.html', items=items, current_status=status,
-                           current_type=req_type, type_count=type_count,
-                           search=search, page=page, total_pages=total_pages, total=total)
-
-@app.route('/requirements/add', methods=['GET', 'POST'])
-def requirement_add():
-    if request.method == 'POST':
-        # 输入校验
-        qty, err = validate_positive_int(request.form.get('quantity', 0), '需求数量')
-        if err:
-            return validation_error(err)
-        if not request.form.get('title', '').strip():
-            return validation_error('需求标题不能为空')
-
-        db = get_db()
-        db.execute('''INSERT INTO requirements (title, req_type, source_dept, customer, description, quantity, priority, delivery_date,
-                      product_model, batch_delivery, application_scenario,
-                      system_verify_point, verify_function, performance_req, support_product,
-                      certification_type, spec_requirement, industry_standard, baseline_product_type,
-                      task_progress, time_plan, deliverable)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                   (request.form['title'].strip(), request.form.get('req_type','用户需求'),
-                    request.form.get('source_dept',''), request.form.get('customer',''),
-                    request.form.get('description',''), qty,
-                    request.form.get('priority','中'), request.form.get('delivery_date',''),
-                    request.form.get('product_model',''), request.form.get('batch_delivery','否'),
-                    request.form.get('application_scenario',''),
-                    request.form.get('system_verify_point',''), request.form.get('verify_function',''),
-                    request.form.get('performance_req',''), request.form.get('support_product',''),
-                    request.form.get('certification_type',''), request.form.get('spec_requirement',''),
-                    request.form.get('industry_standard',''), request.form.get('baseline_product_type',''),
-                    request.form.get('task_progress',''), request.form.get('time_plan',''),
-                    request.form.get('deliverable','')))
-        db.commit()
-        log_operation('需求管理', '新增', f"新增需求[{request.form.get('req_type','用户需求')}]: {request.form['title']}")
-        return redirect(url_for('requirements_list'))
-    return render_template('requirement_form.html', item=None)
-
-@app.route('/requirements/<int:req_id>/edit', methods=['GET', 'POST'])
-def requirement_edit(req_id):
-    db = get_db()
-    item = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
-    if request.method == 'POST':
-        # 输入校验
-        qty, err = validate_positive_int(request.form.get('quantity', 0), '需求数量')
-        if err:
-            return validation_error(err)
-        if not request.form.get('title', '').strip():
-            return validation_error('需求标题不能为空')
-
-        db.execute('''UPDATE requirements SET title=?, req_type=?, source_dept=?, customer=?, description=?,
-                      quantity=?, priority=?, status=?, delivery_date=?,
-                      product_model=?, batch_delivery=?, application_scenario=?,
-                      system_verify_point=?, verify_function=?, performance_req=?, support_product=?,
-                      certification_type=?, spec_requirement=?, industry_standard=?, baseline_product_type=?,
-                      task_progress=?, time_plan=?, deliverable=?, updated_at=datetime('now','localtime')
-                      WHERE id=?''',
-                   (request.form['title'].strip(), request.form.get('req_type','用户需求'),
-                    request.form.get('source_dept',''), request.form.get('customer',''),
-                    request.form.get('description',''), qty,
-                    request.form.get('priority','中'), request.form.get('status','待评审'),
-                    request.form.get('delivery_date',''),
-                    request.form.get('product_model',''), request.form.get('batch_delivery','否'),
-                    request.form.get('application_scenario',''),
-                    request.form.get('system_verify_point',''), request.form.get('verify_function',''),
-                    request.form.get('performance_req',''), request.form.get('support_product',''),
-                    request.form.get('certification_type',''), request.form.get('spec_requirement',''),
-                    request.form.get('industry_standard',''), request.form.get('baseline_product_type',''),
-                    request.form.get('task_progress',''), request.form.get('time_plan',''),
-                    request.form.get('deliverable',''), req_id))
-        db.commit()
-        log_operation('需求管理', '编辑', f"编辑需求[{request.form.get('req_type','用户需求')}]: {request.form['title']}")
-        return redirect(url_for('requirements_list'))
-    return render_template('requirement_form.html', item=item)
-
-@app.route('/requirements/<int:req_id>/delete', methods=['POST'])
-def requirement_delete(req_id):
-    """软删除需求（v8.6.0）：标记 is_deleted=1，保留历史追溯，防止外键崩溃"""
-    if not is_admin():
-        flash('仅管理员可删除需求', 'error')
-        return redirect(url_for('requirements_list'))
-    db = get_db()
-    item = db.execute('SELECT id FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
-    if not item:
-        return validation_error('需求不存在或已删除')
-    db.execute('UPDATE requirements SET is_deleted=1, updated_at=datetime("now","localtime") WHERE id=?', (req_id,))
-    db.commit()
-    log_operation('需求管理', '删除', f'软删除需求ID: {req_id}')
-    return redirect(url_for('requirements_list'))
-
-@app.route('/requirements/<int:req_id>/status', methods=['POST'])
-def requirement_update_status(req_id):
-    """需求状态快速更新（AJAX）"""
-    new_status = request.form.get('status', '')
-    valid_statuses = ['待评审', '已评审', '进行中', '已完成', '已取消', '已交付']
-    if new_status not in valid_statuses:
-        return jsonify({'success': False, 'error': '无效的状态值'}), 400
-    db = get_db()
-    # v10.3.2 权限统一：普通用户提交审批，管理员直接改
-    perm, aid = submit_status_change('requirements', 'requirement', req_id, new_status)
-    if perm == 'pending':
-        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
-    db.execute('''UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?''',
-               (new_status, req_id))
-    db.commit()
-    log_operation('需求管理', '状态更新', f'需求ID {req_id} 状态更新为 {new_status}')
-    # 状态联动：当需求状态变更时，自动同步关联版本的状态
-    sync_requirement_status(db, req_id, new_status)
-    return jsonify({'success': True, 'status': new_status})
-
-def sync_requirement_status(db, req_id, new_status):
-    """状态联动：需求状态变更时同步关联版本状态"""
-    try:
-        # 查询关联的版本
-        versions = db.execute('''
-            SELECT sv.id, sv.status FROM software_versions sv
-            JOIN version_requirements vr ON sv.id = vr.version_id
-            WHERE vr.requirement_id = ?
-        ''', (req_id,)).fetchall()
-        for v in versions:
-            if new_status == '已交付' and v['status'] != '已发布':
-                db.execute('UPDATE software_versions SET status=? WHERE id=?', ('已发布', v['id']))
-                log_operation('版本规划', '状态联动', f'版本ID {v["id"]} 因需求交付自动更新为已发布')
-            elif new_status == '进行中' and v['status'] == '规划中':
-                db.execute('UPDATE software_versions SET status=? WHERE id=?', ('开发中', v['id']))
-                log_operation('版本规划', '状态联动', f'版本ID {v["id"]} 因需求进行中自动更新为开发中')
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        app.logger.error(f'状态联动失败: {e}')
-
-@app.route('/requirements/<int:req_id>')
-def requirement_detail(req_id):
-    """需求详情（端到端追溯：需求→版本→任务→Bug→测试→排程→订单→交付→收入）"""
-    db = get_db()
-    requirement = db.execute('SELECT * FROM requirements WHERE id=? AND is_deleted=0', (req_id,)).fetchone()
-    if not requirement:
-        return validation_error('需求不存在')
-    # 1. 关联的软件版本（关联产品表获取产品名称，字段名映射为模板期望的名称）
-    versions = db.execute('''
-        SELECT sv.*, p.name as product_name, 
-               sv.planned_release_date as planned_release,
-               sv.actual_release_date as actual_release,
-               sv.capabilities as core_features,
-               '固件版本' as version_type,
-               vr.priority as link_priority
-        FROM version_requirements vr
-        JOIN software_versions sv ON vr.version_id=sv.id
-        LEFT JOIN products p ON sv.product_id=p.id
-        WHERE vr.requirement_id=?
-        ORDER BY sv.created_at DESC
-    ''', (req_id,)).fetchall()
-    version_ids = [v['id'] for v in versions]
-    # 2. 关联的开发任务（直接关联requirement_id + 通过版本间接关联）
-    tasks = db.execute('SELECT * FROM dev_tasks WHERE requirement_id=? ORDER BY priority, planned_start', (req_id,)).fetchall()
-    if version_ids:
-        placeholders = ','.join('?' * len(version_ids))
-        version_tasks = db.execute(f'SELECT * FROM dev_tasks WHERE version_id IN ({placeholders}) AND requirement_id IS NULL ORDER BY priority, planned_start', version_ids).fetchall()
-        tasks = list(tasks) + list(version_tasks)
-    # 3. 关联的Bug（通过版本间接关联）
-    bugs = []
-    if version_ids:
-        placeholders = ','.join('?' * len(version_ids))
-        bugs = db.execute(f'SELECT * FROM bug_records WHERE version_id IN ({placeholders}) ORDER BY created_at DESC', version_ids).fetchall()
-    # 4. 关联的测试用例（通过版本间接关联）
-    test_cases = []
-    if version_ids:
-        placeholders = ','.join('?' * len(version_ids))
-        test_cases = db.execute(f'SELECT * FROM test_cases WHERE version_id IN ({placeholders}) ORDER BY created_at DESC', version_ids).fetchall()
-    # 5. 关联的生产排程
-    schedules = db.execute('SELECT * FROM production_schedules WHERE requirement_id=? ORDER BY created_at DESC', (req_id,)).fetchall()
-    # 6. 关联的生产订单
-    orders = db.execute('SELECT * FROM production_orders WHERE requirement_id=? ORDER BY created_at DESC', (req_id,)).fetchall()
-    # 7. 关联的交付记录（通过需求ID或产品间接关联）
-    deliveries = []
-    try:
-        deliveries = db.execute('SELECT * FROM deliveries WHERE requirement_id=? ORDER BY created_at DESC', (req_id,)).fetchall()
-    except Exception:
-        pass
-    # 8. 关联的收入确认（通过需求ID关联）
-    revenues = []
-    try:
-        revenues = db.execute('SELECT * FROM revenue_confirmations WHERE requirement_id=? ORDER BY created_at DESC', (req_id,)).fetchall()
-    except Exception:
-        pass
-    # 9. 关联的需求评审记录
-    reviews = db.execute('SELECT * FROM requirement_reviews WHERE requirement_id=? ORDER BY created_at DESC', (req_id,)).fetchall()
-    # 10. 分批交付明细
-    delivery_batches = []
-    try:
-        delivery_batches = db.execute('SELECT * FROM delivery_batches WHERE requirement_id=? ORDER BY batch_no', (req_id,)).fetchall()
-    except Exception:
-        pass
-    return render_template('requirement_detail.html', requirement=requirement,
-                           versions=versions, tasks=tasks, bugs=bugs, test_cases=test_cases,
-                           schedules=schedules, orders=orders, deliveries=deliveries,
-                           revenues=revenues, reviews=reviews, delivery_batches=delivery_batches)
-
-# ============================================================
-# 模块2：产品规划与版本规划（合并页面，全面但简洁）
-# ============================================================
-@app.route('/planning')
-def planning_list():
-    """产品规划与版本规划合并页面"""
-    db = get_db()
-    # 产品列表（带统计）
-    products = db.execute('''
-        SELECT p.*,
-               (SELECT COUNT(*) FROM software_versions sv WHERE sv.product_id = p.id) as version_count,
-               (SELECT COUNT(*) FROM version_requirements vr
-                JOIN software_versions sv ON vr.version_id = sv.id
-                WHERE sv.product_id = p.id) as req_count,
-               (SELECT COUNT(*) FROM requirements r
-                WHERE r.product_model = p.model AND r.req_type = '用户需求' AND r.is_deleted=0) as user_req_count
-        FROM products p ORDER BY p.created_at DESC
-    ''').fetchall()
-    # 版本列表（带统计，按产品分组）
-    versions = db.execute('''
-        SELECT sv.*, p.name as product_name, p.model,
-               (SELECT COUNT(*) FROM dev_tasks dt WHERE dt.version_id = sv.id) as task_count,
-               (SELECT COUNT(*) FROM dev_tasks dt WHERE dt.version_id = sv.id AND dt.status = '已完成') as task_done,
-               (SELECT COUNT(*) FROM bug_records br WHERE br.version_id = sv.id) as bug_count,
-               (SELECT COUNT(*) FROM version_requirements vr WHERE vr.version_id = sv.id) as req_count
-        FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id
-        ORDER BY sv.planned_release_date ASC
-    ''').fetchall()
-    # 按产品分组版本
-    versions_by_product = {}
-    for v in versions:
-        pid = v['product_id']
-        if pid not in versions_by_product:
-            versions_by_product[pid] = []
-        versions_by_product[pid].append(v)
-    return render_template('planning.html', products=products, versions=versions,
-                           versions_by_product=versions_by_product)
-
-@app.route('/planning/add', methods=['GET', 'POST'])
-def product_add():
-    if request.method == 'POST':
-        db = get_db()
-        cursor = db.execute('''INSERT INTO products (name, model, version, description, lifecycle_stage, stocking_strategy)
-                      VALUES (?,?,?,?,?,?)''',
-                   (request.form['name'], request.form.get('model',''), request.form.get('version',''),
-                    request.form.get('description',''), request.form.get('lifecycle_stage','规划中'),
-                    request.form.get('stocking_strategy','不囤货，按需生产')))
-        product_id = cursor.lastrowid
-        # 保存BOM
-        bom_names = request.form.getlist('bom_material[]')
-        bom_codes = request.form.getlist('bom_code[]')
-        bom_key = request.form.getlist('bom_is_key[]')
-        bom_qty = request.form.getlist('bom_qty[]')
-        bom_supplier = request.form.getlist('bom_supplier[]')
-        for i, name in enumerate(bom_names):
-            if name.strip():
-                is_key = 1 if str(i) in bom_key else 0
-                db.execute('''INSERT INTO bom_items (product_id, material_name, material_code, is_key_material, quantity_per_unit, supplier)
-                              VALUES (?,?,?,?,?,?)''',
-                           (product_id, name.strip(), bom_codes[i] if i < len(bom_codes) else '',
-                            is_key, float(bom_qty[i]) if i < len(bom_qty) and bom_qty[i] else 1,
-                            bom_supplier[i] if i < len(bom_supplier) else ''))
-        db.commit()
-        log_operation('产品规划', '新增', f"新增产品: {request.form['name']}")
-        return redirect(url_for('planning_list'))
-    return render_template('product_form.html', product=None, bom_items=[])
-
-@app.route('/planning/<int:pid>/edit', methods=['GET', 'POST'])
-def product_edit(pid):
-    db = get_db()
-    product = db.execute('SELECT * FROM products WHERE id=?', (pid,)).fetchone()
-    bom_items = db.execute('SELECT * FROM bom_items WHERE product_id=?', (pid,)).fetchall()
-    if request.method == 'POST':
-        db.execute('''UPDATE products SET name=?, model=?, version=?, description=?,
-                      lifecycle_stage=?, stocking_strategy=? WHERE id=?''',
-                   (request.form['name'], request.form.get('model',''), request.form.get('version',''),
-                    request.form.get('description',''), request.form.get('lifecycle_stage','规划中'),
-                    request.form.get('stocking_strategy','不囤货，按需生产'), pid))
-        # 重建BOM
-        db.execute('DELETE FROM bom_items WHERE product_id=?', (pid,))
-        bom_names = request.form.getlist('bom_material[]')
-        bom_codes = request.form.getlist('bom_code[]')
-        bom_key = request.form.getlist('bom_is_key[]')
-        bom_qty = request.form.getlist('bom_qty[]')
-        bom_supplier = request.form.getlist('bom_supplier[]')
-        for i, name in enumerate(bom_names):
-            if name.strip():
-                is_key = 1 if str(i) in bom_key else 0
-                db.execute('''INSERT INTO bom_items (product_id, material_name, material_code, is_key_material, quantity_per_unit, supplier)
-                              VALUES (?,?,?,?,?,?)''',
-                           (pid, name.strip(), bom_codes[i] if i < len(bom_codes) else '',
-                            is_key, float(bom_qty[i]) if i < len(bom_qty) and bom_qty[i] else 1,
-                            bom_supplier[i] if i < len(bom_supplier) else ''))
-        db.commit()
-        log_operation('产品规划', '编辑', f"编辑产品: {request.form['name']}")
-        return redirect(url_for('planning_list'))
-    return render_template('product_form.html', product=product, bom_items=bom_items)
-
-@app.route('/planning/<int:pid>/delete', methods=['POST'])
-def product_delete(pid):
-    if not is_admin():
-        flash('仅管理员可删除产品', 'error')
-        return redirect(url_for('planning_list'))
-    db = get_db()
-    db.execute('DELETE FROM products WHERE id=?', (pid,))
-    db.commit()
-    log_operation('产品规划', '删除', f'删除产品ID: {pid}')
-    return redirect(url_for('planning_list'))
-
-# ============================================================
-# 模块3：研发生产（库存+领用+生产订单）
-# ============================================================
 @app.route('/production')
 def production_dashboard():
     """生产管理看板（研发生产 + 生产排程合并，偏向成果展示）"""
@@ -2408,761 +2068,6 @@ def defect_close(did):
 
 # ============================================================
 # 模块5：验证收益（入库+交付）
-# ============================================================
-@app.route('/delivery')
-def delivery_dashboard():
-    # v8.8.0：领用交付/入库单页面并入「交付管理·交付跟踪」，此路由保留兼容重定向
-    return redirect(url_for('ext.delivery_plan_list'))
-
-@app.route('/delivery/receipt/add', methods=['GET', 'POST'])
-def receipt_add():
-    db = get_db()
-    products = db.execute('SELECT id, name, model FROM products').fetchall()
-    orders = db.execute("SELECT id, order_no FROM production_orders WHERE status='已完成'").fetchall()
-    if request.method == 'POST':
-        # 输入校验
-        qty, err = validate_positive_int(request.form.get('quantity', 0), '入库数量')
-        if err:
-            return validation_error(err)
-
-        receipt_no = f"WR{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
-        db.execute('''INSERT INTO warehouse_receipts (receipt_no, production_order_id, product_id, quantity,
-                      quality_status, approver, status)
-                      VALUES (?,?,?,?,?,?,?)''',
-                   (receipt_no, request.form.get('production_order_id') or None,
-                    request.form.get('product_id') or None,
-                    qty, request.form.get('quality_status','合格'),
-                    request.form.get('approver',''), '待审批'))
-        db.commit()
-        log_operation('验证收益', '入库申请', f"入库单 {receipt_no} 已创建")
-        return redirect(url_for('delivery_dashboard', tab='receipts'))
-    return render_template('receipt_form.html', products=products, orders=orders)
-
-@app.route('/delivery/receipt/<int:rid>/approve', methods=['POST'])
-def receipt_approve(rid):
-    if not is_admin():
-        flash('仅管理员可审批入库', 'error')
-        return redirect(url_for('delivery_dashboard', tab='receipts'))
-    db = get_db()
-    receipt = db.execute('SELECT * FROM warehouse_receipts WHERE id=?', (rid,)).fetchone()
-    if receipt:
-        db.execute('''UPDATE warehouse_receipts SET status=?, approved_at=datetime('now','localtime') WHERE id=?''',
-                   ('已入库', rid))
-        # 更新生产订单状态
-        if receipt['production_order_id']:
-            db.execute("UPDATE production_orders SET status='已入库' WHERE id=?", (receipt['production_order_id'],))
-        # 打通入库与库存：入库审批通过后自动增加成品库存
-        if receipt['product_id'] and receipt['quantity'] > 0:
-            product = db.execute('SELECT name, model FROM products WHERE id=?', (receipt['product_id'],)).fetchone()
-            if product:
-                product_name = f"{product['name']}（{product['model']}）" if product['model'] else product['name']
-                # 检查是否已有该成品的库存记录
-                inv = db.execute('SELECT id, quantity FROM inventory WHERE product_id=? AND is_product=1', (receipt['product_id'],)).fetchone()
-                if inv:
-                    db.execute('UPDATE inventory SET quantity=quantity+?, updated_at=datetime("now","localtime") WHERE id=?',
-                               (receipt['quantity'], inv['id']))
-                else:
-                    db.execute('''INSERT INTO inventory (material_name, product_id, is_product, is_key_material, location, quantity, unit, status, remark)
-                                  VALUES (?,?,?,0,'成品库',?, '套','正常',?)''',
-                               (product_name, receipt['product_id'], 1, receipt['quantity'], f"入库单{receipt['receipt_no']}入库"))
-        db.commit()
-        log_operation('验证收益', '入库审批', f"入库单 {receipt['receipt_no']} 已审批入库，成品库存已自动增加")
-    return redirect(url_for('delivery_dashboard', tab='receipts'))
-
-@app.route('/delivery/deliver/add', methods=['GET', 'POST'])
-def deliver_add():
-    db = get_db()
-    products = db.execute('SELECT id, name, model FROM products').fetchall()
-    if request.method == 'POST':
-        # 输入校验
-        qty, err = validate_positive_int(request.form.get('quantity', 0), '交付数量')
-        if err:
-            return validation_error(err)
-        if not request.form.get('market_team', '').strip():
-            return validation_error('市场团队不能为空')
-
-        # 打通交付与库存：交付前校验成品库存是否足够
-        product_id = request.form.get('product_id')
-        if product_id:
-            product_id = int(product_id)
-            inv = db.execute('SELECT quantity FROM inventory WHERE product_id=? AND is_product=1', (product_id,)).fetchone()
-            current_qty = inv['quantity'] if inv else 0
-            if current_qty < qty:
-                product = db.execute('SELECT name FROM products WHERE id=?', (product_id,)).fetchone()
-                product_name = product['name'] if product else '该产品'
-                return validation_error(f'成品库存不足：{product_name}当前库存{current_qty}套，需交付{qty}套，请先入库')
-
-        delivery_no = f"DL{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
-        db.execute('''INSERT INTO deliveries (delivery_no, product_id, market_team, quantity, customer,
-                      purpose, delivery_date, status, feedback)
-                      VALUES (?,?,?,?,?,?,?,?,?)''',
-                   (delivery_no, product_id,
-                    request.form.get('market_team','').strip(), qty,
-                    request.form.get('customer',''), request.form.get('purpose',''),
-                    request.form.get('delivery_date', date.today().isoformat()),
-                    '已交付', request.form.get('feedback','')))
-        # 打通交付与库存：交付后自动扣减成品库存
-        if product_id and qty > 0:
-            db.execute('UPDATE inventory SET quantity=quantity-?, updated_at=datetime("now","localtime") WHERE product_id=? AND is_product=1 AND quantity>=?',
-                       (qty, product_id, qty))
-        db.commit()
-        log_operation('验证收益', '交付', f"交付单 {delivery_no} 客户: {request.form.get('customer','')}，成品库存已自动扣减")
-        return redirect(url_for('delivery_dashboard', tab='deliveries'))
-    return render_template('deliver_form.html', products=products)
-
-# ============================================================
-# 系统日志
-# ============================================================
-@app.route('/logs')
-def logs():
-    db = get_db()
-    logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 100').fetchall()
-    return render_template('logs.html', logs=logs)
-
-# ============================================================
-# 数据管理（导出/导入/数据字典）
-# ============================================================
-from data_utils import (BUSINESS_TABLES, TABLE_NAMES_CN, get_table_columns, get_table_count,
-                         export_table_csv, export_table_json, export_all_json, export_all_csv_zip,
-                         export_sql, import_table_csv, import_table_json, get_data_statistics,
-                         get_field_desc)
-from flask import Response, send_file
-
-# 注册模板全局函数
-app.jinja_env.globals['get_field_desc'] = get_field_desc
-
-@app.route('/approvals')
-def approval_center():
-    """统一审批中心（v10.3.6 暂下线：重定向工作台，原逻辑保留在下方注释便于恢复）
-    原实现：管理员查看/处理全部待审批状态变更申请
-    """
-    return redirect(url_for('index'))
-    # ===== 原实现（恢复时取消上方 return 并启用下方代码） =====
-    if not is_admin():
-        flash('仅管理员可访问审批中心', 'error')
-        return redirect(url_for('index'))
-    db = get_db()
-    items = [dict(r) for r in db.execute('SELECT a.*, u.display_name, u.username FROM approval_requests a LEFT JOIN users u ON a.requester_id=u.id ORDER BY a.created_at DESC').fetchall()]
-    for r in items:
-        try:
-            r['payload_dict'] = json.loads(r['payload']) if r['payload'] else {}
-        except Exception:
-            r['payload_dict'] = {}
-    pending = [r for r in items if r['status'] == '待审批']
-    done = [r for r in items if r['status'] != '待审批']
-    return render_template('approval_center.html', pending=pending, done=done)
-
-
-@app.route('/approvals/<int:req_id>/review', methods=['POST'])
-def approval_review(req_id):
-    """审批处理：管理员通过（落地状态变更）/ 驳回"""
-    if not is_admin():
-        return jsonify({'ok': False, 'msg': '仅管理员可审批'}), 403
-    approve = request.form.get('action') == 'approve'
-    comment = request.form.get('comment', '')
-    db = get_db()
-    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (req_id,)).fetchone()
-    if not row or row['status'] != '待审批':
-        return jsonify({'ok': False, 'msg': '申请不存在或已处理'})
-    if approve:
-        payload = json.loads(row['payload']) if row['payload'] else {}
-        handler = _APPROVAL_APPLY.get((row['plugin_id'], row['record_type']))
-        if handler:
-            try:
-                handler(db, row['record_id'], payload)
-            except Exception as e:
-                return jsonify({'ok': False, 'msg': '状态落地失败: ' + str(e)}), 500
-        db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
-                   ('已通过', session.get('user_id'), comment, req_id))
-        db.commit()
-        log_operation('审批中心', '通过', '#%d %s#%d 状态变更已落地' % (req_id, row['record_type'], row['record_id']),
-                      session.get('username', ''))
-        return jsonify({'ok': True, 'msg': '已通过并落地'})
-    db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
-               ('已驳回', session.get('user_id'), comment, req_id))
-    db.commit()
-    log_operation('审批中心', '驳回', '#%d %s#%d' % (req_id, row['record_type'], row['record_id']),
-                  session.get('username', ''))
-    return jsonify({'ok': True, 'msg': '已驳回'})
-
-
-@app.route('/data')
-def data_management():
-    """数据管理页面"""
-    db = get_db()
-    stats = get_data_statistics(db)
-    tables_info = []
-    for table in BUSINESS_TABLES:
-        tables_info.append({
-            'name': table,
-            'name_cn': TABLE_NAMES_CN.get(table, table),
-            'count': get_table_count(db, table),
-            'columns': get_table_columns(db, table)
-        })
-    return render_template('data_management.html', stats=stats, tables=tables_info)
-
-@app.route('/timeline')
-def timeline_view():
-    """跨团队协作时间线视图"""
-    db = get_db()
-    team_filter = request.args.get('team', '')
-    product_filter = request.args.get('product', '', type=int)
-
-    query = '''SELECT e.*, p.name as product_name, v.version_no
-               FROM timeline_events e
-               LEFT JOIN products p ON e.product_id = p.id
-               LEFT JOIN software_versions v ON e.version_id = v.id
-               WHERE 1=1'''
-    params = []
-    if team_filter:
-        query += ' AND e.team = ?'
-        params.append(team_filter)
-    if product_filter:
-        query += ' AND e.product_id = ?'
-        params.append(product_filter)
-    query += ' ORDER BY e.event_date ASC, e.id ASC'
-
-    events = db.execute(query, params).fetchall()
-    products = db.execute('SELECT id, name FROM products ORDER BY id').fetchall()
-    return render_template('timeline.html', events=events, products=products,
-                           team_filter=team_filter, product_filter=product_filter)
-
-@app.route('/data/export/json')
-def data_export_json():
-    """导出全库为结构化JSON（适合AI训练）"""
-    db = get_db()
-    json_content = export_all_json(db)
-    log_operation('数据管理', '导出', f'全库JSON导出，{len(json_content)}字节')
-    return Response(
-        json_content,
-        mimetype='application/json',
-        headers={'Content-Disposition': f'attachment; filename=business_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'}
-    )
-
-@app.route('/data/export/csv')
-def data_export_csv():
-    """导出全库为CSV压缩包（每表一个CSV）"""
-    db = get_db()
-    zip_content = export_all_csv_zip(db)
-    log_operation('数据管理', '导出', '全库CSV压缩包导出')
-    return Response(
-        zip_content,
-        mimetype='application/zip',
-        headers={'Content-Disposition': f'attachment; filename=business_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'}
-    )
-
-@app.route('/data/export/sql')
-def data_export_sql():
-    """导出全库为SQL备份"""
-    db = get_db()
-    sql_content = export_sql(db)
-    log_operation('数据管理', '导出', '全库SQL备份导出')
-    return Response(
-        sql_content,
-        mimetype='text/sql',
-        headers={'Content-Disposition': f'attachment; filename=business_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.sql'}
-    )
-
-@app.route('/data/export/<table_name>/<fmt>')
-def data_export_table(table_name, fmt):
-    """导出单表为CSV或JSON"""
-    if table_name not in BUSINESS_TABLES:
-        return validation_error(f'表名 {table_name} 不存在')
-    if fmt not in ('csv', 'json'):
-        return validation_error(f'不支持的格式: {fmt}')
-
-    db = get_db()
-    if fmt == 'csv':
-        content = export_table_csv(db, table_name)
-        mime = 'text/csv'
-        ext = 'csv'
-    else:
-        content = export_table_json(db, table_name)
-        mime = 'application/json'
-        ext = 'json'
-    log_operation('数据管理', '导出', f'单表导出: {table_name}.{ext}')
-    return Response(
-        content,
-        mimetype=mime,
-        headers={'Content-Disposition': f'attachment; filename={table_name}.{ext}'}
-    )
-
-@app.route('/data/import', methods=['GET', 'POST'])
-def data_import():
-    """导入数据（CSV/JSON）"""
-    if request.method == 'POST':
-        table_name = request.form.get('table_name')
-        if table_name not in BUSINESS_TABLES:
-            return validation_error('请选择有效的表名')
-
-        file = request.files.get('file')
-        if not file:
-            return validation_error('请选择要导入的文件')
-
-        filename = file.filename.lower()
-        content = file.read().decode('utf-8')
-
-        db = get_db()
-        try:
-            if filename.endswith('.csv'):
-                imported, errors = import_table_csv(db, table_name, content)
-            elif filename.endswith('.json'):
-                imported, errors = import_table_json(db, table_name, content)
-            else:
-                return validation_error('仅支持 .csv 或 .json 格式文件')
-
-            log_operation('数据管理', '导入', f'表 {table_name} 导入 {imported} 条记录')
-
-            result_msg = f'成功导入 {imported} 条记录到 {TABLE_NAMES_CN.get(table_name, table_name)}'
-            if errors:
-                result_msg += f'，{len(errors)} 条失败: {"; ".join(errors[:3])}'
-            return render_template('data_import_result.html', message=result_msg, success=True)
-        except Exception as e:
-            return render_template('data_import_result.html', message=f'导入失败: {str(e)}', success=False)
-
-    db = get_db()
-    tables = [{'name': t, 'name_cn': TABLE_NAMES_CN.get(t, t)} for t in BUSINESS_TABLES]
-    return render_template('data_import.html', tables=tables)
-
-@app.route('/data/dictionary')
-def data_dictionary():
-    """数据字典页面（供AI理解数据结构）"""
-    db = get_db()
-    tables = []
-    for table in BUSINESS_TABLES:
-        columns = get_table_columns(db, table)
-        count = get_table_count(db, table)
-        # 取前3条示例数据
-        samples = db.execute(f'SELECT * FROM {table} LIMIT 3').fetchall()
-        tables.append({
-            'name': table,
-            'name_cn': TABLE_NAMES_CN.get(table, table),
-            'count': count,
-            'columns': columns,
-            'samples': [dict(s) for s in samples]
-        })
-    return render_template('data_dictionary.html', tables=tables)
-
-# ============================================================
-# API接口（供后续扩展）
-# ============================================================
-@app.route('/api/stats')
-def api_stats():
-    db = get_db()
-    return jsonify({
-        'requirements': db.execute('SELECT COUNT(*) FROM requirements WHERE is_deleted=0').fetchone()[0],
-        'products': db.execute('SELECT COUNT(*) FROM products').fetchone()[0],
-        'production_orders': db.execute('SELECT COUNT(*) FROM production_orders').fetchone()[0],
-        'quality_inspections': db.execute('SELECT COUNT(*) FROM quality_inspections').fetchone()[0],
-        'deliveries': db.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0],
-    })
-
-@app.route('/api/global-search')
-def api_global_search():
-    """全局搜索API：跨模块搜索需求、Bug、任务、合同、设备、产品等"""
-    q = request.args.get('q', '').strip()
-    if len(q) < 2:
-        return jsonify({'success': False, 'results': []})
-    db = get_db()
-    results = []
-    like = f'%{q}%'
-    # 搜索需求
-    try:
-        reqs = db.execute('''SELECT id, title, customer, source_dept FROM requirements
-                             WHERE is_deleted=0 AND (title LIKE ? OR customer LIKE ? OR description LIKE ?) LIMIT 10''',
-                          (like, like, like)).fetchall()
-        for r in reqs:
-            results.append({
-                'type': 'requirement',
-                'title': r['title'],
-                'subtitle': r['customer'] or r['source_dept'] or '',
-                'url': f'/requirements/{r["id"]}'
-            })
-    except Exception:
-        pass
-    # 搜索Bug
-    try:
-        bugs = db.execute('''SELECT id, bug_no, title, status FROM bug_records
-                             WHERE title LIKE ? OR bug_no LIKE ? OR description LIKE ? LIMIT 10''',
-                         (like, like, like)).fetchall()
-        for b in bugs:
-            results.append({
-                'type': 'bug',
-                'title': f'{b["bug_no"]} - {b["title"]}',
-                'subtitle': b['status'] or '',
-                'url': f'/bugs/{b["id"]}'
-            })
-    except Exception:
-        pass
-    # 搜索开发任务
-    try:
-        tasks = db.execute('''SELECT id, task_name, assignee, status FROM dev_tasks
-                              WHERE task_name LIKE ? OR description LIKE ? LIMIT 10''',
-                           (like, like)).fetchall()
-        for t in tasks:
-            results.append({
-                'type': 'task',
-                'title': t['task_name'],
-                'subtitle': t['assignee'] or t['status'] or '',
-                'url': '/my-tasks/' + str(t['id'])
-            })
-    except Exception:
-        pass
-    # 搜索合同
-    try:
-        contracts = db.execute('''SELECT id, contract_no, supplier, contract_type FROM contracts
-                                  WHERE contract_no LIKE ? OR supplier LIKE ? LIMIT 10''',
-                               (like, like)).fetchall()
-        for c in contracts:
-            results.append({
-                'type': 'contract',
-                'title': f'{c["contract_no"]} - {c["supplier"]}',
-                'subtitle': c['contract_type'] or '',
-                'url': '/contracts'
-            })
-    except Exception:
-        pass
-    # 搜索设备
-    try:
-        devices = db.execute('''SELECT id, device_sn, customer, status FROM devices
-                                WHERE device_sn LIKE ? OR customer LIKE ? LIMIT 10''',
-                             (like, like)).fetchall()
-        for d in devices:
-            results.append({
-                'type': 'device',
-                'title': f'{d["device_sn"]} - {d["customer"]}',
-                'subtitle': d['status'] or '',
-                'url': '/device-center'
-            })
-    except Exception:
-        pass
-    # 搜索产品
-    try:
-        products = db.execute('''SELECT id, name, model, lifecycle_stage FROM products
-                                 WHERE name LIKE ? OR model LIKE ? LIMIT 10''',
-                              (like, like)).fetchall()
-        for p in products:
-            results.append({
-                'type': 'product',
-                'title': f'{p["name"]} ({p["model"]})',
-                'subtitle': p['lifecycle_stage'] or '',
-                'url': '/planning'
-            })
-    except Exception:
-        pass
-    # 搜索软件版本
-    try:
-        versions = db.execute('''SELECT id, version_no, version_name, status FROM software_versions
-                                 WHERE version_no LIKE ? OR version_name LIKE ? LIMIT 10''',
-                              (like, like)).fetchall()
-        for v in versions:
-            results.append({
-                'type': 'version',
-                'title': f'{v["version_no"]} - {v["version_name"] or ""}',
-                'subtitle': v['status'] or '',
-                'url': f'/planning/versions/{v["id"]}'
-            })
-    except Exception:
-        pass
-    # 搜索生产订单
-    try:
-        orders = db.execute('''SELECT id, order_no, supplier, status FROM production_orders
-                               WHERE order_no LIKE ? OR supplier LIKE ? LIMIT 10''',
-                            (like, like)).fetchall()
-        for o in orders:
-            results.append({
-                'type': 'order',
-                'title': f'{o["order_no"]} - {o["supplier"]}',
-                'subtitle': o['status'] or '',
-                'url': '/production'
-            })
-    except Exception:
-        pass
-    return jsonify({'success': True, 'results': results[:30]})
-
-# ============================================================
-# 反向规划模块1：软件版本规划（根据用户需求反向规划版本升级）
-# ============================================================
-@app.route('/planning/versions')
-def version_list():
-    """软件版本列表"""
-    db = get_db()
-    products = db.execute('SELECT id, name, model FROM products').fetchall()
-    search = request.args.get('search', '').strip()
-    status = request.args.get('status', '')
-    page = max(1, int(request.args.get('page', 1)))
-    per_page = 15
-    offset = (page - 1) * per_page
-    where = []
-    params = []
-    if status:
-        where.append('sv.status=?')
-        params.append(status)
-    if search:
-        where.append('(sv.version_no LIKE ? OR sv.version_name LIKE ? OR p.name LIKE ?)')
-        params.extend([f'%{search}%']*3)
-    where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-    total = db.execute(f'SELECT COUNT(*) FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id{where_sql}', params).fetchone()[0]
-    versions = db.execute(f'''SELECT sv.*, p.name as product_name, p.model,
-                             (SELECT COUNT(*) FROM dev_tasks dt WHERE dt.version_id = sv.id) as task_count,
-                             (SELECT COUNT(*) FROM bug_records br WHERE br.version_id = sv.id) as bug_count,
-                             (SELECT COUNT(*) FROM version_requirements vr WHERE vr.version_id = sv.id) as req_count
-                             FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id
-                             {where_sql} ORDER BY sv.planned_release_date ASC LIMIT ? OFFSET ?''',
-                             params + [per_page, offset]).fetchall()
-    total_pages = (total + per_page - 1) // per_page
-    return render_template('version_list.html', versions=versions, products=products,
-                           search=search, current_status=status, page=page, total_pages=total_pages, total=total)
-
-@app.route('/planning/versions/add', methods=['GET', 'POST'])
-def version_add():
-    """新增软件版本"""
-    db = get_db()
-    products = db.execute('SELECT id, name, model FROM products').fetchall()
-    requirements = db.execute('''SELECT id, title, source_dept, customer, description, quantity, priority, status, delivery_date, created_at
-                                 FROM requirements WHERE status IN ("已评审","进行中") AND is_deleted=0
-                                 ORDER BY CASE priority WHEN '高' THEN 1 WHEN '中' THEN 2 ELSE 3 END, created_at DESC''').fetchall()
-    if request.method == 'POST':
-        cursor = db.execute('''INSERT INTO software_versions (product_id, version_no, version_name, description, capabilities, planned_release_date, status)
-                      VALUES (?,?,?,?,?,?,?)''',
-                   (request.form.get('product_id'), request.form.get('version_no',''),
-                    request.form.get('version_name',''), request.form.get('description',''),
-                    request.form.get('capabilities',''), request.form.get('planned_release_date',''),
-                    request.form.get('status','规划中')))
-        vid = cursor.lastrowid
-        # 关联需求
-        req_ids = request.form.getlist('requirement_ids')
-        for rid in req_ids:
-            db.execute('INSERT INTO version_requirements (version_id, requirement_id, priority) VALUES (?,?,?)',
-                       (vid, rid, '中'))
-        db.commit()
-        log_operation('版本规划', '新增', f'新增版本 {request.form.get("version_no")}')
-        return redirect(url_for('version_detail', vid=vid))
-    return render_template('version_form.html', products=products, requirements=requirements, item=None)
-
-@app.route('/planning/versions/<int:vid>')
-def version_detail(vid):
-    """版本详情（含功能、开发任务、关联需求、Bug、测试用例）"""
-    db = get_db()
-    version = db.execute('''SELECT sv.*, p.name as product_name, p.model
-                            FROM software_versions sv LEFT JOIN products p ON sv.product_id=p.id
-                            WHERE sv.id=?''', (vid,)).fetchone()
-    if not version:
-        return validation_error('版本不存在')
-    tasks = db.execute('SELECT * FROM dev_tasks WHERE version_id=? ORDER BY priority, planned_start', (vid,)).fetchall()
-    linked_reqs = db.execute('''SELECT r.*, vr.priority as link_priority
-                                 FROM version_requirements vr
-                                 JOIN requirements r ON vr.requirement_id=r.id
-                                 WHERE vr.version_id=?''', (vid,)).fetchall()
-    bugs = db.execute('SELECT * FROM bug_records WHERE version_id=? ORDER BY created_at DESC', (vid,)).fetchall()
-    test_cases = db.execute('SELECT * FROM test_cases WHERE version_id=? ORDER BY created_at DESC', (vid,)).fetchall()
-    features = db.execute('SELECT * FROM version_features WHERE version_id=? ORDER BY priority, created_at', (vid,)).fetchall()
-    return render_template('version_detail.html', version=version, tasks=tasks,
-                           linked_reqs=linked_reqs, bugs=bugs, test_cases=test_cases, features=features)
-
-@app.route('/planning/versions/<int:vid>/status', methods=['POST'])
-def version_status_update(vid):
-    """版本状态人工流转（规划中→开发中→测试中→已发布，任意→已取消）"""
-    new_status = request.form.get('status', '')
-    valid = ['规划中', '开发中', '测试中', '已发布', '已取消']
-    if new_status not in valid:
-        return jsonify({'success': False, 'error': '无效的状态值'}), 400
-    db = get_db()
-    # v10.3.2 权限统一：普通用户提交审批
-    perm, aid = submit_status_change('planning', 'software_version', vid, new_status)
-    if perm == 'pending':
-        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
-    cur = db.execute('SELECT status FROM software_versions WHERE id=?', (vid,)).fetchone()
-    if not cur:
-        return jsonify({'success': False, 'error': '版本不存在'}), 404
-    old_status = cur['status']
-    if new_status == '已发布' and old_status != '已发布':
-        db.execute('''UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime')
-                      WHERE id=?''', (new_status, vid))
-    else:
-        db.execute('UPDATE software_versions SET status=? WHERE id=?', (new_status, vid))
-    db.commit()
-    log_operation('版本规划', '状态流转', f'版本ID {vid} 状态 {old_status} → {new_status}')
-    return jsonify({'success': True, 'status': new_status})
-
-@app.route('/planning/versions/<int:vid>/tasks/add', methods=['POST'])
-def version_task_add(vid):
-    """添加开发任务"""
-    db = get_db()
-    requirement_id = request.form.get('requirement_id')
-    requirement_id = int(requirement_id) if requirement_id else None
-    db.execute('''INSERT INTO dev_tasks (version_id, requirement_id, task_name, description, priority, status, assignee, planned_start, planned_finish)
-                  VALUES (?,?,?,?,?,?,?,?,?)''',
-               (vid, requirement_id, request.form.get('task_name',''), request.form.get('description',''),
-                request.form.get('priority','中'), '待开发', request.form.get('assignee',''),
-                request.form.get('planned_start',''), request.form.get('planned_finish','')))
-    db.commit()
-    log_operation('版本规划', '新增任务', f'版本ID {vid} 新增任务: {request.form.get("task_name")}')
-    return redirect(url_for('version_detail', vid=vid))
-
-@app.route('/planning/versions/<int:vid>/tasks/<int:tid>/status', methods=['POST'])
-def version_task_status(vid, tid):
-    """更新开发任务状态"""
-    new_status = request.form.get('status', '')
-    valid = ['待开发', '开发中', '已完成', '已取消']
-    if new_status not in valid:
-        return jsonify({'success': False}), 400
-    db = get_db()
-    # v10.3.2 权限统一：普通用户提交审批
-    perm, aid = submit_status_change('planning', 'dev_task', tid, new_status)
-    if perm == 'pending':
-        return jsonify({'success': True, 'pending': True, 'msg': '状态变更申请已提交，等待管理员审批'})
-    db.execute('UPDATE dev_tasks SET status=?, actual_finish=datetime("now","localtime") WHERE id=?',
-               (new_status, tid))
-    db.commit()
-    return jsonify({'success': True, 'status': new_status})
-
-# ============================================================
-# 反向规划模块2：Bug登记与流转（含根因分析闭环）
-# ============================================================
-@app.route('/bugs')
-def bug_list():
-    """Bug列表"""
-    db = get_db()
-    tab = request.args.get('tab', 'all')
-    query = '''SELECT b.*, p.name as product_name, sv.version_no
-               FROM bug_records b
-               LEFT JOIN products p ON b.product_id=p.id
-               LEFT JOIN software_versions sv ON b.version_id=sv.id'''
-    if tab == 'open':
-        query += " WHERE b.status NOT IN ('已关闭','已取消')"
-    elif tab == 'quality':
-        query += " WHERE b.is_quality_issue=1"
-    query += " ORDER BY b.created_at DESC"
-    bugs = db.execute(query).fetchall()
-    products = db.execute('SELECT id, name FROM products').fetchall()
-    return render_template('bug_list.html', bugs=bugs, tab=tab, products=products)
-
-@app.route('/bugs/add', methods=['GET', 'POST'])
-def bug_add():
-    """新增Bug"""
-    db = get_db()
-    products = db.execute('SELECT id, name FROM products').fetchall()
-    versions = db.execute('SELECT id, version_no, product_id FROM software_versions').fetchall()
-    if request.method == 'POST':
-        bug_no = f"BUG{datetime.now().strftime('%Y%m%d%H%M%S')}{random.randint(100,999)}"
-        cursor = db.execute('''INSERT INTO bug_records (bug_no, product_id, version_id, title, description,
-                              bug_type, severity, priority, status, reporter, assignee, discovered_at)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-                   (bug_no, request.form.get('product_id') or None, request.form.get('version_id') or None,
-                    request.form.get('title',''), request.form.get('description',''),
-                    request.form.get('bug_type','功能Bug'), request.form.get('severity','一般'),
-                    request.form.get('priority','中'), '新建',
-                    request.form.get('reporter',''), request.form.get('assignee',''),
-                    request.form.get('discovered_at','') or datetime.now().strftime('%Y-%m-%d')))
-        bid = cursor.lastrowid
-        db.execute('''INSERT INTO bug_workflow (bug_id, action, from_status, to_status, operator, comment)
-                      VALUES (?,?,?,?,?,?)''', (bid, '创建', None, '新建', request.form.get('reporter',''), 'Bug登记'))
-        db.commit()
-        log_operation('Bug管理', '新增', f'新增Bug {bug_no}: {request.form.get("title")}')
-        return redirect(url_for('bug_detail', bid=bid))
-    return render_template('bug_form.html', products=products, versions=versions)
-
-@app.route('/bugs/<int:bid>')
-def bug_detail(bid):
-    """Bug详情（含流转记录）"""
-    db = get_db()
-    bug = db.execute('''SELECT b.*, p.name as product_name, sv.version_no
-                        FROM bug_records b
-                        LEFT JOIN products p ON b.product_id=p.id
-                        LEFT JOIN software_versions sv ON b.version_id=sv.id
-                        WHERE b.id=?''', (bid,)).fetchone()
-    if not bug:
-        return validation_error('Bug不存在')
-    workflow = db.execute('SELECT * FROM bug_workflow WHERE bug_id=? ORDER BY created_at', (bid,)).fetchall()
-    return render_template('bug_detail.html', bug=bug, workflow=workflow)
-
-@app.route('/bugs/<int:bid>/update', methods=['POST'])
-def bug_update(bid):
-    """Bug状态流转（完整生命周期：新建→已分配→处理中→已修复→验证中→已关闭/重新打开，可取消）"""
-    new_status = request.form.get('status', '')
-    valid = ['新建', '已分配', '处理中', '已修复', '验证中', '已关闭', '重新打开', '已取消']
-    if new_status not in valid:
-        return validation_error('无效的状态')
-    db = get_db()
-    # v10.3.2 权限统一：普通用户提交审批（携带完整变更字段）
-    payload_extra = {}
-    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
-        v = request.form.get(f)
-        if v:
-            payload_extra[f] = v
-    perm, aid = submit_status_change('bug', 'bug', bid, new_status, payload_extra)
-    if perm == 'pending':
-        flash('状态变更申请已提交，等待管理员审批', 'info')
-        return redirect(url_for('bug_detail', bid=bid))
-    bug = db.execute('SELECT status FROM bug_records WHERE id=?', (bid,)).fetchone()
-    old_status = bug['status'] if bug else None
-    update_fields = ['status=?']
-    params = [new_status]
-    # 分配负责人时更新assignee
-    if new_status == '已分配' and request.form.get('assignee'):
-        update_fields.append('assignee=?')
-        params.append(request.form.get('assignee'))
-    # 提交修复时记录修复方案
-    if new_status == '已修复' and request.form.get('fix_solution'):
-        update_fields.append('fix_solution=?')
-        params.append(request.form.get('fix_solution'))
-    # 开始验证时记录验证结果（可选）
-    if new_status == '验证中' and request.form.get('test_result'):
-        update_fields.append('test_result=?')
-        params.append(request.form.get('test_result'))
-    # 关闭时记录关闭原因、根因分析、纠正措施、预防措施
-    if new_status == '已关闭':
-        update_fields.append('closed_at=datetime("now","localtime")')
-        if request.form.get('close_reason'):
-            update_fields.append('close_reason=?')
-            params.append(request.form.get('close_reason'))
-        if request.form.get('root_cause'):
-            update_fields.append('root_cause=?')
-            params.append(request.form.get('root_cause'))
-        if request.form.get('corrective_action'):
-            update_fields.append('corrective_action=?')
-            params.append(request.form.get('corrective_action'))
-        if request.form.get('prevention_measure'):
-            update_fields.append('prevention_measure=?')
-            params.append(request.form.get('prevention_measure'))
-    # 重新打开时清除关闭时间
-    if new_status == '重新打开':
-        update_fields.append('closed_at=NULL')
-        update_fields.append('close_reason=NULL')
-    # 取消时记录关闭时间和关闭原因
-    if new_status == '已取消':
-        update_fields.append('closed_at=datetime("now","localtime")')
-        if request.form.get('close_reason'):
-            update_fields.append('close_reason=?')
-            params.append(request.form.get('close_reason'))
-    params.append(bid)
-    db.execute(f'UPDATE bug_records SET {",".join(update_fields)} WHERE id=?', params)
-    # 记录流转历史（含修复方案、验证结果、关闭原因）
-    db.execute('''INSERT INTO bug_workflow (bug_id, action, from_status, to_status, operator, comment, fix_solution, test_result, close_reason)
-                  VALUES (?,?,?,?,?,?,?,?,?)''',
-               (bid, '状态变更', old_status, new_status,
-                request.form.get('operator','系统'), request.form.get('comment',''),
-                request.form.get('fix_solution'), request.form.get('test_result'),
-                request.form.get('close_reason')))
-    db.commit()
-    log_operation('Bug管理', '流转', f'BugID {bid} 状态从 {old_status} 变更为 {new_status}')
-    return redirect(url_for('bug_detail', bid=bid))
-
-@app.route('/bugs/<int:bid>/escalate', methods=['POST'])
-def bug_escalate(bid):
-    """Bug升级为质量问题"""
-    db = get_db()
-    db.execute('UPDATE bug_records SET is_quality_issue=1 WHERE id=?', (bid,))
-    db.execute('''INSERT INTO bug_workflow (bug_id, action, operator, comment)
-                  VALUES (?,?,?,?)''', (bid, '升级质量问题', request.form.get('operator','系统'),
-                request.form.get('reason','严重Bug，升级为质量问题进行根因分析')))
-    db.commit()
-    log_operation('Bug管理', '升级', f'BugID {bid} 升级为质量问题')
-    return redirect(url_for('bug_detail', bid=bid))
-
-# ============================================================
-# 反向规划模块3：生产排程与工序管理（含物料需求计划）
 # ============================================================
 @app.route('/production/schedules')
 def schedule_list():
@@ -3766,6 +2671,377 @@ def gantt_reset():
         return jsonify({'ok': True, 'data': data})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
+
+@app.route('/logs')
+def logs():
+    db = get_db()
+    logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 100').fetchall()
+    return render_template('logs.html', logs=logs)
+
+# ============================================================
+# 数据管理（导出/导入/数据字典）
+# ============================================================
+from data_utils import (BUSINESS_TABLES, TABLE_NAMES_CN, get_table_columns, get_table_count,
+                         export_table_csv, export_table_json, export_all_json, export_all_csv_zip,
+                         export_sql, import_table_csv, import_table_json, get_data_statistics,
+                         get_field_desc)
+from flask import Response, send_file
+
+# 注册模板全局函数
+app.jinja_env.globals['get_field_desc'] = get_field_desc
+
+@app.route('/approvals')
+def approval_center():
+    """统一审批中心（v10.3.6 暂下线：重定向工作台，原逻辑保留在下方注释便于恢复）
+    原实现：管理员查看/处理全部待审批状态变更申请
+    """
+    return redirect(url_for('index'))
+    # ===== 原实现（恢复时取消上方 return 并启用下方代码） =====
+    if not is_admin():
+        flash('仅管理员可访问审批中心', 'error')
+        return redirect(url_for('index'))
+    db = get_db()
+    items = [dict(r) for r in db.execute('SELECT a.*, u.display_name, u.username FROM approval_requests a LEFT JOIN users u ON a.requester_id=u.id ORDER BY a.created_at DESC').fetchall()]
+    for r in items:
+        try:
+            r['payload_dict'] = json.loads(r['payload']) if r['payload'] else {}
+        except Exception:
+            r['payload_dict'] = {}
+    pending = [r for r in items if r['status'] == '待审批']
+    done = [r for r in items if r['status'] != '待审批']
+    return render_template('approval_center.html', pending=pending, done=done)
+
+
+@app.route('/approvals/<int:req_id>/review', methods=['POST'])
+def approval_review(req_id):
+    """审批处理：管理员通过（落地状态变更）/ 驳回"""
+    if not is_admin():
+        return jsonify({'ok': False, 'msg': '仅管理员可审批'}), 403
+    approve = request.form.get('action') == 'approve'
+    comment = request.form.get('comment', '')
+    db = get_db()
+    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (req_id,)).fetchone()
+    if not row or row['status'] != '待审批':
+        return jsonify({'ok': False, 'msg': '申请不存在或已处理'})
+    if approve:
+        payload = json.loads(row['payload']) if row['payload'] else {}
+        handler = _APPROVAL_APPLY.get((row['plugin_id'], row['record_type']))
+        if handler:
+            try:
+                handler(db, row['record_id'], payload)
+            except Exception as e:
+                return jsonify({'ok': False, 'msg': '状态落地失败: ' + str(e)}), 500
+        db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
+                   ('已通过', session.get('user_id'), comment, req_id))
+        db.commit()
+        log_operation('审批中心', '通过', '#%d %s#%d 状态变更已落地' % (req_id, row['record_type'], row['record_id']),
+                      session.get('username', ''))
+        return jsonify({'ok': True, 'msg': '已通过并落地'})
+    db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=datetime("now","localtime") WHERE id=?',
+               ('已驳回', session.get('user_id'), comment, req_id))
+    db.commit()
+    log_operation('审批中心', '驳回', '#%d %s#%d' % (req_id, row['record_type'], row['record_id']),
+                  session.get('username', ''))
+    return jsonify({'ok': True, 'msg': '已驳回'})
+
+
+@app.route('/data')
+def data_management():
+    """数据管理页面"""
+    db = get_db()
+    stats = get_data_statistics(db)
+    tables_info = []
+    for table in BUSINESS_TABLES:
+        tables_info.append({
+            'name': table,
+            'name_cn': TABLE_NAMES_CN.get(table, table),
+            'count': get_table_count(db, table),
+            'columns': get_table_columns(db, table)
+        })
+    return render_template('data_management.html', stats=stats, tables=tables_info)
+
+@app.route('/timeline')
+def timeline_view():
+    """跨团队协作时间线视图"""
+    db = get_db()
+    team_filter = request.args.get('team', '')
+    product_filter = request.args.get('product', '', type=int)
+
+    query = '''SELECT e.*, p.name as product_name, v.version_no
+               FROM timeline_events e
+               LEFT JOIN products p ON e.product_id = p.id
+               LEFT JOIN software_versions v ON e.version_id = v.id
+               WHERE 1=1'''
+    params = []
+    if team_filter:
+        query += ' AND e.team = ?'
+        params.append(team_filter)
+    if product_filter:
+        query += ' AND e.product_id = ?'
+        params.append(product_filter)
+    query += ' ORDER BY e.event_date ASC, e.id ASC'
+
+    events = db.execute(query, params).fetchall()
+    products = db.execute('SELECT id, name FROM products ORDER BY id').fetchall()
+    return render_template('timeline.html', events=events, products=products,
+                           team_filter=team_filter, product_filter=product_filter)
+
+@app.route('/data/export/json')
+def data_export_json():
+    """导出全库为结构化JSON（适合AI训练）"""
+    db = get_db()
+    json_content = export_all_json(db)
+    log_operation('数据管理', '导出', f'全库JSON导出，{len(json_content)}字节')
+    return Response(
+        json_content,
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename=business_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'}
+    )
+
+@app.route('/data/export/csv')
+def data_export_csv():
+    """导出全库为CSV压缩包（每表一个CSV）"""
+    db = get_db()
+    zip_content = export_all_csv_zip(db)
+    log_operation('数据管理', '导出', '全库CSV压缩包导出')
+    return Response(
+        zip_content,
+        mimetype='application/zip',
+        headers={'Content-Disposition': f'attachment; filename=business_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'}
+    )
+
+@app.route('/data/export/sql')
+def data_export_sql():
+    """导出全库为SQL备份"""
+    db = get_db()
+    sql_content = export_sql(db)
+    log_operation('数据管理', '导出', '全库SQL备份导出')
+    return Response(
+        sql_content,
+        mimetype='text/sql',
+        headers={'Content-Disposition': f'attachment; filename=business_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.sql'}
+    )
+
+@app.route('/data/export/<table_name>/<fmt>')
+def data_export_table(table_name, fmt):
+    """导出单表为CSV或JSON"""
+    if table_name not in BUSINESS_TABLES:
+        return validation_error(f'表名 {table_name} 不存在')
+    if fmt not in ('csv', 'json'):
+        return validation_error(f'不支持的格式: {fmt}')
+
+    db = get_db()
+    if fmt == 'csv':
+        content = export_table_csv(db, table_name)
+        mime = 'text/csv'
+        ext = 'csv'
+    else:
+        content = export_table_json(db, table_name)
+        mime = 'application/json'
+        ext = 'json'
+    log_operation('数据管理', '导出', f'单表导出: {table_name}.{ext}')
+    return Response(
+        content,
+        mimetype=mime,
+        headers={'Content-Disposition': f'attachment; filename={table_name}.{ext}'}
+    )
+
+@app.route('/data/import', methods=['GET', 'POST'])
+def data_import():
+    """导入数据（CSV/JSON）"""
+    if request.method == 'POST':
+        table_name = request.form.get('table_name')
+        if table_name not in BUSINESS_TABLES:
+            return validation_error('请选择有效的表名')
+
+        file = request.files.get('file')
+        if not file:
+            return validation_error('请选择要导入的文件')
+
+        filename = file.filename.lower()
+        content = file.read().decode('utf-8')
+
+        db = get_db()
+        try:
+            if filename.endswith('.csv'):
+                imported, errors = import_table_csv(db, table_name, content)
+            elif filename.endswith('.json'):
+                imported, errors = import_table_json(db, table_name, content)
+            else:
+                return validation_error('仅支持 .csv 或 .json 格式文件')
+
+            log_operation('数据管理', '导入', f'表 {table_name} 导入 {imported} 条记录')
+
+            result_msg = f'成功导入 {imported} 条记录到 {TABLE_NAMES_CN.get(table_name, table_name)}'
+            if errors:
+                result_msg += f'，{len(errors)} 条失败: {"; ".join(errors[:3])}'
+            return render_template('data_import_result.html', message=result_msg, success=True)
+        except Exception as e:
+            return render_template('data_import_result.html', message=f'导入失败: {str(e)}', success=False)
+
+    db = get_db()
+    tables = [{'name': t, 'name_cn': TABLE_NAMES_CN.get(t, t)} for t in BUSINESS_TABLES]
+    return render_template('data_import.html', tables=tables)
+
+@app.route('/data/dictionary')
+def data_dictionary():
+    """数据字典页面（供AI理解数据结构）"""
+    db = get_db()
+    tables = []
+    for table in BUSINESS_TABLES:
+        columns = get_table_columns(db, table)
+        count = get_table_count(db, table)
+        # 取前3条示例数据
+        samples = db.execute(f'SELECT * FROM {table} LIMIT 3').fetchall()
+        tables.append({
+            'name': table,
+            'name_cn': TABLE_NAMES_CN.get(table, table),
+            'count': count,
+            'columns': columns,
+            'samples': [dict(s) for s in samples]
+        })
+    return render_template('data_dictionary.html', tables=tables)
+
+# ============================================================
+# API接口（供后续扩展）
+# ============================================================
+@app.route('/api/stats')
+def api_stats():
+    db = get_db()
+    return jsonify({
+        'requirements': db.execute('SELECT COUNT(*) FROM requirements WHERE is_deleted=0').fetchone()[0],
+        'products': db.execute('SELECT COUNT(*) FROM products').fetchone()[0],
+        'production_orders': db.execute('SELECT COUNT(*) FROM production_orders').fetchone()[0],
+        'quality_inspections': db.execute('SELECT COUNT(*) FROM quality_inspections').fetchone()[0],
+        'deliveries': db.execute('SELECT COUNT(*) FROM deliveries').fetchone()[0],
+    })
+
+@app.route('/api/global-search')
+def api_global_search():
+    """全局搜索API：跨模块搜索需求、Bug、任务、合同、设备、产品等"""
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify({'success': False, 'results': []})
+    db = get_db()
+    results = []
+    like = f'%{q}%'
+    # 搜索需求
+    try:
+        reqs = db.execute('''SELECT id, title, customer, source_dept FROM requirements
+                             WHERE is_deleted=0 AND (title LIKE ? OR customer LIKE ? OR description LIKE ?) LIMIT 10''',
+                          (like, like, like)).fetchall()
+        for r in reqs:
+            results.append({
+                'type': 'requirement',
+                'title': r['title'],
+                'subtitle': r['customer'] or r['source_dept'] or '',
+                'url': f'/requirements/{r["id"]}'
+            })
+    except Exception:
+        pass
+    # 搜索Bug
+    try:
+        bugs = db.execute('''SELECT id, bug_no, title, status FROM bug_records
+                             WHERE title LIKE ? OR bug_no LIKE ? OR description LIKE ? LIMIT 10''',
+                         (like, like, like)).fetchall()
+        for b in bugs:
+            results.append({
+                'type': 'bug',
+                'title': f'{b["bug_no"]} - {b["title"]}',
+                'subtitle': b['status'] or '',
+                'url': f'/bugs/{b["id"]}'
+            })
+    except Exception:
+        pass
+    # 搜索开发任务
+    try:
+        tasks = db.execute('''SELECT id, task_name, assignee, status FROM dev_tasks
+                              WHERE task_name LIKE ? OR description LIKE ? LIMIT 10''',
+                           (like, like)).fetchall()
+        for t in tasks:
+            results.append({
+                'type': 'task',
+                'title': t['task_name'],
+                'subtitle': t['assignee'] or t['status'] or '',
+                'url': '/my-tasks/' + str(t['id'])
+            })
+    except Exception:
+        pass
+    # 搜索合同
+    try:
+        contracts = db.execute('''SELECT id, contract_no, supplier, contract_type FROM contracts
+                                  WHERE contract_no LIKE ? OR supplier LIKE ? LIMIT 10''',
+                               (like, like)).fetchall()
+        for c in contracts:
+            results.append({
+                'type': 'contract',
+                'title': f'{c["contract_no"]} - {c["supplier"]}',
+                'subtitle': c['contract_type'] or '',
+                'url': '/contracts'
+            })
+    except Exception:
+        pass
+    # 搜索设备
+    try:
+        devices = db.execute('''SELECT id, device_sn, customer, status FROM devices
+                                WHERE device_sn LIKE ? OR customer LIKE ? LIMIT 10''',
+                             (like, like)).fetchall()
+        for d in devices:
+            results.append({
+                'type': 'device',
+                'title': f'{d["device_sn"]} - {d["customer"]}',
+                'subtitle': d['status'] or '',
+                'url': '/device-center'
+            })
+    except Exception:
+        pass
+    # 搜索产品
+    try:
+        products = db.execute('''SELECT id, name, model, lifecycle_stage FROM products
+                                 WHERE name LIKE ? OR model LIKE ? LIMIT 10''',
+                              (like, like)).fetchall()
+        for p in products:
+            results.append({
+                'type': 'product',
+                'title': f'{p["name"]} ({p["model"]})',
+                'subtitle': p['lifecycle_stage'] or '',
+                'url': '/planning'
+            })
+    except Exception:
+        pass
+    # 搜索软件版本
+    try:
+        versions = db.execute('''SELECT id, version_no, version_name, status FROM software_versions
+                                 WHERE version_no LIKE ? OR version_name LIKE ? LIMIT 10''',
+                              (like, like)).fetchall()
+        for v in versions:
+            results.append({
+                'type': 'version',
+                'title': f'{v["version_no"]} - {v["version_name"] or ""}',
+                'subtitle': v['status'] or '',
+                'url': f'/planning/versions/{v["id"]}'
+            })
+    except Exception:
+        pass
+    # 搜索生产订单
+    try:
+        orders = db.execute('''SELECT id, order_no, supplier, status FROM production_orders
+                               WHERE order_no LIKE ? OR supplier LIKE ? LIMIT 10''',
+                            (like, like)).fetchall()
+        for o in orders:
+            results.append({
+                'type': 'order',
+                'title': f'{o["order_no"]} - {o["supplier"]}',
+                'subtitle': o['status'] or '',
+                'url': '/production'
+            })
+    except Exception:
+        pass
+    return jsonify({'success': True, 'results': results[:30]})
+
+# ============================================================
+# 反向规划模块1：软件版本规划（根据用户需求反向规划版本升级）
+# ============================================================
 
 if __name__ == '__main__':
     # 初始化数据库（CREATE TABLE IF NOT EXISTS，兼容旧数据库）

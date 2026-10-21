@@ -2,7 +2,7 @@
 {% block title %}{{ '编辑' if p else '新建' }}WBS项目 - 业务高效运转系统{% endblock %}
 {% block content %}
 <div style="margin-bottom:16px;">
-    <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+    <a href="{{ url_for('wbs.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
 </div>
 <div class="page-header">
     <h1>{% if p %}✏️ 编辑项目{% else %}➕ 新建WBS项目{% endif %}</h1>
@@ -69,7 +69,7 @@
     <!-- 按钮 -->
     <div style="display:flex;gap:12px;padding-top:20px;border-top:1px solid #eef0f4;">
         <button type="submit" style="padding:10px 32px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;">保存项目</button>
-        <a href="{{ url_for('ext.wbs_projects') }}" style="padding:10px 24px;background:#f5f7fa;border:1px solid #d0d5dd;border-radius:6px;text-decoration:none;color:#444;font-size:14px;">取消</a>
+        <a href="{{ url_for('wbs.wbs_projects') }}" style="padding:10px 24px;background:#f5f7fa;border:1px solid #d0d5dd;border-radius:6px;text-decoration:none;color:#444;font-size:14px;">取消</a>
     </div>
 </form>
 {% endblock %}

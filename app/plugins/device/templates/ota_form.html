@@ -2,9 +2,9 @@
 {% set page_title = '上传OTA版本' %}
 {% block ext_content %}
 <div class="module-tabs">
-    <a href="{{ url_for('ext.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
-    <a href="{{ url_for('ext.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
-    <a href="{{ url_for('ext.ota_list') }}" class="module-tab">📦 OTA版本</a>
+    <a href="{{ url_for('device.device_center') }}" class="module-tab">📡 设备运维与OTA</a>
+    <a href="{{ url_for('device.device_list') }}" class="module-tab active">🖥️ 设备监控</a>
+    <a href="{{ url_for('device.ota_list') }}" class="module-tab">📦 OTA版本</a>
 </div>
 <div class="panel">
     <form method="post">
@@ -62,7 +62,7 @@
         </div>
         <div class="step-actions">
             <button type="submit" class="btn btn-primary">上传版本（测试中）</button>
-            <a href="{{ url_for('ext.ota_list') }}" class="btn btn-secondary">取消</a>
+            <a href="{{ url_for('device.ota_list') }}" class="btn btn-secondary">取消</a>
         </div>
     </form>
 </div>

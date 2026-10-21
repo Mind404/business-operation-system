@@ -44,11 +44,11 @@
                     <span class="qi-icon">👑</span>
                     <span class="qi-text">总览</span>
                 </a>
-                <a href="{{ url_for('requirements_list') }}" class="quick-item q-green">
+                <a href="{{ url_for('requirements.requirements_list') }}" class="quick-item q-green">
                     <span class="qi-icon">📋</span>
                     <span class="qi-text">需求数据库</span>
                 </a>
-                <a href="{{ url_for('version_list') }}" class="quick-item q-orange">
+                <a href="{{ url_for('planning.version_list') }}" class="quick-item q-orange">
                     <span class="qi-icon">🔖</span>
                     <span class="qi-text">版本规划</span>
                 </a>
@@ -58,11 +58,11 @@
                 </a>
 
                 {% elif current_role == 'product' %}
-                <a href="{{ url_for('requirements_list') }}" class="quick-item q-blue">
+                <a href="{{ url_for('requirements.requirements_list') }}" class="quick-item q-blue">
                     <span class="qi-icon">📋</span>
                     <span class="qi-text">需求评审</span>
                 </a>
-                <a href="{{ url_for('version_list') }}" class="quick-item q-green">
+                <a href="{{ url_for('planning.version_list') }}" class="quick-item q-green">
                     <span class="qi-icon">🔖</span>
                     <span class="qi-text">版本规划</span>
                 </a>
@@ -70,45 +70,45 @@
                     <span class="qi-icon">🏭</span>
                     <span class="qi-text">生产管理</span>
                 </a>
-                <a href="{{ url_for('ext.contract_list') }}" class="quick-item q-purple">
+                <a href="{{ url_for('contract.contract_list') }}" class="quick-item q-purple">
                     <span class="qi-icon">📄</span>
                     <span class="qi-text">合同跟进</span>
                 </a>
 
                 {% elif current_role == 'dev_test' %}
-                <a href="{{ url_for('version_list') }}" class="quick-item q-blue">
+                <a href="{{ url_for('planning.version_list') }}" class="quick-item q-blue">
                     <span class="qi-icon">💻</span>
                     <span class="qi-text">开发任务</span>
                 </a>
-                <a href="{{ url_for('bug_list') }}" class="quick-item q-red">
+                <a href="{{ url_for('bugs.bug_list') }}" class="quick-item q-red">
                     <span class="qi-icon">🐛</span>
                     <span class="qi-text">Bug处理</span>
                 </a>
-                <a href="{{ url_for('ext.test_case_list') }}" class="quick-item q-green">
+                <a href="{{ url_for('test.test_case_list') }}" class="quick-item q-green">
                     <span class="qi-icon">🧪</span>
                     <span class="qi-text">测试用例</span>
                 </a>
 
                 {% elif current_role == 'quality' %}
-                <a href="{{ url_for('bug_list') }}" class="quick-item q-red">
+                <a href="{{ url_for('bugs.bug_list') }}" class="quick-item q-red">
                     <span class="qi-icon">🐛</span>
                     <span class="qi-text">Bug巡检</span>
                 </a>
-                <a href="{{ url_for('ext.delivery_plan_list') }}" class="quick-item q-green">
+                <a href="{{ url_for('delivery.delivery_plan_list') }}" class="quick-item q-green">
                     <span class="qi-icon">📦</span>
                     <span class="qi-text">交付跟踪</span>
                 </a>
 
                 {% elif current_role == 'delivery' %}
-                <a href="{{ url_for('requirements_list') }}" class="quick-item q-blue">
+                <a href="{{ url_for('requirements.requirements_list') }}" class="quick-item q-blue">
                     <span class="qi-icon">📋</span>
                     <span class="qi-text">需求收集</span>
                 </a>
-                <a href="{{ url_for('ext.delivery_plan_list') }}" class="quick-item q-green">
+                <a href="{{ url_for('delivery.delivery_plan_list') }}" class="quick-item q-green">
                     <span class="qi-icon">🚚</span>
                     <span class="qi-text">交付计划</span>
                 </a>
-                <a href="{{ url_for('ext.device_list') }}" class="quick-item q-cyan">
+                <a href="{{ url_for('device.device_list') }}" class="quick-item q-cyan">
                     <span class="qi-icon">📡</span>
                     <span class="qi-text">设备运维</span>
                 </a>

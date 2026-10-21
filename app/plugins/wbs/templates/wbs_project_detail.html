@@ -18,7 +18,7 @@
     .status-select.locked{opacity:.5;cursor:default;}
 </style>
 <div style="margin-bottom:14px;">
-    <a href="{{ url_for('ext.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+    <a href="{{ url_for('wbs.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
 </div>
 
 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
@@ -31,11 +31,11 @@
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         {% if current_role == 'admin' %}
-        <a href="{{ url_for('ext.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
+        <a href="{{ url_for('wbs.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
         {% endif %}
         <button onclick="tryImport()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
-        <a href="{{ url_for('ext.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
-        <a href="{{ url_for('ext.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
+        <a href="{{ url_for('wbs.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
+        <a href="{{ url_for('wbs.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
         {% if current_role == 'admin' and pending_count > 0 %}
         <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
             ✓ 通过
@@ -80,7 +80,7 @@
 </div>
 {% endif %}
 
-<form method="post" action="{{ url_for('ext.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:none;">
+<form method="post" action="{{ url_for('wbs.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:none;">
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
 
@@ -175,7 +175,7 @@
                 {% set fname = f.split('/')[-1] %}
                 {% set show_name = fname[15:] if (fname|length >= 15 and fname[:14].isdigit() and fname[14:15] == '_') else fname %}
                 <div style="display:flex;align-items:center;justify-content:center;gap:3px;">
-                    <a href="{{ url_for('ext.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
+                    <a href="{{ url_for('wbs.wbs_download', filename=f) }}" download="{{ show_name }}" title="{{ show_name }}" style="display:block;font-size:11px;color:#2563eb;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📎{{ show_name }}</a>
                     {% if current_role=='admin' or t.approval_status=='已通过' %}
                     <button onclick="delFile({{ t.id }}, {{ f|tojson }}, {{ show_name|tojson }})" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;line-height:1;padding:0 1px;" title="删除">✕</button>
                     {% endif %}
@@ -194,7 +194,7 @@
             </td>
             {% if current_role == 'admin' %}
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
-                <form method="post" action="{{ url_for('ext.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
+                <form method="post" action="{{ url_for('wbs.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
                     <button type="submit" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;">删</button>
                 </form>
             </td>

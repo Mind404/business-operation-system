@@ -4,7 +4,7 @@
 
 {% block header_actions %}
 {% if can_write('requirements') %}
-<a href="{{ url_for('requirement_add') }}" class="btn btn-primary">+ 新增需求</a>
+<a href="{{ url_for('requirements.requirement_add') }}" class="btn btn-primary">+ 新增需求</a>
 <div class="batch-actions">
     <a href="{{ url_for('download_template', table_name='requirements') }}" class="btn btn-outline" title="下载Excel导入模板">📥 模板</a>
     <form method="POST" action="{{ url_for('excel_import', table_name='requirements') }}" enctype="multipart/form-data" style="display:inline;">
@@ -19,7 +19,7 @@
 
 {% block content %}
 <div class="module-tabs">
-    <a href="{{ url_for('requirements_list') }}" class="module-tab {% if request.endpoint.startswith('requirements_') %}active{% endif %}">📋 需求数据库</a>
+    <a href="{{ url_for('requirements.requirements_list') }}" class="module-tab {% if request.endpoint.startswith('requirements.') %}active{% endif %}">📋 需求数据库</a>
 </div>
 
 <!-- 业务逻辑说明：两类需求的性质区分 -->
@@ -47,33 +47,33 @@
 <!-- 需求类型筛选（4类需求） -->
 <div class="filter-bar" style="margin-bottom: 8px;">
     <span style="font-size: 13px; color: #6b7280; margin-right: 8px; font-weight: 500;">需求类型：</span>
-    <a href="{{ url_for('requirements_list', status=current_status, search=search) }}" class="filter-tag {% if not current_type %}active{% endif %}">全部 ({{ total }})</a>
-    <a href="{{ url_for('requirements_list', req_type='用户需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '用户需求' %}active{% endif %}" style="border-left: 3px solid #3b82f6;">👤 用户需求 ({{ type_count.get('用户需求', 0) }})</a>
-    <a href="{{ url_for('requirements_list', req_type='集团系统侧需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '集团系统侧需求' %}active{% endif %}" style="border-left: 3px solid #8b5cf6;">🖥️ 集团系统侧 ({{ type_count.get('集团系统侧需求', 0) }})</a>
-    <a href="{{ url_for('requirements_list', req_type='集团应用侧需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '集团应用侧需求' %}active{% endif %}" style="border-left: 3px solid #10b981;">📡 集团应用侧 ({{ type_count.get('集团应用侧需求', 0) }})</a>
-    <a href="{{ url_for('requirements_list', req_type='其他', status=current_status, search=search) }}" class="filter-tag {% if current_type == '其他' %}active{% endif %}" style="border-left: 3px solid #f59e0b;">📌 其他 ({{ type_count.get('其他', 0) }})</a>
+    <a href="{{ url_for('requirements.requirements_list', status=current_status, search=search) }}" class="filter-tag {% if not current_type %}active{% endif %}">全部 ({{ total }})</a>
+    <a href="{{ url_for('requirements.requirements_list', req_type='用户需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '用户需求' %}active{% endif %}" style="border-left: 3px solid #3b82f6;">👤 用户需求 ({{ type_count.get('用户需求', 0) }})</a>
+    <a href="{{ url_for('requirements.requirements_list', req_type='集团系统侧需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '集团系统侧需求' %}active{% endif %}" style="border-left: 3px solid #8b5cf6;">🖥️ 集团系统侧 ({{ type_count.get('集团系统侧需求', 0) }})</a>
+    <a href="{{ url_for('requirements.requirements_list', req_type='集团应用侧需求', status=current_status, search=search) }}" class="filter-tag {% if current_type == '集团应用侧需求' %}active{% endif %}" style="border-left: 3px solid #10b981;">📡 集团应用侧 ({{ type_count.get('集团应用侧需求', 0) }})</a>
+    <a href="{{ url_for('requirements.requirements_list', req_type='其他', status=current_status, search=search) }}" class="filter-tag {% if current_type == '其他' %}active{% endif %}" style="border-left: 3px solid #f59e0b;">📌 其他 ({{ type_count.get('其他', 0) }})</a>
 </div>
 
 <!-- 搜索 + 状态筛选 同一行（搜索在前，状态在后） -->
 <div class="toolbar-row">
     <div class="search-bar">
-        <form method="get" action="{{ url_for('requirements_list') }}">
+        <form method="get" action="{{ url_for('requirements.requirements_list') }}">
             {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
             {% if current_type %}<input type="hidden" name="req_type" value="{{ current_type }}">{% endif %}
             <input type="text" name="search" class="search-input" placeholder="搜索需求标题、客户、来源部门、产品型号、描述..." value="{{ search }}">
             <button type="submit" class="search-btn">搜索</button>
             {% if search %}
-            <a href="{{ url_for('requirements_list', status=current_status, req_type=current_type) }}" class="search-clear">清除</a>
+            <a href="{{ url_for('requirements.requirements_list', status=current_status, req_type=current_type) }}" class="search-clear">清除</a>
             {% endif %}
         </form>
     </div>
     <div class="filter-bar status-filter">
         <span class="status-filter-label">状态：</span>
-        <a href="{{ url_for('requirements_list', req_type=current_type, search=search) }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
-        <a href="{{ url_for('requirements_list', req_type=current_type, status='待评审', search=search) }}" class="filter-tag {% if current_status == '待评审' %}active{% endif %}">待评审</a>
-        <a href="{{ url_for('requirements_list', req_type=current_type, status='已评审', search=search) }}" class="filter-tag {% if current_status == '已评审' %}active{% endif %}">已评审</a>
-        <a href="{{ url_for('requirements_list', req_type=current_type, status='进行中', search=search) }}" class="filter-tag {% if current_status == '进行中' %}active{% endif %}">进行中</a>
-        <a href="{{ url_for('requirements_list', req_type=current_type, status='已完成', search=search) }}" class="filter-tag {% if current_status == '已完成' %}active{% endif %}">已完成</a>
+        <a href="{{ url_for('requirements.requirements_list', req_type=current_type, search=search) }}" class="filter-tag {% if not current_status %}active{% endif %}">全部</a>
+        <a href="{{ url_for('requirements.requirements_list', req_type=current_type, status='待评审', search=search) }}" class="filter-tag {% if current_status == '待评审' %}active{% endif %}">待评审</a>
+        <a href="{{ url_for('requirements.requirements_list', req_type=current_type, status='已评审', search=search) }}" class="filter-tag {% if current_status == '已评审' %}active{% endif %}">已评审</a>
+        <a href="{{ url_for('requirements.requirements_list', req_type=current_type, status='进行中', search=search) }}" class="filter-tag {% if current_status == '进行中' %}active{% endif %}">进行中</a>
+        <a href="{{ url_for('requirements.requirements_list', req_type=current_type, status='已完成', search=search) }}" class="filter-tag {% if current_status == '已完成' %}active{% endif %}">已完成</a>
         <span class="search-count">共 {{ total }} 条</span>
     </div>
 </div>
@@ -155,10 +155,10 @@
                     </select>
                 </td>
                 <td class="action-cell">
-                    <a href="{{ url_for('requirement_detail', req_id=item.id) }}" class="btn btn-sm btn-info" title="查看详情（端到端追溯）">详情</a>
+                    <a href="{{ url_for('requirements.requirement_detail', req_id=item.id) }}" class="btn btn-sm btn-info" title="查看详情（端到端追溯）">详情</a>
                     {% if can_write('requirements') %}
-                    <a href="{{ url_for('requirement_edit', req_id=item.id) }}" class="btn btn-sm btn-outline">编辑</a>
-                    <form method="POST" action="{{ url_for('requirement_delete', req_id=item.id) }}" style="display:inline;" onsubmit="return confirmDelete('{{ item.title }}')">
+                    <a href="{{ url_for('requirements.requirement_edit', req_id=item.id) }}" class="btn btn-sm btn-outline">编辑</a>
+                    <form method="POST" action="{{ url_for('requirements.requirement_delete', req_id=item.id) }}" style="display:inline;" onsubmit="return confirmDelete('{{ item.title }}')">
                         <button type="submit" class="btn btn-sm btn-danger">删除</button>
                     </form>
                     {% endif %}
@@ -177,19 +177,19 @@
 {% if total_pages > 1 %}
 <div class="pagination">
     {% if page > 1 %}
-    <a href="{{ url_for('requirements_list', page=page-1, status=current_status, req_type=current_type, search=search) }}" class="page-btn">上一页</a>
+    <a href="{{ url_for('requirements.requirements_list', page=page-1, status=current_status, req_type=current_type, search=search) }}" class="page-btn">上一页</a>
     {% endif %}
     {% for p in range(1, total_pages+1) %}
         {% if p == page %}
         <span class="page-btn page-active">{{ p }}</span>
         {% elif p <= 3 or p > total_pages-3 or (p >= page-1 and p <= page+1) %}
-        <a href="{{ url_for('requirements_list', page=p, status=current_status, req_type=current_type, search=search) }}" class="page-btn">{{ p }}</a>
+        <a href="{{ url_for('requirements.requirements_list', page=p, status=current_status, req_type=current_type, search=search) }}" class="page-btn">{{ p }}</a>
         {% elif p == 4 or p == total_pages-3 %}
         <span class="page-ellipsis">...</span>
         {% endif %}
     {% endfor %}
     {% if page < total_pages %}
-    <a href="{{ url_for('requirements_list', page=page+1, status=current_status, req_type=current_type, search=search) }}" class="page-btn">下一页</a>
+    <a href="{{ url_for('requirements.requirements_list', page=page+1, status=current_status, req_type=current_type, search=search) }}" class="page-btn">下一页</a>
     {% endif %}
 </div>
 {% endif %}
