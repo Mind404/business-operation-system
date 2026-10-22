@@ -91,7 +91,7 @@ print('=' * 60)
 r = s.get(f'{BASE}/api/ai/health')
 try:
     h = r.json()
-    check('AI health', r.status_code == 200 and 'ollama_available' in h, f'{h}')
+    check('AI health', r.status_code == 200 and ('mode' in h) and ('model' in h), f'{h}')
 except Exception:
     check('AI health', False, r.text[:200])
 r = s.get(f'{BASE}/api/ai/alert-summary')

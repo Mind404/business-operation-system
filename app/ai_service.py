@@ -48,7 +48,14 @@ def _db():
 # ============================================================
 def _get_config():
     """读取 AI 配置（管理员在 /admin/ai-settings 维护）"""
-    cfg = {'mode': 'local', 'base_url': '', 'api_key': '', 'model': DEFAULT_MODEL, 'enabled': '1'}
+    cfg = {
+        'mode': 'local',          # local | remote
+        'provider_type': 'ollama',  # 本地模式服务类型：ollama（原生）| openai_compat（LM Studio/vLLM 等）
+        'base_url': '',           # 本地默认由 provider_type 推导；远程必填
+        'api_key': '',
+        'model': DEFAULT_MODEL,
+        'enabled': '1',
+    }
     try:
         db = _db()
         for row in db.execute('SELECT key, value FROM ai_config').fetchall():
@@ -57,6 +64,17 @@ def _get_config():
     except Exception:
         pass
     return cfg
+
+
+def _effective_base(cfg):
+    """按模式/服务类型返回实际服务地址（本地未填时给默认值）"""
+    mode = cfg.get('mode', 'local')
+    if mode == 'remote':
+        return (cfg.get('base_url') or '').rstrip('/')
+    # 本地模式：未配置地址时按服务类型给默认
+    if cfg.get('provider_type') == 'openai_compat':
+        return (cfg.get('base_url') or 'http://127.0.0.1:1234/v1').rstrip('/')
+    return (cfg.get('base_url') or OLLAMA_BASE).rstrip('/')
 
 
 def _save_config(cfg):
@@ -118,14 +136,16 @@ def _ask_ollama(prompt, model=None, base=None):
 
 
 def _ask_remote(prompt, cfg):
-    """调用远程 OpenAI 兼容 API（/chat/completions，Bearer 认证）"""
-    base = (cfg.get('base_url') or '').rstrip('/')
+    """调用 OpenAI 兼容 API（/chat/completions，Bearer 认证；本地 OpenAI 兼容后端密钥可为空）"""
+    base = _effective_base(cfg)
     model = cfg.get('model') or DEFAULT_MODEL
     api_key = cfg.get('api_key') or ''
     if not base:
-        return '[远程模型未配置 BaseURL]'
+        return '[模型服务未配置 BaseURL]'
     url = base + '/chat/completions'
-    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json'}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
     payload = {
         'model': model,
         'messages': [
@@ -139,20 +159,24 @@ def _ask_remote(prompt, cfg):
         if r.status_code == 200:
             data = r.json()
             return data.get('choices', [{}])[0].get('message', {}).get('content', '')
-        return f'[远程模型返回错误 {r.status_code}: {r.text[:200]}]'
+        return f'[模型返回错误 {r.status_code}: {r.text[:200]}]'
     except Exception as e:
-        return f'[远程模型调用失败: {e}]'
+        return f'[模型调用失败: {e}]'
 
 
 def _provider_check(cfg):
     """按配置检查当前 provider 可用性，返回 (ok, info_dict)"""
     mode = cfg.get('mode', 'local')
-    if mode == 'remote':
-        base = (cfg.get('base_url') or '').rstrip('/')
+    is_openai_compat = (mode == 'remote') or (cfg.get('provider_type') == 'openai_compat')
+    if is_openai_compat:
+        base = _effective_base(cfg)
         if not base:
             return False, {'msg': '未配置 BaseURL'}
+        headers = {'Content-Type': 'application/json'}
+        if cfg.get('api_key'):
+            headers['Authorization'] = f'Bearer {cfg.get("api_key", "")}'
         try:
-            r = requests.get(base + '/models', headers={'Authorization': f'Bearer {cfg.get("api_key", "")}'}, timeout=5)
+            r = requests.get(base + '/models', headers=headers, timeout=5)
             models = []
             if r.status_code == 200:
                 models = [m.get('id') for m in r.json().get('data', [])[:20]]
@@ -160,16 +184,18 @@ def _provider_check(cfg):
         except Exception as e:
             return False, {'msg': f'连接失败: {e}', 'models': []}
     else:
-        ok = _ollama_available()
-        return ok, {'msg': 'Ollama 运行中' if ok else 'Ollama 未启动', 'models': _ollama_models() if ok else []}
+        base = _effective_base(cfg)
+        ok = _ollama_available(base)
+        return ok, {'msg': 'Ollama 运行中' if ok else 'Ollama 未启动', 'models': _ollama_models(base) if ok else []}
 
 
 def _ask_provider(prompt, cfg):
-    """按配置分发到对应 provider"""
+    """按配置分发到对应 provider（本地 Ollama 原生 / OpenAI 兼容）"""
     mode = cfg.get('mode', 'local')
-    if mode == 'remote':
+    is_openai_compat = (mode == 'remote') or (cfg.get('provider_type') == 'openai_compat')
+    if is_openai_compat:
         return _ask_remote(prompt, cfg)
-    return _ask_ollama(prompt, cfg.get('model'), None)
+    return _ask_ollama(prompt, cfg.get('model'), _effective_base(cfg))
 
 
 def _platform_context(max_rows=8):
@@ -233,7 +259,8 @@ def health():
     return jsonify({
         'ok': ok,
         'mode': mode,
-        'base_url': cfg.get('base_url', '') if mode == 'remote' else OLLAMA_BASE,
+        'provider_type': cfg.get('provider_type', 'ollama'),
+        'base_url': _effective_base(cfg),
         'model': cfg.get('model') or DEFAULT_MODEL,
         'api_key_masked': _mask_key(cfg.get('api_key', '')),
         'detail': info.get('msg', ''),
@@ -248,13 +275,18 @@ def test():
     """连接测试：用请求体里的配置试连（不保存），供设置页测试按钮调用"""
     data = request.get_json(silent=True) or {}
     mode = data.get('mode') or 'local'
-    if mode == 'remote':
+    provider_type = data.get('provider_type') or ('ollama' if mode != 'remote' else 'openai_compat')
+    is_openai_compat = (mode == 'remote') or (provider_type == 'openai_compat')
+    if is_openai_compat:
         base = (data.get('base_url') or '').rstrip('/')
         if not base:
             return jsonify({'ok': False, 'msg': '请先填写 BaseURL'})
         key = data.get('api_key') or ''
+        headers = {'Content-Type': 'application/json'}
+        if key:
+            headers['Authorization'] = f'Bearer {key}'
         try:
-            r = requests.get(base + '/models', headers={'Authorization': f'Bearer {key}'}, timeout=8)
+            r = requests.get(base + '/models', headers=headers, timeout=8)
             models = []
             if r.status_code == 200:
                 models = [m.get('id') for m in r.json().get('data', [])[:10]]
@@ -266,8 +298,9 @@ def test():
         except Exception as e:
             return jsonify({'ok': False, 'msg': f'连接失败：{e}', 'models': []})
     else:
-        ok = _ollama_available()
-        return jsonify({'ok': ok, 'msg': '本地 Ollama 运行中' if ok else '本地 Ollama 未启动（请先运行 ollama serve）', 'models': _ollama_models() if ok else []})
+        base = (data.get('base_url') or OLLAMA_BASE).rstrip('/')
+        ok = _ollama_available(base)
+        return jsonify({'ok': ok, 'msg': '本地 Ollama 运行中' if ok else '本地 Ollama 未启动（请先运行 ollama serve）', 'models': _ollama_models(base) if ok else []})
 
 
 @ai_bp.route('/ask', methods=['POST'])
@@ -293,7 +326,12 @@ def ask():
     )
     answer = _ask_provider(prompt, cfg)
     mode = cfg.get('mode', 'local')
-    source = f'平台内网本地模型（{cfg.get("model") or DEFAULT_MODEL}）' if mode == 'local' else f'远程模型（{cfg.get("base_url")} / {cfg.get("model")}）'
+    if mode == 'remote':
+        source = f'远程模型（{_effective_base(cfg)} / {cfg.get("model") or DEFAULT_MODEL}）'
+    elif cfg.get('provider_type') == 'openai_compat':
+        source = f'本地 OpenAI 兼容后端（{_effective_base(cfg)} / {cfg.get("model") or DEFAULT_MODEL}）'
+    else:
+        source = f'平台内网本地模型（{cfg.get("model") or DEFAULT_MODEL}）'
     return jsonify({
         'ok': True,
         'question': question,

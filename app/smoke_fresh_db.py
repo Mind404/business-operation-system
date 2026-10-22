@@ -154,6 +154,30 @@ check('AI 配置已落库', ai_cfg.get('mode') == 'remote' and ai_cfg.get('model
 r = client.get('/api/ai/health')
 body = r.get_json() if r.is_json else {}
 check('AI health 反映配置', body.get('mode') == 'remote' and body.get('api_key_masked', '').endswith('7890'), f'health={body}')
+# --- 本地 OpenAI 兼容（LM Studio 等）配置 ---
+r = client.post('/admin/ai-settings', data={
+    'mode': 'local', 'provider_type': 'openai_compat', 'base_url': 'http://127.0.0.1:1234/v1',
+    'api_key': '', 'model': 'qwen2.5-3b-instruct', 'enabled': '1',
+}, follow_redirects=False)
+check('本地OpenAI兼容配置保存', r.status_code in (302, 200), f'code={r.status_code}')
+db = sqlite3.connect(DBPATH)
+ai_cfg2 = dict(db.execute('SELECT key, value FROM ai_config').fetchall())
+db.close()
+check('本地OpenAI兼容配置落库', ai_cfg2.get('provider_type') == 'openai_compat' and ai_cfg2.get('base_url') == 'http://127.0.0.1:1234/v1', f'cfg={ai_cfg2}')
+r = client.get('/api/ai/health')
+body = r.get_json() if r.is_json else {}
+check('health反映本地兼容模式', body.get('mode') == 'local' and body.get('provider_type') == 'openai_compat' and body.get('base_url') == 'http://127.0.0.1:1234/v1', f'health={body}')
+# --- 本地 Ollama 默认地址 ---
+r = client.post('/admin/ai-settings', data={
+    'mode': 'local', 'provider_type': 'ollama', 'base_url': '',
+    'api_key': '', 'model': 'qwen2.5:0.5b', 'enabled': '1',
+}, follow_redirects=False)
+check('本地Ollama配置保存(留空地址)', r.status_code in (302, 200), f'code={r.status_code}')
+r = client.get('/api/ai/health')
+body = r.get_json() if r.is_json else {}
+check('health本地Ollama默认地址', body.get('mode') == 'local' and body.get('base_url') == 'http://127.0.0.1:11434', f'health={body}')
+r = client.post('/api/ai/test', json={'mode': 'local', 'provider_type': 'openai_compat', 'base_url': 'http://127.0.0.1:1234/v1'})
+check('本地兼容连接测试接口', r.status_code == 200 and 'msg' in (r.get_json() or {}), f'code={r.status_code}')
 
 # --- 清理测试库 ---
 shutil.rmtree(TMP, ignore_errors=True)

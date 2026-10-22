@@ -625,6 +625,7 @@ def admin_ai_settings():
     from ai_service import _get_config, _save_config, _mask_key
     if request.method == 'POST':
         mode = request.form.get('mode', 'local')
+        provider_type = request.form.get('provider_type', 'ollama')
         base_url = (request.form.get('base_url') or '').strip()
         api_key = (request.form.get('api_key') or '').strip()
         model = (request.form.get('model') or '').strip()
@@ -633,15 +634,16 @@ def admin_ai_settings():
         if not api_key:
             cur = _get_config()
             api_key = cur.get('api_key', '')
-        if mode == 'remote' and not base_url:
-            flash('远程模式必须填写 BaseURL', 'error')
+        is_openai_compat = (mode == 'remote') or (provider_type == 'openai_compat')
+        if is_openai_compat and not base_url:
+            flash('OpenAI 兼容模式必须填写 BaseURL（本地后端如 LM Studio 填 http://127.0.0.1:1234/v1）', 'error')
             return redirect(url_for('admin_ai_settings'))
         if not model:
             flash('请填写模型名称', 'error')
             return redirect(url_for('admin_ai_settings'))
-        _save_config({'mode': mode, 'base_url': base_url, 'api_key': api_key,
-                      'model': model, 'enabled': enabled})
-        log_operation('平台', 'AI设置', f'更新 AI 模型配置（模式={mode}，模型={model}）')
+        _save_config({'mode': mode, 'provider_type': provider_type, 'base_url': base_url,
+                      'api_key': api_key, 'model': model, 'enabled': enabled})
+        log_operation('平台', 'AI设置', f'更新 AI 模型配置（模式={mode}，服务={provider_type}，模型={model}）')
         flash('AI 模型配置已保存', 'success')
         return redirect(url_for('admin_ai_settings'))
     cfg = _get_config()

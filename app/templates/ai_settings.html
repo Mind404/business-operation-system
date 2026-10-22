@@ -19,8 +19,8 @@
                 <div style="display:flex;gap:10px;">
                     <label style="flex:1;border:1.5px solid {{ 'var(--primary,#2563eb)' if cfg.mode == 'local' else '#d1d5db' }};border-radius:8px;padding:10px 12px;cursor:pointer;background:{{ '#f0f4ff' if cfg.mode == 'local' else '#fff' }};">
                         <input type="radio" name="mode" value="local" {% if cfg.mode == 'local' %}checked{% endif %} onchange="onModeChange()" style="margin-right:6px;">
-                        <strong style="font-size:13px;">本地 Ollama</strong>
-                        <div style="font-size:11px;color:#64748b;margin-top:2px;">模型本地部署，数据不出内网</div>
+                        <strong style="font-size:13px;">本地部署</strong>
+                        <div style="font-size:11px;color:#64748b;margin-top:2px;">Ollama / LM Studio / vLLM，数据不出内网</div>
                     </label>
                     <label style="flex:1;border:1.5px solid {{ 'var(--primary,#2563eb)' if cfg.mode == 'remote' else '#d1d5db' }};border-radius:8px;padding:10px 12px;cursor:pointer;background:{{ '#f0f4ff' if cfg.mode == 'remote' else '#fff' }};">
                         <input type="radio" name="mode" value="remote" {% if cfg.mode == 'remote' %}checked{% endif %} onchange="onModeChange()" style="margin-right:6px;">
@@ -30,12 +30,30 @@
                 </div>
             </div>
 
-            <!-- 本地模式：模型名 -->
-            <div id="localModelBlock" style="margin-bottom:14px;{{ 'display:none;' if cfg.mode == 'remote' }}">
-                <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">本地模型名称</label>
-                <input name="model" id="modelInput" value="{{ cfg.model }}" placeholder="如 qwen2.5:0.5b / qwen2.5:4b"
-                       style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
-                <div style="font-size:11px;color:#64748b;margin-top:4px;">须先在本机安装 Ollama 并拉取模型（如 qwen2.5:0.5b / qwen2.5:4b）</div>
+            <!-- 本地模式：服务类型 + 地址 -->
+            <div id="localBlock" style="{{ 'display:none;' if cfg.mode == 'remote' }}">
+                <div style="margin-bottom:14px;">
+                    <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">本地服务类型</label>
+                    <select name="provider_type" id="providerType" onchange="onProviderTypeChange()"
+                            style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;">
+                        <option value="ollama" {% if cfg.provider_type != 'openai_compat' %}selected{% endif %}>Ollama（原生接口）</option>
+                        <option value="openai_compat" {% if cfg.provider_type == 'openai_compat' %}selected{% endif %}>OpenAI 兼容（LM Studio / vLLM / llama.cpp 等）</option>
+                    </select>
+                    <div style="font-size:11px;color:#64748b;margin-top:4px;">
+                        Ollama：本机默认 <code style="background:#f1f5f9;padding:1px 5px;border-radius:4px;">http://127.0.0.1:11434</code>；
+                        LM Studio：默认 <code style="background:#f1f5f9;padding:1px 5px;border-radius:4px;">http://127.0.0.1:1234/v1</code>
+                    </div>
+                </div>
+                <div style="margin-bottom:14px;">
+                    <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">服务地址（BaseURL）</label>
+                    <div style="display:flex;gap:6px;">
+                        <input name="base_url" id="localBaseUrl" value="{{ cfg.base_url if cfg.mode == 'local' else '' }}"
+                               placeholder="{{ 'http://127.0.0.1:1234/v1' if cfg.provider_type == 'openai_compat' else 'http://127.0.0.1:11434' }}"
+                               style="flex:1;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                        <button type="button" onclick="copyText('localBaseUrl')" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">复制</button>
+                    </div>
+                    <div style="font-size:11px;color:#64748b;margin-top:4px;">留空时使用所选类型的默认地址</div>
+                </div>
             </div>
 
             <!-- 远程模式 -->
@@ -43,30 +61,36 @@
                 <div style="margin-bottom:14px;">
                     <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">BaseURL（兼容 OpenAI API）</label>
                     <div style="display:flex;gap:6px;">
-                        <input name="base_url" id="baseUrlInput" value="{{ cfg.base_url }}" placeholder="如 https://api.x-aio.com"
+                        <input name="base_url" id="remoteBaseUrl" value="{{ cfg.base_url if cfg.mode == 'remote' else '' }}"
+                               placeholder="如 https://api.x-aio.com"
                                style="flex:1;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
-                        <button type="button" onclick="copyText('baseUrlInput')" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">复制</button>
+                        <button type="button" onclick="copyText('remoteBaseUrl')" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">复制</button>
                     </div>
                     <div style="font-size:11px;color:#64748b;margin-top:4px;">平台在您调用远程模型时，仅将"聚合数据快照 + 您的问题"发送给该接口，用于问答生成</div>
                 </div>
-                <div style="margin-bottom:14px;">
-                    <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">API 密钥</label>
-                    <div style="display:flex;gap:6px;">
-                        <input type="password" name="api_key" id="apiKeyInput" value=""
-                               placeholder="{{ '已配置：' ~ cfg.api_key_masked if cfg.api_key_masked else '粘贴您的 API 密钥' }}"
-                               style="flex:1;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
-                        <button type="button" onclick="toggleKey()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">显示</button>
-                        <button type="button" onclick="copyKey()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">复制</button>
-                    </div>
-                    <div style="font-size:11px;color:#64748b;margin-top:4px;">
-                        {% if cfg.api_key_masked %}已保存密钥：<code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">{{ cfg.api_key_masked }}</code>（留空保存时保留原密钥）{% else %}尚未配置{% endif %}
-                    </div>
+            </div>
+
+            <!-- 密钥（远程必填 / 本地 OpenAI 兼容可选） -->
+            <div id="keyBlock" style="margin-bottom:14px;">
+                <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">API 密钥 <span id="keyHint" style="font-weight:400;color:#64748b;">（远程模式必填；本地 OpenAI 兼容可选）</span></label>
+                <div style="display:flex;gap:6px;">
+                    <input type="password" name="api_key" id="apiKeyInput" value=""
+                           placeholder="{{ '已配置：' ~ cfg.api_key_masked if cfg.api_key_masked else '粘贴您的 API 密钥' }}"
+                           style="flex:1;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                    <button type="button" onclick="toggleKey()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">显示</button>
+                    <button type="button" onclick="copyKey()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;">复制</button>
                 </div>
-                <div style="margin-bottom:14px;">
-                    <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">模型名称</label>
-                    <input name="model" id="modelInput2" value="{{ cfg.model }}" placeholder="如 qwen2.5-7b-instruct / gpt-4o-mini"
-                           style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#64748b;margin-top:4px;">
+                    {% if cfg.api_key_masked %}已保存密钥：<code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">{{ cfg.api_key_masked }}</code>（留空保存时保留原密钥）{% else %}尚未配置{% endif %}
                 </div>
+            </div>
+
+            <!-- 模型名称（公共） -->
+            <div style="margin-bottom:14px;">
+                <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">模型名称</label>
+                <input name="model" id="modelInput" value="{{ cfg.model }}" placeholder="本地如 qwen2.5:0.5b / qwen2.5:4b；远程如 qwen2.5-7b-instruct"
+                       style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#64748b;margin-top:4px;">填写您部署/购买的模型名称（不同后端名称不同，如 LM Studio 里显示的文件名）</div>
             </div>
 
             <!-- 启用开关 -->
@@ -92,7 +116,7 @@
             <div style="font-size:12px;color:#92400e;margin-top:6px;line-height:1.7;">
                 API 密钥是您访问模型服务的凭证，具有相应账户权限，请妥善保管。<br>
                 平台仅用该密钥调用模型接口（问答/摘要），<strong>不会用于其他用途，也不会展示完整密钥</strong>。<br>
-                本地 Ollama 模式数据完全不出内网；远程模式仅发送聚合数据快照与您的问题。
+                本地部署模式数据完全不出内网；远程模式仅发送聚合数据快照与您的问题。
             </div>
         </div>
 
@@ -110,21 +134,37 @@
 <script>
 var SAVED_KEY_MASKED = "{{ cfg.api_key_masked }}";
 var savedMode = "{{ cfg.mode }}";
+var savedProvider = "{{ cfg.provider_type }}";
+
+function currentMode() { return document.querySelector('input[name="mode"]:checked').value; }
+function currentProvider() { return document.getElementById('providerType') ? document.getElementById('providerType').value : 'ollama'; }
 
 function onModeChange() {
-    var mode = document.querySelector('input[name="mode"]:checked').value;
+    var mode = currentMode();
+    document.getElementById('localBlock').style.display = mode === 'local' ? '' : 'none';
     document.getElementById('remoteBlock').style.display = mode === 'remote' ? '' : 'none';
-    document.getElementById('localModelBlock').style.display = mode === 'local' ? '' : 'none';
+    onProviderTypeChange();
+}
+function onProviderTypeChange() {
+    var mode = currentMode();
+    var provider = currentProvider();
+    // 本地 OpenAI 兼容：可选密钥；本地 Ollama：隐藏密钥（原生无需密钥）
+    var needKey = (mode === 'remote') || (mode === 'local' && provider === 'openai_compat');
+    document.getElementById('keyBlock').style.display = needKey ? '' : 'none';
+    // 更新本地地址占位
+    var lb = document.getElementById('localBaseUrl');
+    if (lb) {
+        lb.placeholder = provider === 'openai_compat' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:11434';
+    }
 }
 function copyText(id) {
     var el = document.getElementById(id);
-    if (!el.value) { alert('内容为空'); return; }
+    if (!el.value) { alert('内容为空（留空将使用默认地址）'); return; }
     navigator.clipboard.writeText(el.value).then(function(){ alert('已复制'); }).catch(function(){ el.select(); document.execCommand('copy'); });
 }
 function toggleKey() {
     var el = document.getElementById('apiKeyInput');
     if (!el.value) {
-        // 未输入新值时显示已保存密钥（脱敏）
         if (SAVED_KEY_MASKED) { el.type = 'text'; el.value = SAVED_KEY_MASKED; }
         return;
     }
@@ -139,15 +179,15 @@ function copyKey() {
 function testConnection() {
     var btn = document.getElementById('testBtn');
     var res = document.getElementById('testResult');
-    var mode = document.querySelector('input[name="mode"]:checked').value;
-    var payload = {mode: mode};
-    if (mode === 'remote') {
-        payload.base_url = document.getElementById('baseUrlInput').value.trim();
-        var key = document.getElementById('apiKeyInput').value.trim();
-        if (!key && SAVED_KEY_MASKED) key = ''; // 测试时未填新 key：向后端询问（测试接口以空 key 探测可达性）
-        payload.api_key = key;
-    }
-    if (mode === 'remote' && !payload.base_url) { res.textContent = '请先填写 BaseURL'; res.style.color = '#dc2626'; return; }
+    var mode = currentMode();
+    var provider = currentProvider();
+    var payload = {mode: mode, provider_type: provider};
+    var base = mode === 'remote' ? document.getElementById('remoteBaseUrl').value.trim() : document.getElementById('localBaseUrl').value.trim();
+    if (mode === 'local' && provider === 'ollama' && !base) base = 'http://127.0.0.1:11434';
+    if (mode === 'local' && provider === 'openai_compat' && !base) base = 'http://127.0.0.1:1234/v1';
+    payload.base_url = base;
+    payload.api_key = document.getElementById('apiKeyInput').value.trim();
+    if (!base) { res.textContent = '请先填写 BaseURL'; res.style.color = '#dc2626'; return; }
     btn.disabled = true; btn.textContent = '测试中…';
     res.textContent = '连接中…'; res.style.color = '#475569';
     fetch('{{ url_for("ai_assistant.test") }}', {
@@ -170,11 +210,13 @@ function testConnection() {
 }
 function loadHealth() {
     fetch('{{ url_for("ai_assistant.health") }}').then(function(r){ return r.json(); }).then(function(d){
-        var mode = d.mode === 'remote' ? '远程 API' : '本地 Ollama';
+        var mode = d.mode === 'remote' ? '远程 API' : '本地部署';
+        var provider = d.provider_type === 'openai_compat' ? '（OpenAI 兼容）' : '（Ollama 原生）';
         var status = d.ok ? '<span style="color:#15803d;">✓ 可用</span>' : '<span style="color:#dc2626;">✗ 不可用</span>';
         var models = d.models && d.models.length ? d.models.slice(0, 5).join('、') + '…' : '—';
         document.getElementById('healthBox').innerHTML =
-            '模式：<strong>' + mode + '</strong><br>' +
+            '模式：<strong>' + mode + ' ' + provider + '</strong><br>' +
+            '服务地址：<strong>' + (d.base_url || '—') + '</strong><br>' +
             '模型：<strong>' + (d.model || '—') + '</strong><br>' +
             '连接状态：' + status + '（' + (d.detail || '') + '）<br>' +
             '已装/可发现模型：' + models;
@@ -182,6 +224,7 @@ function loadHealth() {
         document.getElementById('healthBox').innerHTML = '状态获取失败（服务未启动？）';
     });
 }
+onModeChange();
 loadHealth();
 </script>
 {% endblock %}
