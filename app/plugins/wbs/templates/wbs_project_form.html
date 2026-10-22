@@ -28,25 +28,13 @@
     <div style="display:grid;grid-template-columns:1fr 1.5fr;gap:16px;margin-bottom:20px;">
         <div>
             <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目负责人 <span style="color:#c0392b;">*</span></label>
-            <select name="owner" required style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
-                <option value="">— 请选择负责人 —</option>
-                {% for u in users %}
-                <option value="{{ u.username }}" {% if p and p.owner == u.username %}selected{% endif %}>{{ u.display_name or u.username }}{% if u.department %}（{{ u.department }}）{% endif %}</option>
-                {% endfor %}
-            </select>
+            <input type="text" name="owner" value="{{ p.owner if p else '' }}" required placeholder="如：admin"
+                   style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
         </div>
         <div>
             <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目参与人员</label>
-            {% set cur_parts = (p.participants or '').split('、') if p else [] %}
-            <div style="border:1px solid #d0d5dd;border-radius:6px;padding:8px 10px;max-height:150px;overflow-y:auto;box-sizing:border-box;">
-                {% for u in users %}
-                <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#444;padding:4px 2px;cursor:pointer;">
-                    <input type="checkbox" name="participants" value="{{ u.username }}" {% if u.username in cur_parts %}checked{% endif %} style="width:15px;height:15px;">
-                    {{ u.display_name or u.username }}{% if u.department %}（{{ u.department }}）{% endif %}
-                </label>
-                {% endfor %}
-            </div>
-            <div style="font-size:11px;color:#94a3b8;margin-top:4px;">可多选，来自平台用户表</div>
+            <input type="text" name="participants" value="{{ p.participants if p else '' }}" placeholder="多人用顿号分隔，如：admin、product"
+                   style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
         </div>
     </div>
 
