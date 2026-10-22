@@ -16,8 +16,8 @@ if %errorlevel%==0 (
     exit /b 1
 )
 echo.
-echo Installing dependencies...
-pip install flask openpyxl -i https://pypi.tuna.tsinghua.edu.cn/simple
+echo Installing dependencies (Flask / waitress / requests / openpyxl)...
+python -m pip install -r "%~dp0app\requirements.txt" -i https://pypi.tuna.tsinghua.edu.cn/simple
 echo.
 echo ============================================================
 echo   Setup complete!
