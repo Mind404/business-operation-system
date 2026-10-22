@@ -21,7 +21,7 @@ import json
 from datetime import datetime
 
 import requests
-from flask import Blueprint, jsonify, request, g
+from flask import Blueprint, jsonify, request, g, session
 
 ai_bp = Blueprint('ai_assistant', __name__)
 
@@ -126,6 +126,7 @@ def _ask_ollama(prompt, model=None, base=None):
             'model': model or DEFAULT_MODEL,
             'prompt': prompt,
             'stream': False,
+            'keep_alive': '30m',  # 模型常驻内存：避免每次对话重新加载（CPU 环境首答慢，热身后秒级）
         }, timeout=120)
         if r.status_code == 200:
             data = r.json()
@@ -198,56 +199,150 @@ def _ask_provider(prompt, cfg):
     return _ask_ollama(prompt, cfg.get('model'), _effective_base(cfg))
 
 
-def _platform_context(max_rows=8):
-    """只读聚合平台关键数据，拼成给模型的上下文（标注数据时间）"""
-    ctx = []
-    now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    ctx.append(f'平台数据时间：{now}（内网实时只读快照）')
-    try:
-        db = _db()
-        # WBS 概览
-        wbs = db.execute('''
-            SELECT COUNT(*) total,
-                   SUM(CASE WHEN status IN ('进行中','规划中') THEN 1 ELSE 0 END) active,
-                   SUM(CASE WHEN status='已完成' THEN 1 ELSE 0 END) done
+# ============================================================
+# 数据源注册表（v11.1 注册式聚合）
+# 每个数据源 = {'id','name','fn'}；fn(db, role, username, max_rows) 返回只读文本段。
+# 后续新增插件（bug/待办/售后/合同…）：加一条注册 + 写一个查询函数，AI 自动认识该插件数据。
+# ============================================================
+def _src_wbs(db, role, username, max_rows, staleness_days=14):
+    """WBS 计划：项目概览 + 逾期任务（普通用户只聚合自己参与的项目）"""
+    lines = []
+    if role in ('admin', 'platform_admin'):
+        wbs = db.execute('''SELECT COUNT(*) total,
+               SUM(CASE WHEN status IN ('进行中','规划中') THEN 1 ELSE 0 END) active,
+               SUM(CASE WHEN status='已完成' THEN 1 ELSE 0 END) done
             FROM wbs_projects''').fetchone()
-        ctx.append(f'WBS项目：共{wbs["total"] or 0}个，进行中{wbs["active"] or 0}个，已完成{wbs["done"] or 0}个')
-        # WBS 逾期任务
-        overdue = db.execute('''
-            SELECT id, name, plan_end FROM wbs_tasks
+        lines.append(f'WBS项目：共{wbs["total"] or 0}个，进行中{wbs["active"] or 0}个，已完成{wbs["done"] or 0}个')
+        rows = db.execute('''SELECT id, name, plan_end, status FROM wbs_tasks
             WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')
             ORDER BY plan_end LIMIT %d''' % max_rows).fetchall()
-        if overdue:
-            ctx.append('WBS逾期任务：' + '；'.join(f'{t["name"]}(截止{t["plan_end"]})' for t in overdue))
-        else:
-            ctx.append('WBS逾期任务：无')
-        # 需求概览
-        req = db.execute('''
-            SELECT COUNT(*) total,
-                   SUM(CASE WHEN status='待评审' THEN 1 ELSE 0 END) pending,
-                   SUM(CASE WHEN status IN ('评审通过','已采纳','开发中') THEN 1 ELSE 0 END) doing,
-                   SUM(CASE WHEN status IN ('已完成','已关闭') THEN 1 ELSE 0 END) done
+    else:
+        wbs = db.execute('''SELECT COUNT(*) total FROM wbs_projects
+            WHERE owner=? OR participants LIKE ?''', (username, '%' + username + '%')).fetchone()
+        lines.append(f'WBS项目（我参与）：共{wbs["total"] or 0}个')
+        rows = db.execute('''SELECT t.id, t.name, t.plan_end, t.status FROM wbs_tasks t
+            JOIN wbs_projects p ON p.id=t.project_id
+            WHERE t.status NOT IN ('已完成','已取消') AND t.plan_end < date('now','localtime')
+            AND (p.owner=? OR p.participants LIKE ? OR t.owner=? OR t.collaborators LIKE ?)
+            ORDER BY t.plan_end LIMIT %d''' % max_rows,
+            (username, '%' + username + '%', username, '%' + username + '%')).fetchall()
+    if rows:
+        lines.append('WBS逾期任务：' + '；'.join(f'{t["name"]}(截止{t["plan_end"]})' for t in rows))
+    else:
+        lines.append('WBS逾期任务：无')
+    return '\n'.join(lines)
+
+
+def _src_requirements(db, role, username, max_rows, staleness_days):
+    """需求：概览 + 临期/逾期 + 呆滞需求（普通用户只聚合自己创建/负责的）"""
+    lines = []
+    if role in ('admin', 'platform_admin'):
+        req = db.execute('''SELECT COUNT(*) total,
+               SUM(CASE WHEN status='待评审' THEN 1 ELSE 0 END) pending,
+               SUM(CASE WHEN status IN ('评审通过','已采纳','开发中') THEN 1 ELSE 0 END) doing,
+               SUM(CASE WHEN status IN ('已完成','已关闭') THEN 1 ELSE 0 END) done
             FROM req_items WHERE is_deleted=0''').fetchone()
-        ctx.append(f'需求：共{req["total"] or 0}条，待评审{req["pending"] or 0}，进行中{req["doing"] or 0}，已完成{req["done"] or 0}')
-        # 需求临期/逾期
-        req_alerts = db.execute('''
-            SELECT code, title, delivery_date, status FROM req_items
+        lines.append(f'需求：共{req["total"] or 0}条，待评审{req["pending"] or 0}，进行中{req["doing"] or 0}，已完成{req["done"] or 0}')
+        alerts = db.execute('''SELECT code, title, delivery_date, status FROM req_items
             WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
             AND delivery_date <= date('now','localtime','+7 day')
             ORDER BY delivery_date LIMIT %d''' % max_rows).fetchall()
-        if req_alerts:
-            ctx.append('需求临期/逾期提醒：' + '；'.join(
-                f'{r["code"]} {r["title"]}(交付{r["delivery_date"]},{r["status"]})' for r in req_alerts))
-        # 审批待办
+        stal = db.execute('''SELECT code, title, status, updated_at FROM req_items
+            WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+            AND updated_at <= datetime('now','localtime', ?)
+            ORDER BY updated_at LIMIT %d''' % max_rows, (f'-{staleness_days} days',)).fetchall()
+    else:
+        req = db.execute('''SELECT COUNT(*) total FROM req_items
+            WHERE is_deleted=0 AND (owner=? OR created_by=?)''',
+            (username, username)).fetchone()
+        lines.append(f'需求（我创建/负责）：共{req["total"] or 0}条')
+        alerts = db.execute('''SELECT code, title, delivery_date, status FROM req_items
+            WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
+            AND delivery_date <= date('now','localtime','+7 day')
+            AND (owner=? OR created_by=?)
+            ORDER BY delivery_date LIMIT %d''' % max_rows,
+            (username, username)).fetchall()
+        stal = db.execute('''SELECT code, title, status, updated_at FROM req_items
+            WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+            AND updated_at <= datetime('now','localtime', ?)
+            AND (owner=? OR created_by=?)
+            ORDER BY updated_at LIMIT %d''' % max_rows,
+            (f'-{staleness_days} days', username, username)).fetchall()
+    if alerts:
+        lines.append('需求临期/逾期提醒：' + '；'.join(
+            f'{r["code"]} {r["title"]}(交付{r["delivery_date"]},{r["status"]})' for r in alerts))
+    if stal:
+        lines.append(f'呆滞需求（超{staleness_days}天未推进）：' + '；'.join(
+            f'{r["code"]} {r["title"]}({r["status"]},最后更新{r["updated_at"]})' for r in stal))
+    return '\n'.join(lines)
+
+
+def _data_source_registry():
+    """数据源注册表（动态扩展点）"""
+    return [
+        {'id': 'wbs', 'name': 'WBS计划管理', 'fn': _src_wbs},
+        {'id': 'requirements', 'name': '需求收集', 'fn': _src_requirements},
+    ]
+
+
+def _platform_context(role='user', username=None, max_rows=8):
+    """只读聚合平台关键数据，拼成给模型的上下文（标注数据时间与只读声明）"""
+    ctx = []
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    ctx.append(f'平台数据时间：{now}（内网实时只读快照；AI助手为只读辅助，绝不修改任何业务数据）')
+    try:
+        db = _db()
+        # 数据结构说明（来自插件注册表 tables 登记，动态）
+        try:
+            regs = db.execute("SELECT id, name, tables FROM plugin_registry WHERE core=0").fetchall()
+            for r in regs:
+                tbls = json.loads(r['tables'] or '[]')
+                if tbls:
+                    ctx.append(f'{r["name"]}数据表：' + '；'.join(
+                        f'{t["table"]}({t["desc"]})' if isinstance(t, dict) else str(t) for t in tbls))
+        except Exception:
+            pass
+        cfg = _get_config()
+        staleness_days = int(cfg.get('staleness_days') or 14)
+        for src in _data_source_registry():
+            try:
+                seg = src['fn'](db, role, username or '', max_rows, staleness_days)
+                if seg:
+                    ctx.append(seg)
+            except Exception as e:
+                ctx.append(f'[{src["name"]}数据源读取异常:{e}]')
+        # 审批待办 + 外部系统
         appr = db.execute("SELECT COUNT(*) c FROM approval_requests WHERE status='待审批'").fetchone()
         ctx.append(f'待审批事项：{appr["c"] or 0}条')
-        # 外部系统接入
         ext = db.execute('SELECT COUNT(*) c FROM external_systems').fetchone()
         ctx.append(f'已接入外部系统/插件：{ext["c"] or 0}个')
         db.close()
     except Exception as e:
         ctx.append(f'[部分数据源读取异常: {e}]')
     return '\n'.join(ctx)
+
+
+def _extract_refs(text):
+    """从文本中识别需求编号，返回可点击的原始记录链接（只读指引）"""
+    refs = []
+    if not text:
+        return refs
+    import re
+    try:
+        db = _db()
+        for m in re.finditer(r'RQ-\d{4}-\d{3}', text):
+            code = m.group(0)
+            if any(r['type'] == 'req' and r['label'].startswith(code) for r in refs):
+                continue
+            row = db.execute('SELECT id, title FROM req_items WHERE code=? AND is_deleted=0',
+                             (code,)).fetchone()
+            if row:
+                refs.append({'type': 'req', 'label': f'{code} {row["title"]}',
+                             'url': f'/requirements/{row["id"]}'})
+        db.close()
+    except Exception:
+        pass
+    return refs[:5]
 
 
 @ai_bp.route('/health')
@@ -317,12 +412,16 @@ def ask():
     if not ok:
         return jsonify({'ok': False, 'msg': '模型服务不可用（请检查「AI 设置」配置或本地 Ollama 是否启动）', 'detail': info.get('msg', '')}), 503
 
-    context = _platform_context()
+    role = session.get('user_role', 'user')
+    username = session.get('username')
+    context = _platform_context(role=role, username=username)
     prompt = (
-        '你是研发管理平台的AI助手（只读辅助，不做任何数据修改）。\n'
+        '你是研发管理平台的AI助手（只读辅助，不做任何数据修改，绝不修改数据库）。\n'
+        f'当前用户角色：{role}；仅聚合其有权查看的数据。\n'
         f'以下是平台当前聚合数据：\n{context}\n\n'
         f'用户问题：{question}\n'
-        '请基于上述数据用中文简洁回答；若数据不足以回答，请明确说明。'
+        '请基于上述数据用中文简洁回答；回答中如提到需求请带上编号（如 RQ-2026-001）；'
+        '若数据不足以回答，请明确说明，不要编造。'
     )
     answer = _ask_provider(prompt, cfg)
     mode = cfg.get('mode', 'local')
@@ -332,11 +431,13 @@ def ask():
         source = f'本地 OpenAI 兼容后端（{_effective_base(cfg)} / {cfg.get("model") or DEFAULT_MODEL}）'
     else:
         source = f'平台内网本地模型（{cfg.get("model") or DEFAULT_MODEL}）'
+    refs = _extract_refs(question + ' ' + answer)
     return jsonify({
         'ok': True,
         'question': question,
         'answer': answer,
         'source': source,
+        'refs': refs,
         'data_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'readonly': True,
     })
@@ -344,32 +445,82 @@ def ask():
 
 @ai_bp.route('/alert-summary')
 def alert_summary():
-    """预警摘要：临期/逾期/待审批（确定性规则 + 模型润色可选，纯只读）"""
+    """预警摘要：临期/逾期/呆滞/待审批（确定性规则，纯只读），含原始记录链接"""
     db = _db()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    role = session.get('user_role', 'user')
+    username = session.get('username')
+    cfg = _get_config()
+    staleness_days = int(cfg.get('staleness_days') or 14)
     try:
-        wbs_overdue = db.execute('''
-            SELECT COUNT(*) c FROM wbs_tasks
-            WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')''').fetchone()['c']
-        req_due = db.execute('''
-            SELECT COUNT(*) c FROM req_items
-            WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
-            AND delivery_date <= date('now','localtime','+7 day')''').fetchone()['c']
-        req_overdue = db.execute('''
-            SELECT COUNT(*) c FROM req_items
-            WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
-            AND delivery_date < date('now','localtime')''').fetchone()['c']
+        if role in ('admin', 'platform_admin'):
+            wbs_overdue = db.execute('''
+                SELECT COUNT(*) c FROM wbs_tasks
+                WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')''').fetchone()['c']
+            req_due = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
+                AND delivery_date <= date('now','localtime','+7 day')''').fetchone()['c']
+            req_overdue = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
+                AND delivery_date < date('now','localtime')''').fetchone()['c']
+            stal = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+                AND updated_at <= datetime('now','localtime', ?)''',
+                (f'-{staleness_days} days',)).fetchone()['c']
+            stal_list = db.execute('''
+                SELECT id, code, title, status, updated_at FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+                AND updated_at <= datetime('now','localtime', ?)
+                ORDER BY updated_at LIMIT 8''',
+                (f'-{staleness_days} days',)).fetchall()
+        else:
+            wbs_overdue = db.execute('''
+                SELECT COUNT(*) c FROM wbs_tasks t JOIN wbs_projects p ON p.id=t.project_id
+                WHERE t.status NOT IN ('已完成','已取消') AND t.plan_end < date('now','localtime')
+                AND (p.owner=? OR p.participants LIKE ? OR t.owner=? OR t.collaborators LIKE ?)''',
+                (username, '%' + username + '%', username, '%' + username + '%')).fetchone()['c']
+            req_due = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
+                AND delivery_date <= date('now','localtime','+7 day')
+                AND (owner=? OR created_by=?)''', (username, username)).fetchone()['c']
+            req_overdue = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
+                AND delivery_date < date('now','localtime')
+                AND (owner=? OR created_by=?)''', (username, username)).fetchone()['c']
+            stal = db.execute('''
+                SELECT COUNT(*) c FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+                AND updated_at <= datetime('now','localtime', ?)
+                AND (owner=? OR created_by=?)''',
+                (f'-{staleness_days} days', username, username)).fetchone()['c']
+            stal_list = db.execute('''
+                SELECT id, code, title, status, updated_at FROM req_items
+                WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭')
+                AND updated_at <= datetime('now','localtime', ?)
+                AND (owner=? OR created_by=?)
+                ORDER BY updated_at LIMIT 8''',
+                (f'-{staleness_days} days', username, username)).fetchall()
         appr_pending = db.execute("SELECT COUNT(*) c FROM approval_requests WHERE status='待审批'").fetchone()['c']
     finally:
         db.close()
     return jsonify({
         'ok': True,
         'time': now,
+        'staleness_days': staleness_days,
         'alerts': {
-            'wbs_overdue_tasks': wbs_overdue,
-            'req_due_soon': req_due,
-            'req_overdue': req_overdue,
-            'approval_pending': appr_pending,
+            'wbs_overdue_tasks': wbs_overdue or 0,
+            'req_due_soon': req_due or 0,
+            'req_overdue': req_overdue or 0,
+            'req_stale': stal or 0,
+            'approval_pending': appr_pending or 0,
         },
+        'staleness_list': [{'id': r['id'], 'code': r['code'], 'title': r['title'],
+                            'status': r['status'], 'updated_at': r['updated_at'],
+                            'url': f'/requirements/{r["id"]}'} for r in stal_list],
         'readonly': True,
     })

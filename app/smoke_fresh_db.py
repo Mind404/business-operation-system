@@ -25,8 +25,11 @@ os.environ['BIZ_TEST_DB'] = DBPATH  # 供 app 使用独立库
 import app as appmod
 # 强制 app 指向测试库
 appmod.app.config['DATABASE'] = DBPATH
-# 初始化 schema（与 app 首启 init_db 同路径：schema.sql 全量建表 + 默认账号）
-appmod.init_db()
+# 初始化 schema（与 app 首启 init_db 同路径：schema.sql 全量建表 + 默认账号 + 插件注册表）
+with appmod.app.app_context():
+    appmod.init_db()
+    # 插件注册表由 app import 时写入（指向代码目录库）；测试库需在上下文内显式补一次（幂等）
+    appmod.plugin_system.init_plugin_tables()
 print('== 全新库初始化完成 ==')
 db = sqlite3.connect(DBPATH)
 tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
@@ -213,6 +216,33 @@ body = r.get_json() if r.is_json else {}
 check('health本地Ollama默认地址', body.get('mode') == 'local' and body.get('base_url') == 'http://127.0.0.1:11434', f'health={body}')
 r = client.post('/api/ai/test', json={'mode': 'local', 'provider_type': 'openai_compat', 'base_url': 'http://127.0.0.1:1234/v1'})
 check('本地兼容连接测试接口', r.status_code == 200 and 'msg' in (r.get_json() or {}), f'code={r.status_code}')
+
+# --- v11.1 AI 助手独立页 + 插件全景 + 呆滞预警 ---
+r = client.get('/assistant')
+html = r.get_data(as_text=True)
+check('AI助手页', r.status_code == 200 and 'AI 助手' in html and '预警播报' in html, f'code={r.status_code}')
+check('AI助手页含只读声明', '只读' in html and '绝不修改任何业务数据' in html, '')
+r = client.get('/plugins')
+html = r.get_data(as_text=True)
+check('插件全景页', r.status_code == 200 and '插件全景' in html and '数据表' in html, f'code={r.status_code}')
+check('插件全景含WBS/需求表清单', 'wbs_projects' in html and 'req_items' in html, '')
+# 导航含平台工具（AI助手+插件全景）
+r = client.get('/')
+html = r.get_data(as_text=True)
+check('导航含平台工具组', '平台工具' in html and '/assistant' in html and '/plugins' in html, '')
+# AI 设置页含呆滞阈值配置
+r = client.get('/admin/ai-settings')
+check('AI设置含呆滞阈值', '呆滞需求阈值' in r.get_data(as_text=True), f'code={r.status_code}')
+# 保存呆滞阈值 + alert-summary 反映
+r = client.post('/admin/ai-settings', data={
+    'mode': 'local', 'provider_type': 'ollama', 'base_url': '',
+    'api_key': '', 'model': 'qwen2.5:0.5b', 'enabled': '1', 'staleness_days': '7',
+}, follow_redirects=False)
+check('保存呆滞阈值7天', r.status_code in (302, 200), f'code={r.status_code}')
+r = client.get('/api/ai/alert-summary')
+body = r.get_json() if r.is_json else {}
+check('预警接口含呆滞字段', body.get('ok') and 'req_stale' in (body.get('alerts') or {}), f'body={body}')
+check('预警接口反映阈值7天', body.get('staleness_days') == 7, f'body={body}')
 
 # --- 清理测试库 ---
 shutil.rmtree(TMP, ignore_errors=True)

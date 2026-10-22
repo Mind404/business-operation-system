@@ -19,15 +19,21 @@ PLUGINS = [
      'desc': '我的信息、我的待办、修改密码', 'endpoint': 'profile', 'nav_path': '/profile'},
     {'id': 'workbench',    'name': '聚合视图',         'icon': '📊', 'group': '核心', 'core': 1,
      'desc': '平台聚合视图：WBS/需求/外部接入数据统一总览', 'endpoint': 'index', 'nav_path': '/',
-     'tables': ['tasks']},
+     'tables': [{'table': '平台总览', 'desc': 'WBS/需求/外部系统数据统一聚合视图，不做独立存储'}]},
 
     # --- 强管控业务插件（v11.0：平台只做强管控设计这两个方向） ---
     {'id': 'wbs',          'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
      'desc': '项目工作分解结构：父子任务树、负责人、协作人、时间窗、交付物', 'endpoint': 'wbs.wbs_projects', 'nav_path': '/wbs',
-     'tables': ['wbs_projects','wbs_tasks']},
+     'tables': [
+         {'table': 'wbs_projects', 'desc': '项目主表（名称/负责人/时间窗/审批状态）'},
+         {'table': 'wbs_tasks',    'desc': '任务树（父子级/负责人/协作人/时间窗/进度/审批）'}]},
     {'id': 'requirements', 'name': '需求收集',         'icon': '📋', 'group': '业务', 'core': 0,
      'desc': '需求强管控：收集、评审、状态流转、审批、追溯', 'endpoint': 'requirements.req_list', 'nav_path': '/requirements',
-     'tables': ['req_items','req_reviews','req_changes','req_field_config']},
+     'tables': [
+         {'table': 'req_items',        'desc': '需求主表（编号/来源部门/优先级/交付日期/状态流转）'},
+         {'table': 'req_reviews',      'desc': '评审记录'},
+         {'table': 'req_changes',      'desc': '状态变更历史'},
+         {'table': 'req_field_config', 'desc': '自定义字段配置'}]},
 ]
 
 # 业务插件 endpoint → plugin_id 映射（用于路由守卫）
@@ -129,6 +135,7 @@ def register_plugin_guard(app):
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
                             'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search',
                             'approval_center', 'approval_review', 'admin_external',
+                            'assistant',
                             'admin_users', 'admin_users_create', 'admin_users_update',
                             'admin_users_toggle', 'admin_users_reset_pwd'):
             return None

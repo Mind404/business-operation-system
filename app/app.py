@@ -244,7 +244,15 @@ def plugin_center():
     db = get_db()
     user_id = session.get('user_id')
     subscribed = plugin_system.get_user_plugin_ids(user_id)
-    plugins = db.execute('SELECT * FROM plugin_registry ORDER BY core DESC, id').fetchall()
+    rows = db.execute('SELECT * FROM plugin_registry ORDER BY core DESC, id').fetchall()
+    plugins = []
+    for r in rows:
+        p = dict(r)
+        try:
+            p['tables'] = json.loads(p.get('tables') or '[]')
+        except Exception:
+            p['tables'] = []
+        plugins.append(p)
     return render_template('plugin_center.html', plugins=plugins, subscribed=subscribed)
 
 @app.route('/plugins/toggle/<plugin_id>', methods=['POST'])
@@ -256,6 +264,14 @@ def plugin_toggle(plugin_id):
     else:
         flash(msg, 'success')
     return redirect(url_for('plugin_center'))
+
+
+# ============================================================
+# AI 助手（v11.1 独立页）：聊天窗口 + 登录主动播报预警（只读）
+# ============================================================
+@app.route('/assistant')
+def assistant():
+    return render_template('ai_assistant.html')
 
 
 # ============================================================
@@ -648,6 +664,13 @@ def admin_ai_settings():
         api_key = (request.form.get('api_key') or '').strip()
         model = (request.form.get('model') or '').strip()
         enabled = '1' if request.form.get('enabled') == '1' else '0'
+        # v11.1 呆滞需求阈值（天）
+        staleness_raw = (request.form.get('staleness_days') or '').strip()
+        try:
+            staleness_days = int(staleness_raw) if staleness_raw else 14
+        except ValueError:
+            staleness_days = 14
+        staleness_days = max(1, min(staleness_days, 365))
         # 未填写新 key 时保留旧 key（避免编辑其他项时清空密钥）
         if not api_key:
             cur = _get_config()
@@ -660,7 +683,8 @@ def admin_ai_settings():
             flash('请填写模型名称', 'error')
             return redirect(url_for('admin_ai_settings'))
         _save_config({'mode': mode, 'provider_type': provider_type, 'base_url': base_url,
-                      'api_key': api_key, 'model': model, 'enabled': enabled})
+                      'api_key': api_key, 'model': model, 'enabled': enabled,
+                      'staleness_days': str(staleness_days)})
         log_operation('平台', 'AI设置', f'更新 AI 模型配置（模式={mode}，服务={provider_type}，模型={model}）')
         flash('AI 模型配置已保存', 'success')
         return redirect(url_for('admin_ai_settings'))

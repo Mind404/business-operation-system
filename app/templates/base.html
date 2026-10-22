@@ -44,6 +44,17 @@
                 </div>
                 {% endif %}
 
+                {# v11.1 平台工具：AI 助手（只读监控/问答）+ 插件全景（所有登录用户可见） #}
+                <div class="nav-group">
+                    <div class="nav-group-title">平台工具</div>
+                    <a href="{{ url_for('assistant') }}" class="nav-item {% if request.path.startswith('/assistant') %}active{% endif %}">
+                        <span class="nav-icon">🤖</span> AI 助手
+                    </a>
+                    <a href="{{ url_for('plugin_center') }}" class="nav-item {% if request.path.startswith('/plugins') %}active{% endif %}">
+                        <span class="nav-icon">🧩</span> 插件全景
+                    </a>
+                </div>
+
                 {# v11.0.3 系统管理（仅平台管理员可见）：用户管理/外部系统接入/AI 设置 #}
                 {% if current_role == 'platform_admin' %}
                 <div class="nav-group">

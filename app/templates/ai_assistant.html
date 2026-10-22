@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}AI 助手 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🤖 AI 助手</h1>
+    <p class="page-desc">平台内置小模型：监控计划进度与呆滞需求、临期预警、数据问答。🔒 只读辅助——仅分析平台聚合数据，绝不修改任何业务数据。</p>
+</div>
+
+<!-- 模型状态 -->
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <span class="ai-badge" id="aiStatus">检测中…</span>
+    <span style="font-size:12px;color:#64748b;" id="aiSource"></span>
+</div>
+
+<!-- 预警播报 -->
+<div class="dash-panel" style="margin-bottom:16px;">
+    <div class="panel-head">
+        <h3 class="panel-title">⚠️ 今日预警播报</h3>
+        <span style="font-size:12px;color:#94a3b8;">进入页面自动播报 · 数据只读</span>
+    </div>
+    <div id="alertGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;padding:4px 0;">
+        <div class="empty-box" style="grid-column:1/-1;"><div class="empty-text-lg">加载中…</div></div>
+    </div>
+    <div id="staleList" style="margin-top:12px;"></div>
+</div>
+
+<!-- 对话窗口 -->
+<div class="dash-panel">
+    <div class="panel-head">
+        <h3 class="panel-title">💬 数据问答</h3>
+        <span style="font-size:12px;color:#94a3b8;">问：进度/风险/呆滞需求/临期事项，AI 会指引你查看原始记录</span>
+    </div>
+    <div id="chatBox" style="min-height:220px;max-height:420px;overflow-y:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div class="chat-empty" style="color:#94a3b8;font-size:13px;text-align:center;padding:40px 0;">
+            开始提问吧，例如：<br>
+            「当前有哪些需求快到期了？」<br>
+            「哪些需求很久没有推进了（呆滞）？」<br>
+            「WBS 有没有逾期任务？分别是什么？」
+        </div>
+    </div>
+    <div class="ai-ask-row" style="display:flex;gap:10px;">
+        <input type="text" id="aiQuestion" class="ai-input" style="flex:1;"
+               placeholder="输入你的问题…（Enter 发送）"
+               onkeydown="if(event.key==='Enter')aiAsk()">
+        <button class="btn btn-primary" onclick="aiAsk()">发送</button>
+    </div>
+    <div class="ai-foot" style="margin-top:10px;font-size:12px;color:#94a3b8;">
+        🔒 数据只读：AI 仅分析平台聚合数据，绝不修改业务数据；回答会标注数据来源与时间，并附原始记录链接。
+    </div>
+</div>
+
+{% endblock %}
+
+{% block styles %}
+{{ super() }}
+<style>
+.ai-badge { background:#eef2ff;color:#1e40af;padding:5px 14px;border-radius:14px;font-size:13px;font-weight:600; }
+.ai-badge.ok { background:#dcfce7;color:#15803d; }
+.ai-badge.err { background:#fee2e2;color:#b91c1c; }
+.chat-msg { margin-bottom:12px; }
+.chat-q { background:#eef2ff;color:#1e3a8a;padding:9px 14px;border-radius:10px 10px 2px 10px;font-size:14px;margin-bottom:6px;max-width:88%; }
+.chat-a { background:#fff;border:1px solid #e2e8f0;color:#334155;padding:11px 14px;border-radius:10px 10px 10px 2px;font-size:14px;line-height:1.75;max-width:96%;white-space:pre-wrap; }
+.chat-meta { font-size:11px;color:#94a3b8;margin-top:4px; }
+.chat-refs { margin-top:8px; }
+.chat-refs a { display:inline-block;background:#f0f4ff;border:1px solid #bfd3ff;color:#1e40af;padding:4px 12px;border-radius:8px;font-size:12px;text-decoration:none;margin:3px 6px 0 0; }
+.alert-card { background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px; }
+.alert-card .ac-num { font-size:24px;font-weight:700;line-height:1.2; }
+.alert-card .ac-label { font-size:12px;color:#64748b;margin-top:4px; }
+.alert-card.ac-warn { border-color:#fecaca;background:#fff7f7; }
+.alert-card.ac-warn .ac-num { color:#dc2626; }
+.alert-card.ac-amber { border-color:#fed7aa;background:#fffbf5; }
+.alert-card.ac-amber .ac-num { color:#ea580c; }
+.alert-card.ac-blue { border-color:#bfd3ff;background:#f5f8ff; }
+.alert-card.ac-blue .ac-num { color:#1d4ed8; }
+.stale-row { display:flex;gap:10px;align-items:center;font-size:13px;padding:7px 0;border-top:1px dashed #e2e8f0; }
+.stale-row:first-of-type { border-top:none; }
+.stale-row a { color:#1d4ed8;text-decoration:none;font-weight:600; }
+.stale-tag { background:#fef3c7;color:#b45309;padding:2px 9px;border-radius:10px;font-size:12px;flex-shrink:0; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let AI_READY = false;
+
+function aiStatusBadge(el){ return el && el.className.includes('ok'); }
+
+function aiHealth(){
+    fetch('/api/ai/health').then(r=>r.json()).then(d=>{
+        const st=document.getElementById('aiStatus');
+        const src=document.getElementById('aiSource');
+        if(d.ok){
+            st.textContent='✅ 模型在线（'+(d.mode==='remote'?'远程':'本地')+'）';
+            st.className='ai-badge ok';
+            src.textContent=(d.base_url||'')+' / '+(d.model||'');
+            AI_READY=true;
+        }else{
+            st.textContent='⚠️ '+(d.detail||'模型不可用');
+            st.className='ai-badge err';
+            src.textContent='可在「系统管理 → AI 设置」检查配置';
+        }
+    }).catch(()=>{
+        document.getElementById('aiStatus').textContent='⚠️ 无法连接服务';
+        document.getElementById('aiStatus').className='ai-badge err';
+    });
+}
+
+function alertSummary(){
+    fetch('/api/ai/alert-summary').then(r=>r.json()).then(d=>{
+        const box=document.getElementById('alertGrid');
+        const list=document.getElementById('staleList');
+        if(!d.ok){ box.innerHTML='<div class="empty-box"><div class="empty-text-lg">预警加载失败</div></div>'; return; }
+        const a=d.alerts||{};
+        const cards=[
+            {n:a.wbs_overdue_tasks||0,l:'WBS 逾期任务',c:'ac-warn'},
+            {n:a.req_overdue||0,l:'需求已逾期',c:'ac-warn'},
+            {n:a.req_due_soon||0,l:'需求临期(7天内)',c:'ac-amber'},
+            {n:a.req_stale||0,l:'呆滞需求(>'+d.staleness_days+'天)',c:'ac-blue'},
+            {n:a.approval_pending||0,l:'待审批事项',c:'ac-amber'},
+        ];
+        box.innerHTML=cards.map(c=>
+            '<div class="alert-card '+c.c+'"><div class="ac-num">'+c.n+'</div><div class="ac-label">'+c.l+'</div></div>'
+        ).join('');
+        // 呆滞需求明细（带原始记录链接）
+        const sl=d.staleness_list||[];
+        if(sl.length){
+            list.innerHTML='<div style="font-size:13px;color:#b45309;font-weight:600;margin-bottom:4px;">🧊 呆滞需求明细（超 '+d.staleness_days+' 天未推进，点编号查看原始记录）</div>'+
+                sl.map(r=>'<div class="stale-row"><span class="stale-tag">'+r.status+'</span><a href="'+r.url+'">'+r.code+' '+r.title+'</a><span style="color:#94a3b8;font-size:12px;">最后更新 '+r.updated_at+'</span></div>').join('');
+        }else{
+            list.innerHTML='';
+        }
+    }).catch(()=>{
+        document.getElementById('alertGrid').innerHTML='<div class="empty-box"><div class="empty-text-lg">预警加载失败</div></div>';
+    });
+}
+
+function aiAsk(){
+    const q=document.getElementById('aiQuestion').value.trim();
+    if(!q) return;
+    const box=document.getElementById('chatBox');
+    const empty=box.querySelector('.chat-empty'); if(empty) empty.style.display='none';
+    box.innerHTML+='<div class="chat-msg"><div class="chat-q">'+escapeHtml(q)+'</div><div style="color:#94a3b8;font-size:12px;">模型思考中（首次约 10~60 秒，请稍候）…</div></div>';
+    box.scrollTop=box.scrollHeight;
+    document.getElementById('aiQuestion').value='';
+    fetch('/api/ai/ask',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({question:q})
+    }).then(r=>r.json()).then(d=>{
+        // 移除思考中
+        const last=box.lastElementChild;
+        if(last && last.querySelector('div[style*="94a3b8"]')) last.remove();
+        if(!d.ok){
+            box.innerHTML+='<div class="chat-msg"><div class="chat-a">⚠️ '+(d.msg||'请求失败')+'<br><span style="color:#94a3b8;font-size:12px;">'+(d.detail||'')+'</span></div></div>';
+        }else{
+            let html='<div class="chat-a">'+escapeHtml(d.answer)+'</div>';
+            if(d.refs && d.refs.length){
+                html+='<div class="chat-refs">相关原始记录：'+d.refs.map(r=>'<a href="'+r.url+'" target="_blank">🔗 '+escapeHtml(r.label)+'</a>').join('')+'</div>';
+            }
+            html+='<div class="chat-meta">🔒 只读 · '+escapeHtml(d.source||'')+' · 数据时间 '+d.data_time+'</div>';
+            box.innerHTML+='<div class="chat-msg">'+html+'</div>';
+        }
+        box.scrollTop=box.scrollHeight;
+    }).catch(()=>{
+        const last=box.lastElementChild;
+        if(last && last.querySelector('div[style*="94a3b8"]')) last.remove();
+        box.innerHTML+='<div class="chat-msg"><div class="chat-a">⚠️ 请求失败，请检查服务是否运行。</div></div>';
+    });
+}
+
+function escapeHtml(s){
+    return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+aiHealth();
+alertSummary();
+</script>
+{% endblock %}

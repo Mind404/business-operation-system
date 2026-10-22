@@ -97,8 +97,16 @@
             <div style="margin-bottom:16px;">
                 <label style="font-size:13px;color:#475569;font-weight:600;display:flex;align-items:center;gap:8px;cursor:pointer;">
                     <input type="checkbox" name="enabled" value="1" {% if cfg.enabled == '1' %}checked{% endif %} style="width:16px;height:16px;">
-                    AI 助手启用（启用后聚合视图 AI 卡片 / 问答可用）
+                    AI 助手启用（启用后聚合视图 AI 卡片 / AI 助手页可用）
                 </label>
+            </div>
+
+            <!-- v11.1 呆滞需求阈值 -->
+            <div style="margin-bottom:16px;">
+                <label style="font-size:13px;color:#475569;font-weight:600;display:block;margin-bottom:6px;">呆滞需求阈值（天）</label>
+                <input name="staleness_days" type="number" min="1" max="365" value="{{ cfg.staleness_days or 14 }}"
+                       style="width:120px;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                <div style="font-size:11px;color:#64748b;margin-top:4px;">需求停留在未完成状态超过该天数且无更新，即判定为「呆滞需求」，AI 助手与预警播报会自动提醒。</div>
             </div>
 
             <div style="display:flex;gap:10px;align-items:center;">

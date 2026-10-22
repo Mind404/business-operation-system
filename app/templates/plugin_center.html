@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}插件中心 - 业务高效运转系统{% endblock %}
+{% block title %}插件全景 - 业务高效运转系统{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🧩 插件中心</h1>
-    <p class="page-desc">按需订阅你的工作模块，未订阅的模块不会出现在左侧导航。取消订阅只隐藏入口，数据保留不删。</p>
+    <h1>🧩 插件全景</h1>
+    <p class="page-desc">平台内置插件一览：每个插件的数据库表均登记在平台注册表中，受平台统一管理（权限/审批/AI只读分析）。外部独立系统见「系统管理 → 外部系统接入」。</p>
 </div>
 
 {% set groups = {} %}
@@ -18,26 +18,36 @@
     <h3 style="font-size:16px;color:#333;margin:0 0 14px;padding-left:12px;border-left:4px solid #2563eb;">{{ group_name }}</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     {% for p in group_plugins %}
-        <div style="border:1px solid #e0e4ea;border-radius:10px;padding:20px;background:#fff;display:flex;gap:16px;align-items:flex-start;{% if p.core %}opacity:0.9;{% endif %}">
-            <div style="font-size:36px;line-height:1;flex-shrink:0;margin-top:4px;">{{ p.icon }}</div>
+        <div style="border:1px solid #e0e4ea;border-radius:10px;padding:18px 20px;background:#fff;display:flex;gap:16px;align-items:flex-start;">
+            <div style="font-size:34px;line-height:1;flex-shrink:0;margin-top:4px;">{{ p.icon }}</div>
             <div style="flex:1;min-width:0;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="font-size:17px;font-weight:bold;color:#222;">{{ p.name }}</span>
+                    <span style="font-size:16px;font-weight:bold;color:#222;">{{ p.name }}</span>
                     {% if p.core %}
-                        <span style="background:#e8f0fe;color:#2563eb;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">常驻</span>
-                    {% elif p.id in subscribed %}
-                        <span style="background:#e6f7e6;color:#2a7a2a;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">已订阅</span>
+                        <span style="background:#e8f0fe;color:#2563eb;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">平台常驻</span>
                     {% else %}
-                        <span style="background:#f5f5f5;color:#999;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">未订阅</span>
+                        <span style="background:#e6f7e6;color:#2a7a2a;padding:3px 10px;border-radius:10px;font-size:12px;flex-shrink:0;">业务插件</span>
                     {% endif %}
                 </div>
-                <p style="font-size:14px;color:#555;line-height:1.6;margin:0 0 12px;">{{ p.description }}</p>
-                {% if not p.core %}
-                <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}">
-                    <button type="submit" style="padding:7px 20px;border:none;border-radius:6px;cursor:pointer;font-size:14px;
-                    {% if p.id in subscribed %}background:#fff0f0;color:#dc3545;border:1px solid #f5c6cb;
-                    {% else %}background:#2563eb;color:#fff;border:1px solid #2563eb;{% endif %}">
-                    {% if p.id in subscribed %}取消订阅{% else %}+ 订阅{% endif %}
+                <p style="font-size:13px;color:#555;line-height:1.6;margin:0 0 10px;">{{ p.description }}</p>
+
+                {% set tbls = p.tables %}
+                {% if tbls %}
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;">
+                    <div style="font-size:12px;color:#64748b;margin-bottom:6px;">🗄 数据表（登记于平台注册表）</div>
+                    {% for t in tbls %}
+                    <div style="display:flex;gap:8px;align-items:baseline;font-size:12px;margin-bottom:3px;">
+                        <code style="background:#eef2ff;color:#1e40af;padding:2px 8px;border-radius:5px;font-size:12px;white-space:nowrap;">{{ t.table }}</code>
+                        <span style="color:#64748b;">{{ t.desc }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {% if not p.core and current_role in ('admin','platform_admin') %}
+                <form method="post" action="{{ url_for('plugin_toggle', plugin_id=p.id) }}" style="margin-top:10px;">
+                    <button type="submit" style="padding:6px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;">
+                        ⚙️ 管理启用状态
                     </button>
                 </form>
                 {% endif %}
