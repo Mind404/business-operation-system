@@ -111,17 +111,19 @@ def get_user_plugin_ids(user_id):
 
 
 def inject_nav_context():
-    """注入模板导航：核心（个人中心/聚合视图）常驻 + 强管控业务插件（WBS/需求，所有登录用户可见）"""
+    """注入模板导航：核心（个人中心/聚合视图）常驻 + 业务插件（强管控常驻 + 已订阅插件）"""
     user_id = session.get('user_id')
     if not user_id:
         return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
     registered = set(current_app.view_functions.keys())
     available = [p for p in PLUGINS if p['endpoint'] in registered]
     core_plugins = [p for p in available if p['core']]
-    # v11.0.0：WBS + 需求收集 为强管控业务插件，所有登录用户常驻可见（无需订阅）
-    biz_plugins = [p for p in available if not p['core'] and p['id'] in _ALWAYS_ON_BIZ]
+    # v11.1.1：强管控（WBS/需求）常驻 + 已订阅的业务插件显示在「我的工作」；后续新插件默认需订阅
+    subscribed_ids = get_user_plugin_ids(user_id)
+    biz_plugins = [p for p in available if not p['core'] and
+                   (p['id'] in _ALWAYS_ON_BIZ or p['id'] in subscribed_ids)]
     return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
-            'nav_all_plugins': available, 'user_subscribed': set()}
+            'nav_all_plugins': available, 'user_subscribed': subscribed_ids}
 
 
 def register_plugin_guard(app):

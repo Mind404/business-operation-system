@@ -74,15 +74,20 @@ def wbs_alerts():
 def wbs_project_add():
     db = get_db()
     admins = db.execute("SELECT username, display_name FROM users WHERE role='admin' AND is_active=1 ORDER BY username").fetchall()
+    # v11.1.1：负责人/参与人改为从平台用户表选择（角色可选）
+    users = db.execute("SELECT username, display_name, role, department FROM users WHERE is_active=1 ORDER BY username").fetchall()
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         is_admin = session.get('user_role') in ('admin', 'platform_admin')
         approval_status = '已通过' if is_admin else '待审批'
         approver = '' if is_admin else request.form.get('approver','')
+        # 参与人多选：request.form.getlist('participants')，逗号拼接
+        participants = request.form.getlist('participants')
+        participants_str = '、'.join(x for x in participants if x)
         db.execute('''INSERT INTO wbs_projects (name, description, owner, participants, start_date, end_date, status, approver, approval_status, created_at, updated_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (request.form.get('name',''), request.form.get('description',''), request.form.get('owner',''),
-             request.form.get('participants',''),
+             participants_str,
              request.form.get('start_date',''), request.form.get('end_date',''),
              request.form.get('status','进行中'), approver, approval_status, now, now))
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -93,7 +98,7 @@ def wbs_project_add():
         else:
             flash('项目已提交，等待管理员审批通过后才能导入任务。', 'success')
             return redirect(url_for('wbs.wbs_projects'))
-    return render_template('wbs_project_form.html', p=None, admins=admins)
+    return render_template('wbs_project_form.html', p=None, admins=admins, users=users)
 
 
 @blueprint.route('/wbs/<int:pid>/edit', methods=['GET', 'POST'])
@@ -107,15 +112,18 @@ def wbs_project_edit(pid):
         return redirect(url_for('wbs.wbs_projects'))
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        participants = request.form.getlist('participants')
+        participants_str = '、'.join(x for x in participants if x)
         db.execute('''UPDATE wbs_projects SET name=?, description=?, owner=?, participants=?,
             start_date=?, end_date=?, updated_at=? WHERE id=?''',
             (request.form.get('name',p['name']), request.form.get('description',p['description']),
-             request.form.get('owner',p['owner']), request.form.get('participants',p['participants'] or ''),
+             request.form.get('owner',p['owner']), participants_str,
              request.form.get('start_date',p['start_date']), request.form.get('end_date',p['end_date']),
              now, pid))
         db.commit()
         return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-    return render_template('wbs_project_form.html', p=p)
+    users = db.execute("SELECT username, display_name, role, department FROM users WHERE is_active=1 ORDER BY username").fetchall()
+    return render_template('wbs_project_form.html', p=p, users=users)
 
 
 @blueprint.route('/wbs/<int:pid>/approve', methods=['POST'])

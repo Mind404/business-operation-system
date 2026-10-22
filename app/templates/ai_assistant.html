@@ -76,6 +76,9 @@
 .stale-row:first-of-type { border-top:none; }
 .stale-row a { color:#1d4ed8;text-decoration:none;font-weight:600; }
 .stale-tag { background:#fef3c7;color:#b45309;padding:2px 9px;border-radius:10px;font-size:12px;flex-shrink:0; }
+.alert-card.ac-link { display:block;text-decoration:none;cursor:pointer;transition:box-shadow .15s,transform .15s; }
+.alert-card.ac-link:hover { box-shadow:0 3px 10px rgba(0,0,0,0.10);transform:translateY(-1px); }
+.alert-card.ac-link .ac-label { text-decoration:underline; }
 </style>
 {% endblock %}
 
@@ -112,14 +115,14 @@ function alertSummary(){
         if(!d.ok){ box.innerHTML='<div class="empty-box"><div class="empty-text-lg">预警加载失败</div></div>'; return; }
         const a=d.alerts||{};
         const cards=[
-            {n:a.wbs_overdue_tasks||0,l:'WBS 逾期任务',c:'ac-warn'},
-            {n:a.req_overdue||0,l:'需求已逾期',c:'ac-warn'},
-            {n:a.req_due_soon||0,l:'需求临期(7天内)',c:'ac-amber'},
-            {n:a.req_stale||0,l:'呆滞需求(>'+d.staleness_days+'天)',c:'ac-blue'},
-            {n:a.approval_pending||0,l:'待审批事项',c:'ac-amber'},
+            {n:a.wbs_overdue_tasks||0,l:'WBS 逾期任务',c:'ac-warn',href:'/wbs/alerts'},
+            {n:a.req_overdue||0,l:'需求已逾期',c:'ac-warn',href:'/requirements'},
+            {n:a.req_due_soon||0,l:'需求临期(7天内)',c:'ac-amber',href:'/requirements'},
+            {n:a.req_stale||0,l:'呆滞需求(>'+d.staleness_days+'天)',c:'ac-blue',href:'/requirements'},
+            {n:a.approval_pending||0,l:'待审批事项',c:'ac-amber',href:'/profile#approvals'},
         ];
         box.innerHTML=cards.map(c=>
-            '<div class="alert-card '+c.c+'"><div class="ac-num">'+c.n+'</div><div class="ac-label">'+c.l+'</div></div>'
+            '<a href="'+c.href+'" class="alert-card '+c.c+' ac-link" title="点击查看明细"><div class="ac-num">'+c.n+'</div><div class="ac-label">'+c.l+' ›</div></a>'
         ).join('');
         // 呆滞需求明细（带原始记录链接）
         const sl=d.staleness_list||[];
