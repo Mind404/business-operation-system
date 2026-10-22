@@ -52,7 +52,7 @@
         </div>
     </div>
 
-    {% if not p and current_role != 'admin' %}
+    {% if not p and current_role not in ('admin', 'platform_admin') %}
     <div style="margin-bottom:20px;padding:14px;background:#fff8e6;border:1px solid #ffe0a0;border-radius:6px;">
         <label style="display:block;font-size:13px;color:#856404;margin-bottom:8px;font-weight:500;">
             ⚠️ 普通用户创建项目需管理员审批。审批通过后才能导入WBS任务。请选择审批人：

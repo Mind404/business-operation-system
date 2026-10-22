@@ -44,15 +44,12 @@
                 </div>
                 {% endif %}
 
-                {# v10.5.0 用户管理（仅管理员可见） #}
-                {% if current_role == 'admin' %}
+                {# v11.0.3 系统管理（仅平台管理员可见）：用户管理/外部系统接入/AI 设置 #}
+                {% if current_role == 'platform_admin' %}
                 <div class="nav-group">
                     <div class="nav-group-title">系统管理</div>
                     <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
                         <span class="nav-icon">👥</span> 用户管理
-                    </a>
-                    <a href="{{ url_for('admin_approval_flows') }}" class="nav-item {% if request.path.startswith('/admin/approval-flows') %}active{% endif %}">
-                        <span class="nav-icon">🔀</span> 审批流配置
                     </a>
                     <a href="{{ url_for('admin_external') }}" class="nav-item {% if request.path.startswith('/admin/external') %}active{% endif %}">
                         <span class="nav-icon">🔌</span> 外部系统接入
@@ -63,12 +60,7 @@
                 </div>
                 {% endif %}
 
-                {# v11.0 审批中心（平台统一审批：所有登录用户可见） #}
-                <div class="nav-group">
-                    <a href="{{ url_for('approval_center') }}" class="nav-item {% if request.path == '/approvals' %}active{% endif %}">
-                        <span class="nav-icon">📋</span> 审批中心
-                    </a>
-                </div>
+                {# v11.0.3 审批中心已合并进个人中心（/profile#approvals），不再单独导航 #}
 
                 {# 插件中心（v10.5.0 软下线：系统仅保留 WBS，订阅机制无实际意义，代码保留可恢复） #}
                 {% if false %}
@@ -101,7 +93,7 @@
                     <div class="user-info">
                         <span class="user-avatar">{{ current_user[0] if current_user else 'U' }}</span>
                         <span class="user-name">{{ current_user or '未登录' }}</span>
-                        <span class="user-role">{{ current_role or '' }}</span>
+                        <span class="user-role">{{ {'platform_admin':'平台管理员','admin':'管理员','user':'普通用户'}.get(current_role, current_role) or '' }}</span>
                         <a href="{{ url_for('logout') }}" class="logout-btn">退出</a>
                     </div>
                 </div>

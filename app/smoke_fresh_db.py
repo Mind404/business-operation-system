@@ -33,13 +33,19 @@ tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='t
 print('   表数量:', len(tables))
 users_cols = [r[1] for r in db.execute('PRAGMA table_info(users)').fetchall()]
 print('   users 列:', users_cols)
-# 初始化管理员（模拟 app 首启逻辑）
+# 初始化管理员（模拟 app 首启逻辑 + v11.0.3 平台管理员）
 with appmod.app.app_context():
     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:
         from datetime import datetime
         db.execute("INSERT INTO users (username, password, display_name, role, is_active, department) VALUES (?,?,?,?,1,?)",
-                   ('admin', 'admin123', '系统管理员', 'admin', '平台管理部'))
+                   ('admin', 'admin123', '系统管理员', 'platform_admin', '平台管理部'))
         db.commit()
+    # 补充：普通用户 + 管理员（三级角色）
+    db.execute("INSERT OR IGNORE INTO users (username, password, display_name, role, is_active, department) VALUES (?,?,?,?,1,?)",
+               ('smoke_admin', 'admin1234', '冒烟管理员', 'admin', '测试部'))
+    db.execute("INSERT OR IGNORE INTO users (username, password, display_name, role, is_active, department) VALUES (?,?,?,?,1,?)",
+               ('smoke_user', 'user1234', '冒烟普通用户', 'user', '测试部'))
+    db.commit()
 db.close()
 
 # ============ 2) 用 Flask test client 遍历路由（真渲染、真数据库） ============
@@ -88,16 +94,45 @@ check('需求详情页', r.status_code == 200, f'code={r.status_code}')
 r = client.get('/requirements/fields')
 check('需求字段配置页', r.status_code == 200, f'code={r.status_code}')
 
-# --- 审批流配置 + 审批中心（新库） ---
+# --- 审批流配置（平台管理员，v11.0.3 暂时入口停用但平台管理员可直达）+ 审批中心并入个人中心 ---
 r = client.post('/admin/approval-flows/save', data={
     'plugin_id': 'requirements', 'record_type': 'req_status',
     'name': '需求审批-两级', 'step_role': ['user', 'admin'], 'enabled': '1',
 })
 check('审批流保存', r.status_code == 200, f'code={r.status_code}')
 r = client.get('/admin/approval-flows')
-check('审批流配置页', r.status_code == 200, f'code={r.status_code}')
+check('审批流配置页(平台管理员可直达)', r.status_code == 200, f'code={r.status_code}')
 r = client.get('/approvals')
-check('审批中心页', r.status_code == 200, f'code={r.status_code}')
+check('审批中心路由重定向到个人中心', r.status_code == 302 and '/profile' in r.headers.get('Location', ''), f'code={r.status_code} loc={r.headers.get("Location")}')
+r = client.get('/profile')
+html = r.get_data(as_text=True)
+check('个人中心含审批板块', r.status_code == 200 and '审批中心' in html and '待我审批' in html, f'code={r.status_code}')
+check('个人中心无审批流配置按钮', '审批流配置' not in html, '')
+
+# --- v11.0.3 三级角色权限 ---
+# 管理员（admin）：可编辑业务/审批，但无平台配置权限
+client2 = appmod.app.test_client()
+r = client2.post('/login', data={'username': 'smoke_admin', 'password': 'admin1234'}, follow_redirects=False)
+check('管理员登录', r.status_code in (302, 200), f'code={r.status_code}')
+r = client2.get('/admin/users', follow_redirects=True)
+check('管理员不可访问用户管理', '无权限' in r.get_data(as_text=True), f'code={r.status_code}')
+r = client2.get('/admin/ai-settings', follow_redirects=True)
+check('管理员不可访问AI设置', '仅平台管理员' in r.get_data(as_text=True), f'code={r.status_code}')
+r = client2.get('/profile')
+check('管理员个人中心可审', r.status_code == 200 and '审批中心' in r.get_data(as_text=True), f'code={r.status_code}')
+# 普通用户（user）：无平台配置权限，可查看个人中心
+client3 = appmod.app.test_client()
+r = client3.post('/login', data={'username': 'smoke_user', 'password': 'user1234'}, follow_redirects=False)
+check('普通用户登录', r.status_code in (302, 200), f'code={r.status_code}')
+r = client3.get('/admin/users', follow_redirects=True)
+check('普通用户不可访问用户管理', '无权限' in r.get_data(as_text=True), f'code={r.status_code}')
+r = client3.get('/profile')
+check('普通用户个人中心', r.status_code == 200 and '修改密码' in r.get_data(as_text=True), f'code={r.status_code}')
+# 平台管理员可创建平台管理员角色用户
+r = client.post('/admin/users/create', data={'username': 'smoke_pm2', 'password': 'pm12345', 'display_name': '平台管理员2', 'role': 'platform_admin', 'department': '平台部'}, follow_redirects=False)
+check('创建平台管理员', r.status_code in (302, 200), f'code={r.status_code}')
+r = client.get('/admin/users')
+check('用户列表含平台管理员徽章', '平台管理员' in r.get_data(as_text=True), f'code={r.status_code}')
 
 # --- 外部系统接入（新库） ---
 r = client.post('/admin/external/create', data={

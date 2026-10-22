@@ -41,8 +41,8 @@ def close_db(exception):
 
 
 def _is_admin():
-    # 与平台 session 键保持一致：登录写入 session['user_role']
-    return session.get('user_role') == 'admin'
+    # 与平台角色体系一致（v11.0.3 三级角色）：管理组 = 平台管理员 + 管理员
+    return session.get('user_role') in ('admin', 'platform_admin')
 
 
 def _now():

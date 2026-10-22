@@ -30,13 +30,13 @@
         </p>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        {% if current_role == 'admin' %}
+        {% if current_role in ('admin', 'platform_admin') %}
         <a href="{{ url_for('wbs.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
         {% endif %}
         <button onclick="tryImport()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
         <a href="{{ url_for('wbs.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
         <a href="{{ url_for('wbs.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
-        {% if current_role == 'admin' and pending_count > 0 %}
+        {% if current_role in ('admin', 'platform_admin') and pending_count > 0 %}
         <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
             ✓ 通过
         </button>
@@ -62,7 +62,7 @@
 </div>
 {% endif %}
 
-{% if rejected_count > 0 and current_role != 'admin' %}
+{% if rejected_count > 0 and current_role not in ('admin', 'platform_admin') %}
 <div style="padding:12px 16px;margin:8px 0;background:#fde6e6;border:1px solid #f5b5b5;border-radius:6px;display:flex;align-items:center;gap:10px;">
     <span style="font-size:16px;">⛔</span>
     <span style="font-size:13px;color:#a33;">
@@ -72,7 +72,7 @@
 </div>
 {% endif %}
 
-{% if p.approval_status == '已驳回' and current_role != 'admin' %}
+{% if p.approval_status == '已驳回' and current_role not in ('admin', 'platform_admin') %}
 <div style="padding:12px 16px;margin:8px 0;background:#fde6e6;border:1px solid #f5b5b5;border-radius:6px;display:flex;align-items:center;gap:10px;">
     <span style="font-size:16px;">⛔</span>
     <span style="font-size:13px;color:#a33;">该项目已被管理员驳回，需重新提交审批，通过后才能导入任务。</span>
@@ -102,7 +102,7 @@
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:60px;">进展</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:100px;">产出物</th>
             <th style="padding:9px 6px;border:1px solid #d0d7e5;width:90px;">备注</th>
-            {% if current_role == 'admin' %}<th style="padding:9px 6px;border:1px solid #d0d7e5;width:50px;">操作</th>{% endif %}
+            {% if current_role in ('admin', 'platform_admin') %}<th style="padding:9px 6px;border:1px solid #d0d7e5;width:50px;">操作</th>{% endif %}
         </tr>
     </thead>
     <tbody>
@@ -114,37 +114,37 @@
             style="{% if is_phase %}background:#d6e4f5;font-weight:600;{% else %}background:#fff;{% endif %}">
             <td style="padding:7px 6px;border:1px solid #d0d7e5;text-align:center;">{{ t.wbs_code }}</td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;padding-left:{{ pad + 6 }}px;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="name" data-tid="{{ t.id }}">{{ t.name }}</span>
                 {% else %}{{ t.name }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="work_content" data-tid="{{ t.id }}">{{ t.work_content or '' }}</span>
                 {% else %}{{ t.work_content or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="owner" data-tid="{{ t.id }}">{{ t.owner or '' }}</span>
                 {% else %}{{ t.owner or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="collaborators" data-tid="{{ t.id }}">{{ t.collaborators or '' }}</span>
                 {% else %}{{ t.collaborators or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="plan_start" data-tid="{{ t.id }}">{{ t.plan_start or '' }}</span>
                 {% else %}{{ t.plan_start or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="plan_end" data-tid="{{ t.id }}">{{ t.plan_end or '' }}</span>
                 {% else %}{{ t.plan_end or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
-                {% if current_role == 'admin' %}
+                {% if current_role in ('admin', 'platform_admin') %}
                 <span class="cell" data-field="deliverable" data-tid="{{ t.id }}">{{ t.deliverable or '' }}</span>
                 {% else %}{{ t.deliverable or '' }}{% endif %}
             </td>
@@ -188,11 +188,11 @@
                 </label>
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;" title="{% if current_role!='admin' and t.approval_status!='已通过' %}任务审批通过后可编辑备注{% endif %}">
-                {% if current_role == 'admin' or t.approval_status == '已通过' %}
+                {% if current_role in ('admin', 'platform_admin') or t.approval_status == '已通过' %}
                 <span class="cell" data-field="remark" data-tid="{{ t.id }}" data-remark="1">{{ t.remark or '' }}</span>
                 {% else %}{{ t.remark or '' }}{% endif %}
             </td>
-            {% if current_role == 'admin' %}
+            {% if current_role in ('admin', 'platform_admin') %}
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;">
                 <form method="post" action="{{ url_for('wbs.wbs_task_delete', tid=t.id) }}" style="display:inline;" onsubmit="return confirm('确认删除？')">
                     <button type="submit" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;">删</button>
@@ -203,7 +203,7 @@
     {% endfor %}
 
     <!-- 新建行（Excel风格空行）：仅管理员可见 -->
-    {% if current_role == 'admin' %}
+    {% if current_role in ('admin', 'platform_admin') %}
     <tr id="newRow" style="background:#fafbfc;">
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
             <input id="nr_wbs" placeholder="如2" style="width:100%;border:none;background:transparent;text-align:center;font-size:13px;outline:none;">
@@ -259,7 +259,7 @@
 </div>
 
 <script>
-const IS_ADMIN = {{ 'true' if current_role == 'admin' else 'false' }};
+const IS_ADMIN = {{ 'true' if current_role in ('admin', 'platform_admin') else 'false' }};
 const PID = {{ p.id }};
 const PROJECT_APPROVAL = '{{ p.approval_status or "已通过" }}';
 let currentTid = null;

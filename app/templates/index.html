@@ -117,7 +117,7 @@
         <div class="dash-panel">
             <div class="panel-head">
                 <h3 class="panel-title">📋 待我审批（{{ my_approvals|length }}）</h3>
-                <a href="{{ url_for('approval_center') }}" class="panel-link">审批中心 →</a>
+                <a href="{{ url_for('profile') }}#approvals" class="panel-link">去审批 →</a>
             </div>
             {% if my_approvals %}
             <div class="todo-compact">
@@ -131,7 +131,7 @@
                             <span class="todo-due">第{{ a.current_step or 1 }}级</span>
                         </div>
                     </div>
-                    <a class="todo-go" href="{{ url_for('approval_center') }}">处理</a>
+                    <a class="todo-go" href="{{ url_for('profile') }}#approvals">处理</a>
                 </div>
                 {% endfor %}
             </div>
@@ -155,9 +155,9 @@
                 <span class="qi-icon">📋</span>
                 <span class="qi-text">需求收集</span>
             </a>
-            <a href="{{ url_for('approval_center') }}" class="quick-item q-orange">
+            <a href="{{ url_for('profile') }}#approvals" class="quick-item q-orange">
                 <span class="qi-icon">📋</span>
-                <span class="qi-text">审批中心</span>
+                <span class="qi-text">我的审批</span>
             </a>
             <a href="{{ url_for('profile') }}" class="quick-item q-purple">
                 <span class="qi-icon">👤</span>

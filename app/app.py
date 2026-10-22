@@ -113,11 +113,11 @@ def logout():
     return redirect(url_for('login'))
 
 # ============================================================
-# v10.5.0 用户管理中心（仅管理员）
+# v10.5.0 用户管理中心（仅平台管理员）
 # ============================================================
 def _require_admin():
-    """管理员校验：非管理员返回 False"""
-    return session.get('user_role') == 'admin'
+    """平台管理员校验：仅 platform_admin（平台功能配置权限）"""
+    return is_platform_admin()
 
 @app.route('/admin/users')
 def admin_users():
@@ -146,7 +146,7 @@ def admin_user_create():
     if len(password) < 4:
         flash('密码至少4位', 'error')
         return redirect(url_for('admin_users'))
-    if role not in ('admin', 'user'):
+    if role not in ('platform_admin', 'admin', 'user'):
         role = 'user'
     db = get_db()
     exists = db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
@@ -177,13 +177,13 @@ def admin_user_update(uid):
     role = request.form.get('role', user['role'])
     department = request.form.get('department', '').strip()
     is_active = 1 if request.form.get('is_active') == '1' else 0
-    if role not in ('admin', 'user'):
+    if role not in ('platform_admin', 'admin', 'user'):
         role = user['role']
-    # 不允许停用最后一个管理员
-    if user['role'] == 'admin' and is_active == 0:
-        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
-        if admins <= 1:
-            flash('不能停用最后一个管理员', 'error')
+    # 不允许停用/降级最后一个平台管理员（保证平台永远有最高权限账号）
+    if user['role'] == 'platform_admin' and (is_active == 0 or role != 'platform_admin'):
+        pms = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
+        if pms <= 1:
+            flash('不能停用或降级最后一个平台管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET display_name=?, role=?, department=?, is_active=? WHERE id=?',
                (display_name, role, department, is_active, uid))
@@ -204,10 +204,10 @@ def admin_user_toggle(uid):
         flash('用户不存在', 'error')
         return redirect(url_for('admin_users'))
     new_state = 0 if user['is_active'] else 1
-    if user['role'] == 'admin' and new_state == 0:
-        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
-        if admins <= 1:
-            flash('不能停用最后一个管理员', 'error')
+    if user['role'] == 'platform_admin' and new_state == 0:
+        pms = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
+        if pms <= 1:
+            flash('不能停用最后一个平台管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET is_active=? WHERE id=?', (new_state, uid))
     db.commit()
@@ -276,10 +276,14 @@ def profile():
         pass
     # 可用功能 = 核心 + WBS（所有登录用户）
     my_plugins = [p for p in plugin_system.PLUGINS if p['core'] or p['id'] == 'wbs']
+    # v11.0.3：审批中心合并进个人中心（待我审批 + 已处理记录）
+    pending, done, my_role = _load_approval_data()
     return render_template('profile.html',
                            user_info=user_info,
                            todo_count=todo_count,
-                           my_plugins=my_plugins)
+                           my_plugins=my_plugins,
+                           pending=pending, done=done, my_role=my_role,
+                           is_admin=is_admin())
 
 @app.route('/profile/change_password', methods=['POST'])
 def profile_change_password():
@@ -316,10 +320,20 @@ def profile_change_password():
 # ============================================================
 # 权限定义：每个角色可以访问的模块（endpoint前缀）和操作权限
 ROLE_PERMISSIONS = {
-    'admin': {
-        'name': '管理组',
+    'platform_admin': {
+        'name': '平台管理员',
         'modules': ['all'],  # 所有模块
+        'readonly_modules': [],  # 无只读（可配置平台功能）
+    },
+    'admin': {
+        'name': '管理员',
+        'modules': ['all'],  # 所有模块（编辑、审批）
         'readonly_modules': [],  # 没有只读模块
+    },
+    'user': {
+        'name': '普通用户',
+        'modules': ['all'],  # 可查看/提交
+        'readonly_modules': [],  # 状态变更走审批
     },
     'product': {
         'name': '产品组',
@@ -388,8 +402,8 @@ def has_module_access(module_prefix):
 # ============================================================
 @app.route('/admin/approval-flows', methods=['GET'])
 def admin_approval_flows():
-    if not is_admin():
-        flash('仅管理员可配置审批流', 'error')
+    if not is_platform_admin():
+        flash('仅平台管理员可配置审批流', 'error')
         return redirect(url_for('index'))
     db = get_db()
     flows = db.execute('SELECT * FROM approval_flows ORDER BY plugin_id, record_type').fetchall()
@@ -405,8 +419,8 @@ def admin_approval_flows():
 
 @app.route('/admin/approval-flows/save', methods=['POST'])
 def admin_approval_flow_save():
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可配置'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可配置'}), 403
     db = get_db()
     name = request.form.get('name', '').strip()
     plugin_id = request.form.get('plugin_id', '')
@@ -417,8 +431,8 @@ def admin_approval_flow_save():
         return jsonify({'success': False, 'error': '名称/插件/记录类型/审批步骤均必填'}), 400
     # 角色枚举校验：平台角色体系为 admin(管理员)/user(普通用户)
     for r in step_roles:
-        if r not in ('admin', 'user'):
-            return jsonify({'success': False, 'error': f'审批步骤角色不合法：{r}（仅支持 admin/user）'}), 400
+        if r not in ('platform_admin', 'admin', 'user'):
+            return jsonify({'success': False, 'error': f'审批步骤角色不合法：{r}（仅支持平台管理员/管理员/普通用户）'}), 400
     steps = json.dumps([{'step': i + 1, 'role': r} for i, r in enumerate(step_roles)], ensure_ascii=False)
     db.execute('''INSERT INTO approval_flows (name, plugin_id, record_type, steps, enabled)
                   VALUES (?,?,?,?,1)''', (name, plugin_id, record_type, steps))
@@ -429,8 +443,8 @@ def admin_approval_flow_save():
 
 @app.route('/admin/approval-flows/<int:fid>/toggle', methods=['POST'])
 def admin_approval_flow_toggle(fid):
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可操作'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
     db = get_db()
     row = db.execute('SELECT * FROM approval_flows WHERE id=?', (fid,)).fetchone()
     if not row:
@@ -444,8 +458,8 @@ def admin_approval_flow_toggle(fid):
 
 @app.route('/admin/approval-flows/<int:fid>/delete', methods=['POST'])
 def admin_approval_flow_delete(fid):
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可操作'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
     db = get_db()
     db.execute('DELETE FROM approval_flows WHERE id=?', (fid,))
     db.commit()
@@ -453,15 +467,14 @@ def admin_approval_flow_delete(fid):
     return jsonify({'success': True})
 
 
-@app.route('/approvals')
-def approval_center():
-    """平台统一审批中心：待审批（按当前用户角色可审步骤）+ 全部记录"""
+def _load_approval_data():
+    """v11.0.3 审批数据（待我审批 + 已处理）：个人中心/审批中心共用"""
     db = get_db()
     my_role = get_current_role()
     pending = db.execute('''SELECT a.*, u.username AS requester FROM approval_requests a
         LEFT JOIN users u ON a.requester_id=u.id WHERE a.status='待审批'
         ORDER BY a.created_at DESC LIMIT 100''').fetchall()
-    # 当前用户可审：管理员可审所有；普通用户按审批流当前步骤角色匹配
+    # 当前用户可审：管理组可审所有；普通用户按审批流当前步骤角色匹配
     can_review = []
     for row in pending:
         row = dict(row)
@@ -474,7 +487,7 @@ def approval_center():
                 break
         if need_role is None:
             need_role = 'admin'
-        if my_role == 'admin' or my_role == need_role:
+        if my_role in ('admin', 'platform_admin') or my_role == need_role:
             can_review.append(row)
     done = db.execute('''SELECT a.*, u.username AS requester FROM approval_requests a
         LEFT JOIN users u ON a.requester_id=u.id WHERE a.status!='待审批'
@@ -497,8 +510,13 @@ def approval_center():
         r['_title'] = _record_title(r)
     for r in done:
         r['_title'] = _record_title(r)
-    return render_template('approval_center.html', pending=can_review, done=done,
-                           is_admin=is_admin(), my_role=my_role)
+    return can_review, done, my_role
+
+
+@app.route('/approvals')
+def approval_center():
+    """v11.0.3 审批中心合并进个人中心（/profile#approvals），本路由重定向保留兼容"""
+    return redirect(url_for('profile') + '#approvals')
 
 
 @app.route('/approvals/<int:aid>/review', methods=['POST'])
@@ -517,7 +535,7 @@ def approval_review(aid):
             need_role = s.get('role', 'admin')
             break
     my_role = get_current_role()
-    if my_role != 'admin' and my_role != need_role:
+    if my_role not in ('admin', 'platform_admin') and my_role != need_role:
         return jsonify({'success': False, 'error': '当前步骤需由角色「%s」审批' % need_role}), 403
     approve = request.form.get('approve') == '1'
     comment = request.form.get('comment', '').strip()
@@ -543,8 +561,8 @@ def approval_review(aid):
 @app.route('/admin/external')
 def admin_external():
     """外部系统接入管理（v11.0 插件接入平台登记/启停/聚合缓存）"""
-    if not is_admin():
-        flash('仅管理员可管理外部系统接入', 'error')
+    if not is_platform_admin():
+        flash('仅平台管理员可管理外部系统接入', 'error')
         return redirect(url_for('index'))
     db = get_db()
     systems = db.execute('''SELECT s.*, (SELECT COUNT(*) FROM external_data_cache c WHERE c.system_id=s.id) AS cache_cnt
@@ -554,8 +572,8 @@ def admin_external():
 
 @app.route('/admin/external/create', methods=['POST'])
 def admin_external_create():
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可操作'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
     db = get_db()
     name = request.form.get('name', '').strip()
     if not name:
@@ -572,8 +590,8 @@ def admin_external_create():
 
 @app.route('/admin/external/<int:sid>/toggle', methods=['POST'])
 def admin_external_toggle(sid):
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可操作'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
     db = get_db()
     row = db.execute('SELECT * FROM external_systems WHERE id=?', (sid,)).fetchone()
     if not row:
@@ -589,8 +607,8 @@ def admin_external_toggle(sid):
 @app.route('/admin/external/<int:sid>/test', methods=['POST'])
 def admin_external_test(sid):
     """接入测试（v11.0 占位：验证登记信息/连接配置可达性；外部系统真实联通后校验 API）"""
-    if not is_admin():
-        return jsonify({'success': False, 'error': '仅管理员可操作'}), 403
+    if not is_platform_admin():
+        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
     db = get_db()
     row = db.execute('SELECT * FROM external_systems WHERE id=?', (sid,)).fetchone()
     if not row:
@@ -619,8 +637,8 @@ def admin_ai_settings():
     """AI 模型设置（v11.1，参考图2 API密钥管理）：
     模式切换（本地 Ollama / 远程 OpenAI 兼容 API）、BaseURL、API Key（脱敏+显示/复制）、
     模型名、连接测试、安全提示。配置存 ai_config 表，ai_service 读取生效。"""
-    if not is_admin():
-        flash('仅管理员可配置 AI 模型', 'error')
+    if not is_platform_admin():
+        flash('仅平台管理员可配置 AI 模型', 'error')
         return redirect(url_for('index'))
     from ai_service import _get_config, _save_config, _mask_key
     if request.method == 'POST':
@@ -667,8 +685,13 @@ def can_write(module_prefix):
 # WBS 插件保持自身审批流程，不走此表
 # ============================================================
 def is_admin():
-    """当前用户是否为管理员"""
-    return get_current_role() == 'admin'
+    """当前用户是否为管理组（管理员/平台管理员）：可编辑业务、审批"""
+    return get_current_role() in ('admin', 'platform_admin')
+
+
+def is_platform_admin():
+    """当前用户是否为平台管理员：可配置平台功能（用户/审批流/外部系统/AI）"""
+    return get_current_role() == 'platform_admin'
 
 
 def submit_status_change(plugin_id, record_type, record_id, new_status, payload_extra=None):
@@ -757,14 +780,16 @@ def init_db():
     except Exception as e:
         print(f'  数据库迁移警告：v11平台表兜底补建失败 - {e}')
     # 首次运行（users 为空）：写入默认账号，保证解压即用
-    # 管理员 admin/admin123，普通用户 product/product123
+    # 平台管理员 admin/admin123（最高权限），普通用户 product/product123
     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:
         db.executescript("""
             INSERT INTO users (username, password, display_name, role, is_active, department)
-            VALUES ('admin','admin123','系统管理员','admin',1,'平台管理部');
+            VALUES ('admin','admin123','系统管理员','platform_admin',1,'平台管理部');
             INSERT INTO users (username, password, display_name, role, is_active, department)
             VALUES ('product','product123','产品经理','user',1,'产品部');
         """)
+    # v11.0.3 三级角色迁移：老库 admin 账号升级为平台管理员（保证平台有最高权限账号）
+    db.execute("UPDATE users SET role='platform_admin' WHERE username='admin' AND role='admin'")
     db.commit()
 
 # ============================================================
@@ -841,7 +866,7 @@ def index():
             if s.get('step') == cur:
                 need_role = s.get('role', 'admin')
                 break
-        if my_role == 'admin' or my_role == need_role:
+        if my_role in ('admin', 'platform_admin') or my_role == need_role:
             my_approvals.append(p)
     # 预警区：WBS 逾期任务 + 需求临期/逾期
     wbs_overdue_tasks = db.execute('''SELECT id, name, plan_end FROM wbs_tasks

@@ -76,7 +76,7 @@ def wbs_project_add():
     admins = db.execute("SELECT username, display_name FROM users WHERE role='admin' AND is_active=1 ORDER BY username").fetchall()
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        is_admin = session.get('user_role') == 'admin'
+        is_admin = session.get('user_role') in ('admin', 'platform_admin')
         approval_status = '已通过' if is_admin else '待审批'
         approver = '' if is_admin else request.form.get('approver','')
         db.execute('''INSERT INTO wbs_projects (name, description, owner, participants, start_date, end_date, status, approver, approval_status, created_at, updated_at)
@@ -98,7 +98,7 @@ def wbs_project_add():
 
 @blueprint.route('/wbs/<int:pid>/edit', methods=['GET', 'POST'])
 def wbs_project_edit(pid):
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         flash('只有管理员可以编辑项目信息', 'error')
         return redirect(url_for('wbs.wbs_projects'))
     db = get_db()
@@ -120,7 +120,7 @@ def wbs_project_edit(pid):
 
 @blueprint.route('/wbs/<int:pid>/approve', methods=['POST'])
 def wbs_project_approve(pid):
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         flash('只有管理员可以审批项目。', 'error')
         return redirect(url_for('wbs.wbs_projects'))
     db = get_db()
@@ -136,7 +136,7 @@ def wbs_project_approve(pid):
 @blueprint.route('/wbs/<int:pid>/resubmit', methods=['POST'])
 def wbs_project_resubmit(pid):
     """普通用户：项目被驳回后重新提交审批"""
-    if session.get('user_role') == 'admin':
+    if session.get('user_role') in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '管理员无需重新提交'}), 400
     db = get_db()
     p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
@@ -153,7 +153,7 @@ def wbs_project_resubmit(pid):
 @blueprint.route('/wbs/<int:pid>/delete', methods=['POST'])
 def wbs_project_delete(pid):
     """管理员删除项目（级联删除其下所有任务）"""
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         flash('只有管理员可以删除项目', 'error')
         return redirect(url_for('wbs.wbs_projects'))
     db = get_db()
@@ -218,7 +218,7 @@ def wbs_task_add(pid):
 
 @blueprint.route('/wbs/task/<int:tid>/delete', methods=['POST'])
 def wbs_task_delete(tid):
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         flash('只有管理员可以删除任务', 'error')
         return redirect(request.referrer or url_for('wbs.wbs_projects'))
     db = get_db()
@@ -251,7 +251,7 @@ def wbs_import(pid):
     if not proj:
         flash('项目不存在', 'error')
         return redirect(url_for('wbs.wbs_projects'))
-    if session.get('user_role') != 'admin' and proj['approval_status'] != '已通过':
+    if session.get('user_role') not in ('admin', 'platform_admin') and proj['approval_status'] != '已通过':
         flash('项目待审批通过后才能导入任务', 'error')
         return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     f = request.files.get('file')
@@ -262,7 +262,7 @@ def wbs_import(pid):
     wb = openpyxl.load_workbook(f, data_only=True)
     ws = wb.active
     db = get_db()
-    is_admin = session.get('user_role') == 'admin'
+    is_admin = session.get('user_role') in ('admin', 'platform_admin')
     approval = '已通过' if is_admin else '待审批'
     # 已存在的 WBS 编号（查重）
     existing = set(r[0] for r in db.execute(
@@ -326,7 +326,7 @@ def wbs_task_inline(tid):
     data = request.get_json(force=True)
     field = data.get('field')
     value = data.get('value', '')
-    admin = session.get('user_role') == 'admin'
+    admin = session.get('user_role') in ('admin', 'platform_admin')
     editable_admin = {'wbs_code','name','work_content','owner','collaborators',
                       'plan_start','plan_end','deliverable','status','progress','remark'}
     if admin:
@@ -376,7 +376,7 @@ def _sync_parent_dates(db, child_id):
 @blueprint.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
 def wbs_task_quickadd(pid):
     """Excel风格快速新建：按WBS编号自动判断父子层级。仅管理员可用（普通用户只能通过导入Excel添加任务）。"""
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '普通用户只能通过导入Excel添加任务'}), 403
     db = get_db()
     code = (request.form.get('wbs_code') or '').strip()
@@ -410,7 +410,7 @@ def wbs_task_quickadd(pid):
 @blueprint.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
 def wbs_project_tasks_approve(pid):
     """管理员批量审批整个项目下所有待审批任务"""
-    if session.get('user_role') != 'admin':
+    if session.get('user_role') not in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '无权限'}), 403
     db = get_db()
     action = request.form.get('action','')
@@ -424,7 +424,7 @@ def wbs_project_tasks_approve(pid):
 @blueprint.route('/wbs/project/<int:pid>/tasks/resubmit', methods=['POST'])
 def wbs_project_tasks_resubmit(pid):
     """普通用户：任务被驳回后，一键重新提交本项目下所有已驳回任务，进入待审批"""
-    if session.get('user_role') == 'admin':
+    if session.get('user_role') in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '管理员无需重新提交'}), 400
     db = get_db()
     cur = db.execute("UPDATE wbs_tasks SET approval_status='待审批' WHERE project_id=? AND approval_status='已驳回'",
@@ -537,7 +537,7 @@ def wbs_task_del_attachment(tid):
     if not t:
         return jsonify({'ok': False, 'msg': '任务不存在'}), 404
     role = session.get('user_role')
-    if role != 'admin' and t['approval_status'] != '已通过':
+    if role not in ('admin', 'platform_admin') and t['approval_status'] != '已通过':
         return jsonify({'ok': False, 'msg': '任务审批通过后才能删除产出物'}), 403
     target = (request.form.get('filename') or '').strip()
     files = [f for f in (t['attachment_path'] or '').split(';') if f]

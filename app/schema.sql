@@ -710,7 +710,9 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     reviewer_id INTEGER,
     review_comment TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime')),
-    reviewed_at TEXT
+    reviewed_at TEXT,
+    flow_id INTEGER,
+    current_step INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_requests(status);
 
