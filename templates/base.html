@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}业务高效运转系统{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block styles %}{% endblock %}
+</head>
+<body>
+    <div class="app-layout">
+        <!-- 侧边导航 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon">⚙</div>
+                <div class="logo-text">
+                    <h1>业务运转系统</h1>
+                    <span>单点登录 · 信息聚合 · 统一权限</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                {# 核心插件：个人中心 + 我的工作台（常驻） #}
+                <div class="nav-group">
+                    {% for p in nav_core %}
+                    {% set np = p.nav_path %}
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
+                    </a>
+                    {% endfor %}
+                </div>
+
+                {# 业务插件：WBS（所有登录用户常驻显示） #}
+                {% if nav_biz %}
+                <div class="nav-group">
+                    <div class="nav-group-title">我的工作</div>
+                    {% for p in nav_biz %}
+                    {% set np = p.nav_path %}
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
+                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {# v12.1.0 系统管理（仅平台管理员可见）：用户管理 + 插件管理 #}
+                {% if current_role == 'platform_admin' %}
+                <div class="nav-group">
+                    <div class="nav-group-title">系统管理</div>
+                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
+                        <span class="nav-icon">👥</span> 用户管理
+                    </a>
+                    <a href="{{ url_for('admin_plugins') }}" class="nav-item {% if request.path.startswith('/admin/plugins') %}active{% endif %}">
+                        <span class="nav-icon">🧩</span> 插件管理
+                    </a>
+                </div>
+                {% endif %}
+
+                {# 审批中心（v10.3.6 暂下线：用户反馈未关联使用，代码保留便于日后恢复） #}
+
+                {# 插件中心（v10.5.0 软下线：系统仅保留 WBS，订阅机制无实际意义，代码保留可恢复） #}
+                {% if false %}
+                <div class="nav-group">
+                    <a href="{{ url_for('plugin_center') }}" class="nav-item {% if request.endpoint == 'plugin_center' %}active{% endif %}">
+                        <span class="nav-icon">🧩</span> 插件中心
+                    </a>
+                </div>
+                {% endif %}
+            </nav>
+            <div class="sidebar-footer">
+                <div class="data-flow-hint">
+                    <span class="dot dot-blue"></span> WBS计划 → 任务执行 → 交付物
+                    <span class="dot dot-orange"></span> 数据闭环反哺
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <header class="page-header">
+                <h2>{% block page_title %}{% endblock %}</h2>
+                <div class="global-search-container">
+                    <span class="global-search-icon">🔍</span>
+                    <input type="text" class="global-search-input" id="globalSearchInput" placeholder="全局搜索：WBS项目、任务..." oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
+                    <div class="global-search-results" id="globalSearchResults"></div>
+                </div>
+                <div class="header-actions">
+                    {% block header_actions %}{% endblock %}
+                    <div class="user-info">
+                        <span class="user-avatar">{{ current_user[0] if current_user else 'U' }}</span>
+                        <span class="user-name">{{ current_user or '未登录' }}</span>
+                        <span class="user-role">{{ current_role or '' }}</span>
+                        <a href="{{ url_for('logout') }}" class="logout-btn">退出</a>
+                    </div>
+                </div>
+            </header>
+            <div class="content-body">
+                {% if not can_write(request.endpoint or '') %}
+                <div class="readonly-banner">
+                    <span class="readonly-icon">🔒</span>
+                    <span>当前模块为<strong>只读模式</strong>，您只能查看数据，无法进行新增、编辑、删除、审批等修改操作。如需修改权限，请联系管理员。</span>
+                </div>
+                {% endif %}
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                    <div class="flash-message flash-{{ category }}">
+                        <span class="flash-close" onclick="this.parentElement.style.display='none'">×</span>
+                        {{ message }}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endwith %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+    // 全局只读模式：拦截所有修改操作
+    (function() {
+        var isReadonly = document.querySelector('.readonly-banner') !== null;
+        if (isReadonly) {
+            // 拦截所有form提交
+            document.addEventListener('submit', function(e) {
+                var form = e.target;
+                // 排除搜索、筛选、导出表单
+                var action = form.querySelector('[name="action"]');
+                if (action && ['search', 'filter', 'export'].indexOf(action.value) >= 0) {
+                    return;
+                }
+                e.preventDefault();
+                alert('当前模块为只读模式，您没有修改权限。如需修改，请联系管理员。');
+            }, true);
+            // 禁用所有提交按钮和操作按钮
+            document.addEventListener('DOMContentLoaded', function() {
+                var buttons = document.querySelectorAll('button[type="submit"], input[type="submit"], .btn-action');
+                buttons.forEach(function(btn) {
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                    btn.title = '只读模式，无法操作';
+                });
+            });
+        }
+    })();
+
+    // 通用：关键操作二次确认
+    function confirmAction(message, callback) {
+        if (confirm(message)) {
+            if (callback) callback();
+            return true;
+        }
+        return false;
+    }
+    // 删除确认
+    function confirmDelete(itemName) {
+        return confirmAction('确定要删除「' + (itemName || '该项') + '」吗？此操作不可恢复！');
+    }
+    // 提交确认
+    function confirmSubmit(itemName) {
+        return confirmAction('确定要提交「' + (itemName || '该项') + '」吗？提交后将进入审批流程。');
+    }
+    // 审批确认
+    function confirmApprove(action) {
+        return confirmAction('确定要' + (action || '审批通过') + '吗？');
+    }
+    // 通用表单校验
+    function validateForm(form) {
+        var valid = true;
+        var firstError = null;
+        // 清除之前的错误样式
+        form.querySelectorAll('.form-error').forEach(function(el) { el.remove(); });
+        form.querySelectorAll('.input-error').forEach(function(el) { el.classList.remove('input-error'); });
+        // 校验必填项
+        form.querySelectorAll('[required]').forEach(function(input) {
+            if (!input.value || input.value.trim() === '') {
+                valid = false;
+                input.classList.add('input-error');
+                var error = document.createElement('div');
+                error.className = 'form-error';
+                error.textContent = '此项为必填项';
+                error.style.color = '#ef4444';
+                error.style.fontSize = '12px';
+                error.style.marginTop = '4px';
+                input.parentNode.appendChild(error);
+                if (!firstError) firstError = input;
+            }
+        });
+        // 校验数字为正数
+        form.querySelectorAll('[data-positive]').forEach(function(input) {
+            var val = parseFloat(input.value);
+            if (input.value && (isNaN(val) || val <= 0)) {
+                valid = false;
+                input.classList.add('input-error');
+                var error = document.createElement('div');
+                error.className = 'form-error';
+                error.textContent = '请输入大于0的数字';
+                error.style.color = '#ef4444';
+                error.style.fontSize = '12px';
+                error.style.marginTop = '4px';
+                input.parentNode.appendChild(error);
+                if (!firstError) firstError = input;
+            }
+        });
+        // 校验日期格式
+        form.querySelectorAll('[data-date]').forEach(function(input) {
+            if (input.value && !/^\d{4}-\d{2}-\d{2}$/.test(input.value)) {
+                valid = false;
+                input.classList.add('input-error');
+                var error = document.createElement('div');
+                error.className = 'form-error';
+                error.textContent = '日期格式应为 YYYY-MM-DD';
+                error.style.color = '#ef4444';
+                error.style.fontSize = '12px';
+                error.style.marginTop = '4px';
+                input.parentNode.appendChild(error);
+                if (!firstError) firstError = input;
+            }
+        });
+        if (!valid && firstError) {
+            firstError.focus();
+            alert('请检查表单中的错误项');
+        }
+        return valid;
+    }
+    // 绑定所有表单的校验
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('form[data-validate]').forEach(function(form) {
+            form.addEventListener('submit', function(e) {
+                if (!validateForm(form)) {
+                    e.preventDefault();
+                    return false;
+                }
+            });
+        });
+    });
+    // 导航栏自动定位到当前选中项（居中显示）
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            var navMenu = document.querySelector('.nav-menu');
+            var activeItem = document.querySelector('.nav-item.active');
+            if (navMenu && activeItem) {
+                var navRect = navMenu.getBoundingClientRect();
+                var itemRect = activeItem.getBoundingClientRect();
+                var itemCenter = itemRect.top - navRect.top + itemRect.height / 2;
+                var targetScrollTop = navMenu.scrollTop + itemCenter - navRect.height / 2;
+                navMenu.scrollTo({
+                    top: Math.max(0, targetScrollTop),
+                    behavior: 'smooth'
+                });
+            }
+        }, 150);
+    });
+
+    // ===== 分步表单通用函数（降低认知负荷） =====
+    window.StepForm = {
+        currentStep: 1,
+        totalSteps: 3,
+        init: function(totalSteps) {
+            this.totalSteps = totalSteps || 3;
+            this.currentStep = 1;
+            this.updateUI();
+        },
+        next: function() {
+            if (this.currentStep < this.totalSteps) {
+                // 校验当前步骤的必填项
+                if (!this.validateStep(this.currentStep)) {
+                    alert('请完成当前步骤的必填项后再继续');
+                    return false;
+                }
+                this.currentStep++;
+                this.updateUI();
+            }
+            return false;
+        },
+        prev: function() {
+            if (this.currentStep > 1) {
+                this.currentStep--;
+                this.updateUI();
+            }
+            return false;
+        },
+        goTo: function(step) {
+            if (step >= 1 && step <= this.totalSteps) {
+                this.currentStep = step;
+                this.updateUI();
+            }
+            return false;
+        },
+        validateStep: function(step) {
+            var stepContent = document.querySelector('.step-content[data-step="' + step + '"]');
+            if (!stepContent) return true;
+            var requiredFields = stepContent.querySelectorAll('[required]');
+            for (var i = 0; i < requiredFields.length; i++) {
+                var field = requiredFields[i];
+                if (!field.value || field.value.trim() === '') {
+                    field.focus();
+                    field.style.borderColor = '#ef4444';
+                    field.style.boxShadow = '0 0 0 3px rgba(239,68,68,0.1)';
+                    setTimeout(function() {
+                        field.style.borderColor = '';
+                        field.style.boxShadow = '';
+                    }, 2000);
+                    return false;
+                }
+            }
+            return true;
+        },
+        updateUI: function() {
+            // 更新步骤指示器
+            var stepItems = document.querySelectorAll('.step-item');
+            stepItems.forEach(function(item, index) {
+                var stepNum = index + 1;
+                item.classList.remove('active', 'completed');
+                if (stepNum < this.currentStep) {
+                    item.classList.add('completed');
+                } else if (stepNum === this.currentStep) {
+                    item.classList.add('active');
+                }
+            }.bind(this));
+            // 更新步骤内容
+            var stepContents = document.querySelectorAll('.step-content');
+            stepContents.forEach(function(content) {
+                content.classList.remove('active');
+                if (parseInt(content.getAttribute('data-step')) === this.currentStep) {
+                    content.classList.add('active');
+                }
+            }.bind(this));
+            // 更新进度条
+            var progressFill = document.querySelector('.step-progress-fill');
+            if (progressFill) {
+                var progress = (this.currentStep / this.totalSteps) * 100;
+                progressFill.style.width = progress + '%';
+            }
+            // 更新按钮状态
+            var prevBtn = document.querySelector('.btn-prev');
+            var nextBtn = document.querySelector('.btn-next');
+            var submitBtn = document.querySelector('.btn-submit');
+            if (prevBtn) prevBtn.style.display = this.currentStep === 1 ? 'none' : 'inline-block';
+            if (nextBtn) nextBtn.style.display = this.currentStep === this.totalSteps ? 'none' : 'inline-block';
+            if (submitBtn) submitBtn.style.display = this.currentStep === this.totalSteps ? 'inline-block' : 'none';
+        }
+    };
+
+    // ===== 列表页列设置通用函数（降低认知负荷） =====
+    window.ColumnSettings = {
+        init: function(tableId, storageKey) {
+            this.tableId = tableId;
+            this.storageKey = storageKey || 'column_visibility_' + tableId;
+            this.loadSettings();
+            this.createSettingsPanel();
+        },
+        loadSettings: function() {
+            try {
+                var saved = localStorage.getItem(this.storageKey);
+                if (saved) {
+                    var hiddenColumns = JSON.parse(saved);
+                    var table = document.getElementById(this.tableId);
+                    if (table) {
+                        hiddenColumns.forEach(function(index) {
+                            var cells = table.querySelectorAll('th:nth-child(' + (index + 1) + '), td:nth-child(' + (index + 1) + ')');
+                            cells.forEach(function(cell) { cell.style.display = 'none'; });
+                        });
+                    }
+                }
+            } catch(e) {}
+        },
+        saveSettings: function(hiddenColumns) {
+            try {
+                localStorage.setItem(this.storageKey, JSON.stringify(hiddenColumns));
+            } catch(e) {}
+        },
+        createSettingsPanel: function() {
+            var table = document.getElementById(this.tableId);
+            if (!table) return;
+            var wrapper = table.parentElement;
+            wrapper.style.position = 'relative';
+            // 创建设置按钮
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-sm btn-outline';
+            btn.style.cssText = 'position:absolute; top:-40px; right:0; z-index:10;';
+            btn.innerHTML = '⚙ 列设置';
+            btn.onclick = function(e) {
+                e.stopPropagation();
+                var panel = document.getElementById('columnSettingsPanel_' + this.tableId);
+                panel.classList.toggle('show');
+            }.bind(this);
+            wrapper.appendChild(btn);
+            // 创建设置面板
+            var panel = document.createElement('div');
+            panel.id = 'columnSettingsPanel_' + this.tableId;
+            panel.className = 'column-settings-panel';
+            var headers = table.querySelectorAll('thead th');
+            var html = '<h4>显示/隐藏列</h4>';
+            headers.forEach(function(th, index) {
+                var text = th.textContent.trim();
+                if (text) {
+                    var isVisible = th.style.display !== 'none';
+                    html += '<label class="column-option"><input type="checkbox" value="' + index + '" ' + (isVisible ? 'checked' : '') + ' onchange="ColumnSettings.toggleColumn(' + index + ', this.checked)"> ' + text + '</label>';
+                }
+            });
+            panel.innerHTML = html;
+            wrapper.appendChild(panel);
+            // 点击外部关闭面板
+            document.addEventListener('click', function(e) {
+                if (!panel.contains(e.target) && e.target !== btn) {
+                    panel.classList.remove('show');
+                }
+            });
+        },
+        toggleColumn: function(index, show) {
+            var table = document.getElementById(this.tableId);
+            if (!table) return;
+            var cells = table.querySelectorAll('th:nth-child(' + (index + 1) + '), td:nth-child(' + (index + 1) + ')');
+            cells.forEach(function(cell) {
+                cell.style.display = show ? '' : 'none';
+            });
+            // 保存设置
+            var hiddenColumns = [];
+            var headers = table.querySelectorAll('thead th');
+            headers.forEach(function(th, i) {
+                if (th.style.display === 'none') {
+                    hiddenColumns.push(i);
+                }
+            });
+            this.saveSettings(hiddenColumns);
+        }
+    };
+
+    // ===== 全局搜索功能（降低认知负荷，快速定位信息） =====
+    var globalSearchTimeout = null;
+    function handleGlobalSearch(keyword) {
+        var resultsDiv = document.getElementById('globalSearchResults');
+        if (!keyword || keyword.trim().length < 2) {
+            resultsDiv.classList.remove('show');
+            resultsDiv.innerHTML = '';
+            return;
+        }
+        // 防抖
+        clearTimeout(globalSearchTimeout);
+        globalSearchTimeout = setTimeout(function() {
+            fetch('/api/global-search?q=' + encodeURIComponent(keyword.trim()))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.results && data.results.length > 0) {
+                        var html = '';
+                        var groups = {};
+                        data.results.forEach(function(item) {
+                            if (!groups[item.type]) {
+                                groups[item.type] = [];
+                            }
+                            groups[item.type].push(item);
+                        });
+                        var typeNames = {
+                            'requirement': '📋 需求',
+                            'bug': '🐛 Bug',
+                            'task': '💻 任务',
+                            'contract': '📄 合同',
+                            'device': '📱 设备',
+                            'product': '📦 产品',
+                            'version': '📦 软件版本',
+                            'order': '🏭 生产订单'
+                        };
+                        for (var type in groups) {
+                            html += '<div class="search-result-group">';
+                            html += '<div class="search-result-group-title">' + (typeNames[type] || type) + ' (' + groups[type].length + ')</div>';
+                            groups[type].slice(0, 5).forEach(function(item) {
+                                html += '<div class="search-result-item" onclick="window.location.href=\'' + item.url + '\'">';
+                                html += item.title;
+                                if (item.subtitle) {
+                                    html += '<span class="result-type">' + item.subtitle + '</span>';
+                                }
+                                html += '</div>';
+                            });
+                            if (groups[type].length > 5) {
+                                html += '<div class="search-result-item" style="color:#6b7280; font-size:12px;">还有 ' + (groups[type].length - 5) + ' 条结果...</div>';
+                            }
+                            html += '</div>';
+                        }
+                        resultsDiv.innerHTML = html;
+                        resultsDiv.classList.add('show');
+                    } else {
+                        resultsDiv.innerHTML = '<div class="search-result-group"><div class="search-result-item" style="color:#9ca3af;">未找到相关结果</div></div>';
+                        resultsDiv.classList.add('show');
+                    }
+                })
+                .catch(() => {
+                    resultsDiv.classList.remove('show');
+                });
+        }, 300);
+    }
+    // 点击外部关闭搜索结果
+    document.addEventListener('click', function(e) {
+        var searchContainer = document.querySelector('.global-search-container');
+        if (searchContainer && !searchContainer.contains(e.target)) {
+            var resultsDiv = document.getElementById('globalSearchResults');
+            if (resultsDiv) resultsDiv.classList.remove('show');
+        }
+    });
+    </script>
+    {% block scripts %}{% endblock %}
+    <script>
+    // 全局：所有 flash 提示条幅 1 秒后自动淡出消失（任何模板渲染的 flash 都生效，可手动点 × 提前关闭）
+    (function(){
+        var autoHide = function(){
+            document.querySelectorAll('.flash-message').forEach(function(m){
+                setTimeout(function(){
+                    m.style.transition = 'opacity .5s ease';
+                    m.style.opacity = '0';
+                    setTimeout(function(){ m.style.display = 'none'; }, 500);
+                }, 1000);
+            });
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', autoHide);
+        } else {
+            autoHide();
+        }
+    })();
+    </script>
+</body>
+</html>
