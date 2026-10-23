@@ -611,7 +611,6 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT,
     role TEXT DEFAULT 'user',
     is_active INTEGER DEFAULT 1,
-    department TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE TABLE IF NOT EXISTS version_features (
@@ -710,9 +709,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     reviewer_id INTEGER,
     review_comment TEXT,
     created_at TEXT DEFAULT (datetime('now','localtime')),
-    reviewed_at TEXT,
-    flow_id INTEGER,
-    current_step INTEGER DEFAULT 1
+    reviewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_requests(status);
 
@@ -747,64 +744,4 @@ CREATE TABLE IF NOT EXISTS tech_req_logs (
     tech_req_id INTEGER, log_date TEXT, content TEXT, author TEXT,
     created_at TEXT,
     FOREIGN KEY (tech_req_id) REFERENCES tech_requirements(id) ON DELETE CASCADE
-);
-
--- ============================================================
--- v11.0 信息聚合平台：统一审批流 / 外部系统接入 / 需求收集插件（P0）
--- 注：这些表此前仅存在于运行库，未进 schema.sql，导致新库首启缺表。
--- 已从运行库导出权威 DDL 补齐（与代码读写字段完全一致）。
--- ============================================================
-CREATE TABLE IF NOT EXISTS approval_flows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT, plugin_id TEXT, record_type TEXT,
-    steps TEXT,
-    enabled INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now','localtime'))
-);
-CREATE TABLE IF NOT EXISTS external_systems (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL, plugin_id TEXT, system_type TEXT DEFAULT '业务系统',
-    access_method TEXT DEFAULT 'api', conn_config TEXT,
-    status TEXT DEFAULT '已登记', note TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS external_data_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    system_id INTEGER NOT NULL, category TEXT NOT NULL,
-    payload TEXT, updated_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (system_id) REFERENCES external_systems(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS req_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT, title TEXT NOT NULL,
-    req_type TEXT DEFAULT '用户需求', source_dept TEXT, customer TEXT,
-    description TEXT, quantity INTEGER DEFAULT 0, priority TEXT DEFAULT '中',
-    delivery_date TEXT, owner TEXT,
-    status TEXT DEFAULT '待评审',
-    wbs_project_id INTEGER, wbs_task_id INTEGER,
-    created_by TEXT, created_at TEXT,
-    updated_at TEXT, is_deleted INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS req_reviews (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    req_id INTEGER NOT NULL, reviewer TEXT, review_date TEXT,
-    conclusion TEXT DEFAULT '待评审', opinion TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    FOREIGN KEY (req_id) REFERENCES req_items(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS req_changes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    req_id INTEGER NOT NULL, field_name TEXT, old_value TEXT, new_value TEXT,
-    change_by TEXT, approval_id INTEGER, change_at TEXT,
-    FOREIGN KEY (req_id) REFERENCES req_items(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS req_field_config (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    field_key TEXT UNIQUE, field_label TEXT,
-    required INTEGER DEFAULT 0, visible INTEGER DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS ai_config (
-    key TEXT PRIMARY KEY,
-    value TEXT
 );

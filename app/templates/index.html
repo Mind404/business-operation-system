@@ -1,55 +1,27 @@
 {% extends "base.html" %}
-{% block title %}聚合视图 - 业务运转系统{% endblock %}
-{% block page_title %}聚合视图{% endblock %}
+{% block title %}工作台 - 业务运转系统{% endblock %}
+{% block page_title %}工作台{% endblock %}
 
 {% block content %}
 <div class="dashboard-v2">
-    <!-- 顶部：欢迎 + 今日焦点 -->
+    <!-- 顶部：一句话欢迎 + 今日焦点 -->
     <div class="hero-bar">
         <div class="hero-left">
             <div class="hero-greeting">
                 <span class="hero-role">{{ current_user or '工作台' }}</span>
                 <span class="hero-date">{{ now_month }}月{{ now_day }}日 {{ now_week }}</span>
             </div>
-            <div class="hero-focus">信息聚合平台 · WBS计划 · 需求收集 · 统一审批 · 插件接入</div>
+            <div class="hero-focus">WBS 计划管理 · 任务分解 · 进度跟踪 · 交付物管理</div>
         </div>
         <div class="hero-right">
             <div class="hero-todo-card">
-                <div class="hero-todo-num {% if stats.wbs_tasks_overdue > 0 or stats.req_overdue > 0 %}hero-todo-num-danger{% endif %}">{{ stats.wbs_tasks_overdue + stats.req_overdue }}</div>
-                <div class="hero-todo-label">逾期任务/需求</div>
-            </div>
-            <div class="hero-todo-card" style="margin-left:10px;">
-                <div class="hero-todo-num">{{ stats.approval_pending_total }}</div>
-                <div class="hero-todo-label">待审批单</div>
+                <div class="hero-todo-num {% if stats.wbs_tasks_overdue > 0 %}hero-todo-num-danger{% endif %}">{{ stats.wbs_tasks_overdue }}</div>
+                <div class="hero-todo-label">逾期任务</div>
             </div>
         </div>
     </div>
 
-    <!-- 需求收集 KPI（P0 强管控插件） -->
-    <div class="kpi-row">
-        <div class="kpi-card kpi-blue">
-            <div class="kpi-icon">📋</div>
-            <div class="kpi-value">{{ stats.req_total }}</div>
-            <div class="kpi-label">需求总数（{{ stats.req_doing }} 进行中）</div>
-        </div>
-        <div class="kpi-card kpi-orange">
-            <div class="kpi-icon">🕐</div>
-            <div class="kpi-value">{{ stats.req_pending_review }}</div>
-            <div class="kpi-label">待评审需求</div>
-        </div>
-        <div class="kpi-card kpi-green">
-            <div class="kpi-icon">✅</div>
-            <div class="kpi-value">{{ stats.req_done }}</div>
-            <div class="kpi-label">已完成/关闭需求</div>
-        </div>
-        <div class="kpi-card kpi-purple">
-            <div class="kpi-icon">⏰</div>
-            <div class="kpi-value {% if stats.req_due_soon > 0 %}kpi-warn{% endif %}">{{ stats.req_due_soon }}</div>
-            <div class="kpi-label">7天内临期需求</div>
-        </div>
-    </div>
-
-    <!-- WBS KPI -->
+    <!-- WBS 统计卡片 -->
     <div class="kpi-row">
         <div class="kpi-card kpi-blue">
             <div class="kpi-icon">🗓️</div>
@@ -73,74 +45,6 @@
         </div>
     </div>
 
-    <!-- 预警 + 待我审批 -->
-    <div class="dash-two-col">
-        <div class="dash-panel">
-            <div class="panel-head">
-                <h3 class="panel-title">⚠️ 节点预警</h3>
-                <a href="{{ url_for('wbs.wbs_alerts') }}" class="panel-link">WBS 全部预警 →</a>
-            </div>
-            {% if wbs_overdue_tasks or req_alerts %}
-            <div class="todo-compact">
-                {% for t in wbs_overdue_tasks %}
-                <div class="todo-row todo-row-overdue">
-                    <span class="todo-dot" style="background:#ef4444;"></span>
-                    <div class="todo-row-main">
-                        <div class="todo-row-title">{{ t.name }}</div>
-                        <div class="todo-row-meta">
-                            <span class="todo-tag">WBS任务</span>
-                            <span class="todo-due due-red">已逾期（{{ t.plan_end }}）</span>
-                        </div>
-                    </div>
-                    <a class="todo-go" href="{{ url_for('wbs.wbs_project_detail', pid=0) }}">查看</a>
-                </div>
-                {% endfor %}
-                {% for r in req_alerts %}
-                <div class="todo-row {% if r.delivery_date and r.delivery_date < now_date %}todo-row-overdue{% endif %}">
-                    <span class="todo-dot" style="background:{{ '#ef4444' if r.delivery_date and r.delivery_date < now_date else '#f59e0b' }};"></span>
-                    <div class="todo-row-main">
-                        <div class="todo-row-title">{{ r.code }} · {{ r.title }}</div>
-                        <div class="todo-row-meta">
-                            <span class="todo-tag">需求</span>
-                            <span class="todo-due {% if r.delivery_date and r.delivery_date < now_date %}due-red{% endif %}">{{ '已逾期' if r.delivery_date and r.delivery_date < now_date else '临期' }}（{{ r.delivery_date }}）</span>
-                        </div>
-                    </div>
-                    <a class="todo-go" href="{{ url_for('requirements.req_detail', rid=r.id) }}">查看</a>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="empty-box"><div class="empty-text-lg">暂无临近节点预警 🎉</div></div>
-            {% endif %}
-        </div>
-
-        <div class="dash-panel">
-            <div class="panel-head">
-                <h3 class="panel-title">📋 待我审批（{{ my_approvals|length }}）</h3>
-                <a href="{{ url_for('profile') }}#approvals" class="panel-link">去审批 →</a>
-            </div>
-            {% if my_approvals %}
-            <div class="todo-compact">
-                {% for a in my_approvals %}
-                <div class="todo-row">
-                    <span class="todo-dot" style="background:#8b5cf6;"></span>
-                    <div class="todo-row-main">
-                        <div class="todo-row-title">#{{ a.id }} · {{ a.action }}</div>
-                        <div class="todo-row-meta">
-                            <span class="todo-tag">{{ a.plugin_id }}</span>
-                            <span class="todo-due">第{{ a.current_step or 1 }}级</span>
-                        </div>
-                    </div>
-                    <a class="todo-go" href="{{ url_for('profile') }}#approvals">处理</a>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="empty-box"><div class="empty-text-lg">暂无待审批事项</div></div>
-            {% endif %}
-        </div>
-    </div>
-
     <!-- 常用功能 -->
     <div class="dash-panel">
         <div class="panel-head">
@@ -151,32 +55,24 @@
                 <span class="qi-icon">🗓️</span>
                 <span class="qi-text">WBS计划</span>
             </a>
-            <a href="{{ url_for('requirements.req_list') }}" class="quick-item q-green">
-                <span class="qi-icon">📋</span>
-                <span class="qi-text">需求收集</span>
+            <a href="{{ url_for('wbs.wbs_project_add') }}" class="quick-item q-green">
+                <span class="qi-icon">➕</span>
+                <span class="qi-text">新建项目</span>
             </a>
-            <a href="{{ url_for('profile') }}#approvals" class="quick-item q-orange">
-                <span class="qi-icon">📋</span>
-                <span class="qi-text">我的审批</span>
-            </a>
-            <a href="{{ url_for('profile') }}" class="quick-item q-purple">
+            <a href="{{ url_for('profile') }}" class="quick-item q-orange">
                 <span class="qi-icon">👤</span>
                 <span class="qi-text">个人中心</span>
             </a>
             {% if current_role == 'admin' %}
-            <a href="{{ url_for('admin_users') }}" class="quick-item q-pink">
+            <a href="{{ url_for('admin_users') }}" class="quick-item q-purple">
                 <span class="qi-icon">👥</span>
                 <span class="qi-text">用户管理</span>
-            </a>
-            <a href="{{ url_for('admin_external') }}" class="quick-item q-cyan">
-                <span class="qi-icon">🔌</span>
-                <span class="qi-text">外部接入（{{ stats.external_total }}）</span>
             </a>
             {% endif %}
         </div>
     </div>
 
-    <!-- 最近动态 -->
+    <!-- 最近动态（精简版） -->
     <div class="dash-panel">
         <div class="panel-head">
             <h3 class="panel-title">📝 最近动态</h3>
@@ -195,25 +91,6 @@
             {% else %}
             <div class="empty-box"><div class="empty-text-lg">暂无操作记录</div></div>
             {% endfor %}
-        </div>
-    </div>
-
-    <!-- v11.0 AI 助手（本地小模型，只读辅助：聚合摘要 + 预警 + 问答，不修改任何业务数据） -->
-    <div class="dash-panel">
-        <div class="panel-head">
-            <h3 class="panel-title">🤖 AI 助手（本地小模型 · 只读）</h3>
-            <span class="ai-badge" id="aiStatus">检测中…</span>
-        </div>
-        <div class="ai-panel-body">
-            <div class="ai-alert-row" id="aiAlertBox" style="display:none;"></div>
-            <div class="ai-ask-row">
-                <input type="text" id="aiQuestion" class="ai-input"
-                       placeholder="问我：比如「当前项目进度如何？有哪些风险？」"
-                       onkeydown="if(event.key==='Enter')aiAsk()">
-                <button class="btn btn-primary" style="flex:0 0 auto;" onclick="aiAsk()">提问</button>
-            </div>
-            <div class="ai-answer" id="aiAnswer" style="display:none;"></div>
-            <div class="ai-foot">🔒 数据只读：AI 仅分析平台聚合数据，绝不修改业务数据；回答标注来源与数据时间。</div>
         </div>
     </div>
 </div>
@@ -255,7 +132,6 @@
 .kpi-green { border-top-color: #10b981; }
 .kpi-orange { border-top-color: #f59e0b; }
 .kpi-purple { border-top-color: #8b5cf6; }
-.kpi-warn { color: #dc2626; }
 .kpi-icon { font-size: 22px; margin-bottom: 8px; }
 .kpi-value { font-size: 30px; font-weight: 800; color: #111827; line-height: 1; }
 .kpi-label { font-size: 12px; color: #6b7280; margin-top: 6px; }
@@ -281,17 +157,27 @@
 .todo-row:hover { background: #f3f4f6; }
 .todo-row-overdue { border-left-color: #ef4444; background: #fef2f2; }
 .todo-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-高 { background: #ef4444; }
+.dot-中 { background: #f59e0b; }
+.dot-低 { background: #10b981; }
 .todo-row-main { flex: 1; min-width: 0; }
 .todo-row-title { font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .todo-row-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .todo-tag { font-size: 10px; background: #eff6ff; color: #1e40af; padding: 1px 6px; border-radius: 3px; }
 .todo-due { font-size: 11px; color: #6b7280; }
 .due-red { color: #dc2626 !important; font-weight: 600; }
+.todo-status { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 500; }
+.status-待处理 { background: #fef3c7; color: #92400e; }
+.status-进行中 { background: #dbeafe; color: #1e40af; }
+.status-已完成 { background: #d1fae5; color: #065f46; }
 .todo-go { font-size: 11px; color: #2563eb; text-decoration: none; padding: 3px 10px; border: 1px solid #bfdbfe; border-radius: 5px; flex-shrink: 0; }
 .todo-go:hover { background: #eff6ff; }
+.todo-more { font-size: 12px; color: #6b7280; text-align: center; padding-top: 6px; }
+.todo-more a { color: #2563eb; text-decoration: none; }
 
 /* 空状态 */
 .empty-box { text-align: center; padding: 28px 16px; }
+.empty-icon-lg { font-size: 36px; margin-bottom: 8px; }
 .empty-text-lg { color: #6b7280; font-size: 13px; margin-bottom: 12px; }
 
 /* 常用功能网格 */
@@ -308,8 +194,9 @@
 .q-green { background: #f0fdf4; border-color: #bbf7d0; }
 .q-orange { background: #fffbeb; border-color: #fde68a; }
 .q-purple { background: #faf5ff; border-color: #e9d5ff; }
-.q-pink { background: #fdf2f8; border-color: #fbcfe8; }
+.q-red { background: #fef2f2; border-color: #fecaca; }
 .q-cyan { background: #ecfeff; border-color: #a5f3fc; }
+.q-pink { background: #fdf2f8; border-color: #fbcfe8; }
 
 /* 最近动态紧凑 */
 .activity-compact { display: flex; flex-direction: column; }
@@ -325,25 +212,6 @@
 .activity-what { color: #4b5563; }
 .activity-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
 
-/* v11.0 AI 助手（只读） */
-.ai-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #f3f4f6; color: #6b7280; }
-.ai-badge.ok { background: #d1fae5; color: #065f46; }
-.ai-badge.off { background: #fee2e2; color: #991b1b; }
-.ai-panel-body { display: flex; flex-direction: column; gap: 10px; }
-.ai-alert-row {
-    display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px;
-    background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; font-size: 12px;
-}
-.ai-alert-item { background: #fff; border: 1px solid #fde68a; color: #92400e; padding: 3px 9px; border-radius: 6px; }
-.ai-ask-row { display: flex; gap: 8px; }
-.ai-input { flex: 1; padding: 9px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; }
-.ai-answer {
-    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
-    padding: 12px 14px; font-size: 13px; color: #1e293b; white-space: pre-wrap; line-height: 1.7;
-}
-.ai-answer .ai-src { display: block; margin-top: 8px; font-size: 11px; color: #94a3b8; }
-.ai-foot { font-size: 11px; color: #94a3b8; }
-
 @media (max-width: 900px) {
     .kpi-row { grid-template-columns: repeat(2, 1fr); }
     .dash-two-col { grid-template-columns: 1fr; }
@@ -351,60 +219,4 @@
     .hero-bar { flex-direction: column; gap: 12px; text-align: center; }
 }
 </style>
-{% endblock %}
-
-{% block scripts %}
-<script>
-// v11.0 AI 助手（只读）：状态检测 + 预警摘要 + 智能问答
-(function () {
-    var statusEl = document.getElementById('aiStatus');
-    function setStatus(txt, cls) {
-        if (statusEl) { statusEl.textContent = txt; statusEl.className = 'ai-badge' + (cls ? ' ' + cls : ''); }
-    }
-    // 1. 健康检测
-    fetch('/api/ai/health').then(function (r) { return r.json(); }).then(function (d) {
-        if (d.ollama_available) {
-            setStatus('模型在线 · ' + (d.default_model || ''), 'ok');
-        } else {
-            setStatus('本地模型未启动', 'off');
-        }
-    }).catch(function () { setStatus('服务异常', 'off'); });
-    // 2. 预警摘要
-    fetch('/api/ai/alert-summary').then(function (r) { return r.json(); }).then(function (d) {
-        if (!d.ok) return;
-        var box = document.getElementById('aiAlertBox');
-        var a = d.alerts || {};
-        var items = [];
-        if (a.wbs_overdue_tasks) items.push('WBS逾期任务 ' + a.wbs_overdue_tasks + ' 项');
-        if (a.req_due_soon) items.push('需求临期 ' + a.req_due_soon + ' 条');
-        if (a.req_overdue) items.push('需求逾期 ' + a.req_overdue + ' 条');
-        if (a.approval_pending) items.push('待审批 ' + a.approval_pending + ' 条');
-        if (items.length) {
-            box.style.display = 'flex';
-            box.innerHTML = '<span style="font-weight:600;">⚠️ 当前预警</span>' +
-                items.map(function (t) { return '<span class="ai-alert-item">' + t + '</span>'; }).join('') +
-                '<span style="margin-left:auto;font-size:11px;color:#b45309;">数据时间 ' + d.time + '</span>';
-        }
-    }).catch(function () {});
-})();
-function aiAsk() {
-    var q = document.getElementById('aiQuestion');
-    var box = document.getElementById('aiAnswer');
-    var question = (q.value || '').trim();
-    if (!question) { q.focus(); return; }
-    box.style.display = 'block';
-    box.textContent = '思考中…（本地模型推理，请稍候）';
-    fetch('/api/ai/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: question })
-    }).then(function (r) { return r.json(); }).then(function (d) {
-        if (!d.ok) { box.textContent = d.msg || '请求失败'; return; }
-        box.innerHTML = '<span>' + (d.answer || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span>' +
-            '<span class="ai-src">来源：' + (d.source || '本地模型') + ' · 数据时间 ' + (d.data_time || '') + ' · 只读辅助，不修改业务数据</span>';
-    }).catch(function () {
-        box.textContent = '请求异常，请稍后重试';
-    });
-}
-</script>
 {% endblock %}

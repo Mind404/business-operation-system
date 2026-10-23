@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AI驱动的业务高效运转系统 - Flask Web应用
+业务高效运转系统 - Flask Web应用
 适用于内网Windows部署，SQLite轻量数据库
 """
 import os
@@ -47,10 +47,6 @@ from plugin_system import log_operation
 with app.app_context():
     plugin_system.init_plugin_tables()
 plugin_system.register_plugin_guard(app)
-
-# v11.0 平台内置 AI 辅助服务（本地小模型，只读，不写业务库）
-from ai_service import ai_bp
-app.register_blueprint(ai_bp, url_prefix='/api/ai')
 
 # ============================================================
 # 用户认证
@@ -113,11 +109,11 @@ def logout():
     return redirect(url_for('login'))
 
 # ============================================================
-# v10.5.0 用户管理中心（仅平台管理员）
+# v10.5.0 用户管理中心（仅管理员）
 # ============================================================
 def _require_admin():
-    """平台管理员校验：仅 platform_admin（平台功能配置权限）"""
-    return is_platform_admin()
+    """管理员校验：非管理员返回 False"""
+    return session.get('user_role') == 'admin'
 
 @app.route('/admin/users')
 def admin_users():
@@ -146,7 +142,7 @@ def admin_user_create():
     if len(password) < 4:
         flash('密码至少4位', 'error')
         return redirect(url_for('admin_users'))
-    if role not in ('platform_admin', 'admin', 'user'):
+    if role not in ('admin', 'user'):
         role = 'user'
     db = get_db()
     exists = db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
@@ -177,13 +173,13 @@ def admin_user_update(uid):
     role = request.form.get('role', user['role'])
     department = request.form.get('department', '').strip()
     is_active = 1 if request.form.get('is_active') == '1' else 0
-    if role not in ('platform_admin', 'admin', 'user'):
+    if role not in ('admin', 'user'):
         role = user['role']
-    # 不允许停用/降级最后一个平台管理员（保证平台永远有最高权限账号）
-    if user['role'] == 'platform_admin' and (is_active == 0 or role != 'platform_admin'):
-        pms = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
-        if pms <= 1:
-            flash('不能停用或降级最后一个平台管理员', 'error')
+    # 不允许停用最后一个管理员
+    if user['role'] == 'admin' and is_active == 0:
+        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
+        if admins <= 1:
+            flash('不能停用最后一个管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET display_name=?, role=?, department=?, is_active=? WHERE id=?',
                (display_name, role, department, is_active, uid))
@@ -204,10 +200,10 @@ def admin_user_toggle(uid):
         flash('用户不存在', 'error')
         return redirect(url_for('admin_users'))
     new_state = 0 if user['is_active'] else 1
-    if user['role'] == 'platform_admin' and new_state == 0:
-        pms = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
-        if pms <= 1:
-            flash('不能停用最后一个平台管理员', 'error')
+    if user['role'] == 'admin' and new_state == 0:
+        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
+        if admins <= 1:
+            flash('不能停用最后一个管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET is_active=? WHERE id=?', (new_state, uid))
     db.commit()
@@ -244,15 +240,7 @@ def plugin_center():
     db = get_db()
     user_id = session.get('user_id')
     subscribed = plugin_system.get_user_plugin_ids(user_id)
-    rows = db.execute('SELECT * FROM plugin_registry ORDER BY core DESC, id').fetchall()
-    plugins = []
-    for r in rows:
-        p = dict(r)
-        try:
-            p['tables'] = json.loads(p.get('tables') or '[]')
-        except Exception:
-            p['tables'] = []
-        plugins.append(p)
+    plugins = db.execute('SELECT * FROM plugin_registry ORDER BY core DESC, id').fetchall()
     return render_template('plugin_center.html', plugins=plugins, subscribed=subscribed)
 
 @app.route('/plugins/toggle/<plugin_id>', methods=['POST'])
@@ -264,14 +252,6 @@ def plugin_toggle(plugin_id):
     else:
         flash(msg, 'success')
     return redirect(url_for('plugin_center'))
-
-
-# ============================================================
-# AI 助手（v11.1 独立页）：聊天窗口 + 登录主动播报预警（只读）
-# ============================================================
-@app.route('/assistant')
-def assistant():
-    return render_template('ai_assistant.html')
 
 
 # ============================================================
@@ -292,14 +272,10 @@ def profile():
         pass
     # 可用功能 = 核心 + WBS（所有登录用户）
     my_plugins = [p for p in plugin_system.PLUGINS if p['core'] or p['id'] == 'wbs']
-    # v11.0.3：审批中心合并进个人中心（待我审批 + 已处理记录）
-    pending, done, my_role = _load_approval_data()
     return render_template('profile.html',
                            user_info=user_info,
                            todo_count=todo_count,
-                           my_plugins=my_plugins,
-                           pending=pending, done=done, my_role=my_role,
-                           is_admin=is_admin())
+                           my_plugins=my_plugins)
 
 @app.route('/profile/change_password', methods=['POST'])
 def profile_change_password():
@@ -336,20 +312,10 @@ def profile_change_password():
 # ============================================================
 # 权限定义：每个角色可以访问的模块（endpoint前缀）和操作权限
 ROLE_PERMISSIONS = {
-    'platform_admin': {
-        'name': '平台管理员',
-        'modules': ['all'],  # 所有模块
-        'readonly_modules': [],  # 无只读（可配置平台功能）
-    },
     'admin': {
-        'name': '管理员',
-        'modules': ['all'],  # 所有模块（编辑、审批）
+        'name': '管理组',
+        'modules': ['all'],  # 所有模块
         'readonly_modules': [],  # 没有只读模块
-    },
-    'user': {
-        'name': '普通用户',
-        'modules': ['all'],  # 可查看/提交
-        'readonly_modules': [],  # 状态变更走审批
     },
     'product': {
         'name': '产品组',
@@ -413,287 +379,6 @@ def has_module_access(module_prefix):
             return True
     return False
 
-# ============================================================
-# v11.0 平台级：审批流配置 + 审批中心 + 外部系统接入管理
-# ============================================================
-@app.route('/admin/approval-flows', methods=['GET'])
-def admin_approval_flows():
-    if not is_platform_admin():
-        flash('仅平台管理员可配置审批流', 'error')
-        return redirect(url_for('index'))
-    db = get_db()
-    flows = db.execute('SELECT * FROM approval_flows ORDER BY plugin_id, record_type').fetchall()
-    # 插件-记录类型清单（供配置）
-    plugins_info = [('requirements', '需求收集', ['req_status', 'requirement']),
-                    ('wbs', 'WBS计划管理', ['task_approve', 'project_approve']),
-                    ('planning', '规划管理', ['software_version', 'dev_task']),
-                    ('bug', 'Bug管理', ['bug']),
-                    ('contract', '合同管理', ['contract']),
-                    ('device', '设备管理', ['device'])]
-    return render_template('approval_flows.html', flows=flows, plugins_info=plugins_info)
-
-
-@app.route('/admin/approval-flows/save', methods=['POST'])
-def admin_approval_flow_save():
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可配置'}), 403
-    db = get_db()
-    name = request.form.get('name', '').strip()
-    plugin_id = request.form.get('plugin_id', '')
-    record_type = request.form.get('record_type', '')
-    step_roles = request.form.getlist('step_role')
-    step_roles = [r for r in step_roles if r]
-    if not name or not plugin_id or not record_type or not step_roles:
-        return jsonify({'success': False, 'error': '名称/插件/记录类型/审批步骤均必填'}), 400
-    # 角色枚举校验：平台角色体系为 admin(管理员)/user(普通用户)
-    for r in step_roles:
-        if r not in ('platform_admin', 'admin', 'user'):
-            return jsonify({'success': False, 'error': f'审批步骤角色不合法：{r}（仅支持平台管理员/管理员/普通用户）'}), 400
-    steps = json.dumps([{'step': i + 1, 'role': r} for i, r in enumerate(step_roles)], ensure_ascii=False)
-    db.execute('''INSERT INTO approval_flows (name, plugin_id, record_type, steps, enabled)
-                  VALUES (?,?,?,?,1)''', (name, plugin_id, record_type, steps))
-    db.commit()
-    log_operation('平台', '审批流配置', f'新建审批流 {name}（{plugin_id}/{record_type}，{len(step_roles)}级）')
-    return jsonify({'success': True})
-
-
-@app.route('/admin/approval-flows/<int:fid>/toggle', methods=['POST'])
-def admin_approval_flow_toggle(fid):
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
-    db = get_db()
-    row = db.execute('SELECT * FROM approval_flows WHERE id=?', (fid,)).fetchone()
-    if not row:
-        return jsonify({'success': False, 'error': '审批流不存在'}), 404
-    new_enabled = 0 if row['enabled'] else 1
-    db.execute('UPDATE approval_flows SET enabled=? WHERE id=?', (new_enabled, fid))
-    db.commit()
-    log_operation('平台', '审批流配置', f'{"启用" if new_enabled else "停用"}审批流 {row["name"]}')
-    return jsonify({'success': True})
-
-
-@app.route('/admin/approval-flows/<int:fid>/delete', methods=['POST'])
-def admin_approval_flow_delete(fid):
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
-    db = get_db()
-    db.execute('DELETE FROM approval_flows WHERE id=?', (fid,))
-    db.commit()
-    log_operation('平台', '审批流配置', f'删除审批流#{fid}')
-    return jsonify({'success': True})
-
-
-def _load_approval_data():
-    """v11.0.3 审批数据（待我审批 + 已处理）：个人中心/审批中心共用"""
-    db = get_db()
-    my_role = get_current_role()
-    pending = db.execute('''SELECT a.*, u.username AS requester FROM approval_requests a
-        LEFT JOIN users u ON a.requester_id=u.id WHERE a.status='待审批'
-        ORDER BY a.created_at DESC LIMIT 100''').fetchall()
-    # 当前用户可审：管理组可审所有；普通用户按审批流当前步骤角色匹配
-    can_review = []
-    for row in pending:
-        row = dict(row)
-        steps = plugin_system.get_flow_steps(row['flow_id'])
-        cur = row['current_step'] or 1
-        need_role = None
-        for s in steps:
-            if s.get('step') == cur:
-                need_role = s.get('role', 'admin')
-                break
-        if need_role is None:
-            need_role = 'admin'
-        if my_role in ('admin', 'platform_admin') or my_role == need_role:
-            can_review.append(row)
-    done = db.execute('''SELECT a.*, u.username AS requester FROM approval_requests a
-        LEFT JOIN users u ON a.requester_id=u.id WHERE a.status!='待审批'
-        ORDER BY a.reviewed_at DESC LIMIT 50''').fetchall()
-    done = [dict(r) for r in done]
-    # 展示名映射
-    def _record_title(row):
-        try:
-            payload = json.loads(row['payload']) if row['payload'] else {}
-            if row['plugin_id'] == 'requirements' and row['record_type'] == 'req_status':
-                item = db.execute('SELECT code, title FROM req_items WHERE id=?', (row['record_id'],)).fetchone()
-                return f"需求 {item['code']} · {item['title']}" if item else f"需求#{row['record_id']}"
-            if row['plugin_id'] == 'wbs':
-                t = db.execute('SELECT name FROM wbs_tasks WHERE id=?', (row['record_id'],)).fetchone()
-                return f"WBS任务：{t['name']}" if t else f"WBS任务#{row['record_id']}"
-            return payload.get('title', row['action'])
-        except Exception:
-            return row['action']
-    for r in can_review:
-        r['_title'] = _record_title(r)
-    for r in done:
-        r['_title'] = _record_title(r)
-    return can_review, done, my_role
-
-
-@app.route('/approvals')
-def approval_center():
-    """v11.0.3 审批中心合并进个人中心（/profile#approvals），本路由重定向保留兼容"""
-    return redirect(url_for('profile') + '#approvals')
-
-
-@app.route('/approvals/<int:aid>/review', methods=['POST'])
-def approval_review(aid):
-    """审批处理：approve=1 通过 / 0 驳回；末级通过后按插件分派落地"""
-    db = get_db()
-    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (aid,)).fetchone()
-    if not row:
-        return jsonify({'success': False, 'error': '审批单不存在'}), 404
-    # 权限：管理员可审所有；普通用户仅可审当前步骤角色匹配
-    steps = plugin_system.get_flow_steps(row['flow_id'])
-    cur = row['current_step'] or 1
-    need_role = 'admin'
-    for s in steps:
-        if s.get('step') == cur:
-            need_role = s.get('role', 'admin')
-            break
-    my_role = get_current_role()
-    if my_role not in ('admin', 'platform_admin') and my_role != need_role:
-        return jsonify({'success': False, 'error': '当前步骤需由角色「%s」审批' % need_role}), 403
-    approve = request.form.get('approve') == '1'
-    comment = request.form.get('comment', '').strip()
-    ok, msg, completed = plugin_system.review_approval(aid, session.get('user_id', 0), approve, comment)
-    if not ok:
-        return jsonify({'success': False, 'error': msg}), 400
-    if completed:
-        # 审批流全部通过 → 分派落地
-        payload = {}
-        try:
-            payload = json.loads(row['payload']) if row['payload'] else {}
-        except Exception:
-            pass
-        apply_fn = _APPROVAL_APPLY.get((row['plugin_id'], row['record_type']))
-        if apply_fn:
-            try:
-                apply_fn(db, row['record_id'], payload)
-            except Exception as e:
-                log_operation('平台', '审批', f'#{aid} 落地回调失败: {e}')
-    return jsonify({'success': True, 'msg': msg, 'completed': completed})
-
-
-@app.route('/admin/external')
-def admin_external():
-    """外部系统接入管理（v11.0 插件接入平台登记/启停/聚合缓存）"""
-    if not is_platform_admin():
-        flash('仅平台管理员可管理外部系统接入', 'error')
-        return redirect(url_for('index'))
-    db = get_db()
-    systems = db.execute('''SELECT s.*, (SELECT COUNT(*) FROM external_data_cache c WHERE c.system_id=s.id) AS cache_cnt
-        FROM external_systems s ORDER BY s.created_at DESC''').fetchall()
-    return render_template('external.html', systems=systems)
-
-
-@app.route('/admin/external/create', methods=['POST'])
-def admin_external_create():
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
-    db = get_db()
-    name = request.form.get('name', '').strip()
-    if not name:
-        return jsonify({'success': False, 'error': '系统名称必填'}), 400
-    db.execute('''INSERT INTO external_systems (name, plugin_id, system_type, access_method, conn_config, status, note)
-        VALUES (?,?,?,?,?,?,?)''',
-        (name, request.form.get('plugin_id', '') or None,
-         request.form.get('system_type', '业务系统'), request.form.get('access_method', 'api'),
-         request.form.get('conn_config', ''), '已登记', request.form.get('note', '')))
-    db.commit()
-    log_operation('平台', '外部接入', f'登记外部系统 {name}')
-    return jsonify({'success': True})
-
-
-@app.route('/admin/external/<int:sid>/toggle', methods=['POST'])
-def admin_external_toggle(sid):
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
-    db = get_db()
-    row = db.execute('SELECT * FROM external_systems WHERE id=?', (sid,)).fetchone()
-    if not row:
-        return jsonify({'success': False, 'error': '系统不存在'}), 404
-    new_status = '已停用' if row['status'] == '已启用' else '已启用'
-    db.execute("UPDATE external_systems SET status=?, updated_at=datetime('now','localtime') WHERE id=?",
-               (new_status, sid))
-    db.commit()
-    log_operation('平台', '外部接入', f'{"启用" if new_status=="已启用" else "停用"} {row["name"]}')
-    return jsonify({'success': True})
-
-
-@app.route('/admin/external/<int:sid>/test', methods=['POST'])
-def admin_external_test(sid):
-    """接入测试（v11.0 占位：验证登记信息/连接配置可达性；外部系统真实联通后校验 API）"""
-    if not is_platform_admin():
-        return jsonify({'success': False, 'error': '仅平台管理员可操作'}), 403
-    db = get_db()
-    row = db.execute('SELECT * FROM external_systems WHERE id=?', (sid,)).fetchone()
-    if not row:
-        return jsonify({'success': False, 'error': '系统不存在'}), 404
-    conn = row['conn_config'] or ''
-    ok = bool(conn.strip())
-    msg = '登记信息完整，等待按《插件接入规范 v1.0》完成接口联调' if ok else '缺少连接配置，请补充后重试'
-    return jsonify({'success': ok, 'msg': msg})
-
-
-@app.route('/admin/external/<int:sid>/cache', methods=['GET'])
-def admin_external_cache(sid):
-    """聚合缓存视图：查看外部系统上报的数据快照"""
-    db = get_db()
-    row = db.execute('SELECT * FROM external_systems WHERE id=?', (sid,)).fetchone()
-    if not row:
-        flash('系统不存在', 'error')
-        return redirect(url_for('admin_external'))
-    caches = db.execute('SELECT * FROM external_data_cache WHERE system_id=? ORDER BY updated_at DESC',
-                        (sid,)).fetchall()
-    return render_template('external_cache.html', system=row, caches=caches)
-
-
-@app.route('/admin/ai-settings', methods=['GET', 'POST'])
-def admin_ai_settings():
-    """AI 模型设置（v11.1，参考图2 API密钥管理）：
-    模式切换（本地 Ollama / 远程 OpenAI 兼容 API）、BaseURL、API Key（脱敏+显示/复制）、
-    模型名、连接测试、安全提示。配置存 ai_config 表，ai_service 读取生效。"""
-    if not is_platform_admin():
-        flash('仅平台管理员可配置 AI 模型', 'error')
-        return redirect(url_for('index'))
-    from ai_service import _get_config, _save_config, _mask_key
-    if request.method == 'POST':
-        mode = request.form.get('mode', 'local')
-        provider_type = request.form.get('provider_type', 'ollama')
-        base_url = (request.form.get('base_url') or '').strip()
-        api_key = (request.form.get('api_key') or '').strip()
-        model = (request.form.get('model') or '').strip()
-        enabled = '1' if request.form.get('enabled') == '1' else '0'
-        # v11.1 呆滞需求阈值（天）
-        staleness_raw = (request.form.get('staleness_days') or '').strip()
-        try:
-            staleness_days = int(staleness_raw) if staleness_raw else 14
-        except ValueError:
-            staleness_days = 14
-        staleness_days = max(1, min(staleness_days, 365))
-        # 未填写新 key 时保留旧 key（避免编辑其他项时清空密钥）
-        if not api_key:
-            cur = _get_config()
-            api_key = cur.get('api_key', '')
-        is_openai_compat = (mode == 'remote') or (provider_type == 'openai_compat')
-        if is_openai_compat and not base_url:
-            flash('OpenAI 兼容模式必须填写 BaseURL（本地后端如 LM Studio 填 http://127.0.0.1:1234/v1）', 'error')
-            return redirect(url_for('admin_ai_settings'))
-        if not model:
-            flash('请填写模型名称', 'error')
-            return redirect(url_for('admin_ai_settings'))
-        _save_config({'mode': mode, 'provider_type': provider_type, 'base_url': base_url,
-                      'api_key': api_key, 'model': model, 'enabled': enabled,
-                      'staleness_days': str(staleness_days)})
-        log_operation('平台', 'AI设置', f'更新 AI 模型配置（模式={mode}，服务={provider_type}，模型={model}）')
-        flash('AI 模型配置已保存', 'success')
-        return redirect(url_for('admin_ai_settings'))
-    cfg = _get_config()
-    cfg['api_key_masked'] = _mask_key(cfg.get('api_key', ''))
-    return render_template('ai_settings.html', cfg=cfg)
-
-
-
 def is_readonly_module(module_prefix):
     """【权限放开】v8.5.0 起取消只读限制"""
     return False
@@ -709,54 +394,74 @@ def can_write(module_prefix):
 # WBS 插件保持自身审批流程，不走此表
 # ============================================================
 def is_admin():
-    """当前用户是否为管理组（管理员/平台管理员）：可编辑业务、审批"""
-    return get_current_role() in ('admin', 'platform_admin')
-
-
-def is_platform_admin():
-    """当前用户是否为平台管理员：可配置平台功能（用户/审批流/外部系统/AI）"""
-    return get_current_role() == 'platform_admin'
+    """当前用户是否为管理员"""
+    return get_current_role() == 'admin'
 
 
 def submit_status_change(plugin_id, record_type, record_id, new_status, payload_extra=None):
-    """状态类变更统一入口（v11.0 恢复审批流模式）：
-    管理员 → 直接生效；普通用户 → 写入 approval_requests 走平台统一审批流（可多级）。
-    审批通过后由审批中心按 _APPROVAL_APPLY 分派落地。
+    """状态类变更统一入口（v10.3.6 暂下线审批：所有角色直接生效）
+
+    原审批流程：普通用户写入 approval_requests 待管理员审批；
+    用户反馈统一审批中心未关联使用，暂恢复直接变更模式。
+    审批相关代码（plugin_system.submit_approval / approval_center / approval_review）
+    均保留，日后要恢复审批只需改回本函数即可。
     """
-    if is_admin():
-        return 'direct', None
-    payload = {'new_status': new_status}
-    if payload_extra:
-        payload.update(payload_extra)
-    from plugin_system import submit_approval, get_flow_steps
-    db = get_db()
-    flow = db.execute('''SELECT * FROM approval_flows
-        WHERE plugin_id=? AND record_type=? AND enabled=1 ORDER BY id DESC LIMIT 1''',
-        (plugin_id, record_type)).fetchone()
-    if not flow:
-        steps = [{'step': 1, 'role': 'admin'}]
-        flow_id = None
-    else:
-        steps = get_flow_steps(flow['id'])
-        flow_id = flow['id']
-    action = f'状态变更：{new_status}'
-    aid = submit_approval(plugin_id, record_type, record_id, session.get('user_id', 0),
-                          action, payload, flow_id=flow_id, current_step=1)
-    return 'pending', f'状态变更申请已提交（审批单#{aid}），等待审批'
+    return 'direct', None
 
 
 # ---- 审批落地函数：审批通过后按插件/记录类型分派执行状态变更 ----
-def _apply_req_status_new(db, rid, payload):
-    """v11.0 需求收集（req_items 新表）审批落地"""
-    from plugins.requirements.routes import _apply_req_status as req_apply
-    req_apply(db, rid, payload.get('new_status'), '系统（审批通过）')
+def _apply_requirement_status(db, rid, payload):
+    from plugins.requirements.routes import sync_requirement_status
+    ns = payload.get('new_status')
+    db.execute("UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (ns, rid))
+    db.commit()
+    sync_requirement_status(db, rid, ns)
+
+
+def _apply_version_status(db, vid, payload):
+    ns = payload.get('new_status')
+    if ns == '已发布':
+        db.execute("UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime') WHERE id=?", (ns, vid))
+    else:
+        db.execute("UPDATE software_versions SET status=? WHERE id=?", (ns, vid))
+    db.commit()
+
+
+def _apply_task_status(db, tid, payload):
+    ns = payload.get('new_status')
+    db.execute("UPDATE dev_tasks SET status=? WHERE id=?", (ns, tid))
+    db.commit()
+
+
+def _apply_bug_status(db, bid, payload):
+    fields, params = ['status=?'], [payload.get('new_status', '新建')]
+    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
+        if payload.get(f):
+            fields.append(f'{f}=?')
+            params.append(payload[f])
+    if payload.get('new_status') == '已关闭':
+        fields.append('closed_at=datetime("now","localtime")')
+    db.execute(f'UPDATE bug_records SET {",".join(fields)} WHERE id=?', (*params, bid))
+    db.commit()
+
+
+def _apply_contract_status(db, cid, payload):
+    db.execute("UPDATE contracts SET status=? WHERE id=?", (payload.get('new_status'), cid))
+    db.commit()
+
+
+def _apply_device_status(db, did, payload):
+    db.execute("UPDATE devices SET status=? WHERE id=?", (payload.get('new_status'), did))
+    db.commit()
 
 
 _APPROVAL_APPLY = {
-    # v11.0 平台化：仅保留 P0 插件（需求收集）的审批落地；
-    # 已删除插件（旧 requirements/planning/bug/contract/device）的审批单
-    # 分派缺失时由审批中心 .get() 容错跳过（记录日志，不报错）。
-    ('requirements', 'req_status'): _apply_req_status_new,
+    ('requirements', 'requirement'): _apply_requirement_status,
+    ('planning', 'software_version'): _apply_version_status,
+    ('planning', 'dev_task'): _apply_task_status,
+    ('bug', 'bug'): _apply_bug_status,
+    ('contract', 'contract'): _apply_contract_status,
+    ('device', 'device'): _apply_device_status,
 }
 
 
@@ -793,27 +498,15 @@ def init_db():
     db = sqlite3.connect(app.config['DATABASE'])
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
-    # v11.0 平台/插件表兜底（老库升级路径：schema.sql 未含这些表的历史库，幂等补建）
-    try:
-        from db_migrations import init_platform_tables, init_req_tables
-        from flask import g
-        g.db = db
-        init_platform_tables()
-        init_req_tables()
-        g.pop('db', None)
-    except Exception as e:
-        print(f'  数据库迁移警告：v11平台表兜底补建失败 - {e}')
     # 首次运行（users 为空）：写入默认账号，保证解压即用
-    # 平台管理员 admin/admin123（最高权限），普通用户 product/product123
+    # 管理员 admin/admin123，普通用户 product/product123
     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:
         db.executescript("""
-            INSERT INTO users (username, password, display_name, role, is_active, department)
-            VALUES ('admin','admin123','系统管理员','platform_admin',1,'平台管理部');
-            INSERT INTO users (username, password, display_name, role, is_active, department)
-            VALUES ('product','product123','产品经理','user',1,'产品部');
+            INSERT INTO users (username, password, display_name, role, is_active)
+            VALUES ('admin','admin123','系统管理员','admin',1);
+            INSERT INTO users (username, password, display_name, role, is_active)
+            VALUES ('product','product123','产品经理','user',1);
         """)
-    # v11.0.3 三级角色迁移：老库 admin 账号升级为平台管理员（保证平台有最高权限账号）
-    db.execute("UPDATE users SET role='platform_admin' WHERE username='admin' AND role='admin'")
     db.commit()
 
 # ============================================================
@@ -853,9 +546,8 @@ def validation_error(message, back_url=None):
 @app.route('/')
 def index():
     db = get_db()
-    # v11.0 聚合视图：WBS + 需求收集 + 外部系统 + 审批待办 + 预警（平台级聚合）
+    # v10.5.0 只保留 WBS：工作台统计聚焦 WBS 计划
     stats = {
-        # WBS
         'wbs_projects_total': db.execute('SELECT COUNT(*) FROM wbs_projects').fetchone()[0],
         'wbs_projects_active': db.execute("SELECT COUNT(*) FROM wbs_projects WHERE status IN ('进行中','规划中')").fetchone()[0],
         'wbs_projects_done': db.execute("SELECT COUNT(*) FROM wbs_projects WHERE status='已完成'").fetchone()[0],
@@ -864,49 +556,17 @@ def index():
         'wbs_tasks_active': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status IN ('进行中','待开始') AND approval_status='已通过'").fetchone()[0],
         'wbs_tasks_done': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status='已完成'").fetchone()[0],
         'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')").fetchone()[0],
-        # 需求收集（新表 req_items）
-        'req_total': db.execute('SELECT COUNT(*) FROM req_items WHERE is_deleted=0').fetchone()[0],
-        'req_pending_review': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status='待评审'").fetchone()[0],
-        'req_doing': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status IN ('评审通过','已采纳','开发中')").fetchone()[0],
-        'req_done': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status IN ('已完成','已关闭')").fetchone()[0],
-        'req_due_soon': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != '' AND delivery_date <= date('now','localtime','+7 day')").fetchone()[0],
-        'req_overdue': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != '' AND delivery_date < date('now','localtime')").fetchone()[0],
-        # 平台
-        'external_total': db.execute('SELECT COUNT(*) FROM external_systems').fetchone()[0],
-        'external_active': db.execute("SELECT COUNT(*) FROM external_systems WHERE status='已启用'").fetchone()[0],
-        'approval_pending_total': db.execute("SELECT COUNT(*) FROM approval_requests WHERE status='待审批'").fetchone()[0],
     }
     recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall()
-    # 待我审批（当前用户可审）
-    my_role = get_current_role()
-    import plugin_system as _ps
-    pendings = db.execute("SELECT * FROM approval_requests WHERE status='待审批' ORDER BY created_at DESC LIMIT 50").fetchall()
-    my_approvals = []
-    for p in pendings:
-        steps = _ps.get_flow_steps(p['flow_id'])
-        cur = p['current_step'] or 1
-        need_role = 'admin'
-        for s in steps:
-            if s.get('step') == cur:
-                need_role = s.get('role', 'admin')
-                break
-        if my_role in ('admin', 'platform_admin') or my_role == need_role:
-            my_approvals.append(p)
-    # 预警区：WBS 逾期任务 + 需求临期/逾期
-    wbs_overdue_tasks = db.execute('''SELECT id, name, plan_end FROM wbs_tasks
-        WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')
-        ORDER BY plan_end LIMIT 10''').fetchall()
-    req_alerts = db.execute('''SELECT id, code, title, delivery_date, status FROM req_items
-        WHERE is_deleted=0 AND status NOT IN ('已完成','已关闭') AND delivery_date != ''
-        AND delivery_date <= date('now','localtime','+7 day')
-        ORDER BY delivery_date LIMIT 10''').fetchall()
+    # 我的待办任务
+    current_user = session.get('username', 'admin')
+    my_tasks = db.execute("SELECT * FROM tasks WHERE assignee=? AND status IN ('待处理','进行中') ORDER BY priority DESC, due_date ASC LIMIT 8", (current_user,)).fetchall()
+    my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     return render_template('index.html', stats=stats,
                            recent_logs=recent_logs,
-                           my_approvals=my_approvals,
-                           wbs_overdue_tasks=wbs_overdue_tasks,
-                           req_alerts=req_alerts,
+                           my_tasks=my_tasks, my_tasks_count=my_tasks_count,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'))
 
@@ -936,7 +596,7 @@ def get_config():
         default_debug = env_debug.lower() in ('1', 'true', 'yes')
 
     # 命令行参数（最高优先级）
-    parser = argparse.ArgumentParser(description='AI驱动的业务高效运转系统')
+    parser = argparse.ArgumentParser(description='业务高效运转系统')
     parser.add_argument('--port', type=int, default=None, help='服务端口号（默认6000）')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='监听地址（默认0.0.0.0）')
     parser.add_argument('--debug', action='store_true', default=None, help='开启调试模式')
@@ -972,16 +632,11 @@ def api_stats():
         'wbs_projects': db.execute('SELECT COUNT(*) FROM wbs_projects').fetchone()[0],
         'wbs_tasks': db.execute('SELECT COUNT(*) FROM wbs_tasks').fetchone()[0],
         'wbs_tasks_pending': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE approval_status='待审批'").fetchone()[0],
-        'req_total': db.execute('SELECT COUNT(*) FROM req_items WHERE is_deleted=0').fetchone()[0],
-        'req_pending': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status='待评审'").fetchone()[0],
-        'req_done': db.execute("SELECT COUNT(*) FROM req_items WHERE is_deleted=0 AND status IN ('已完成','已关闭')").fetchone()[0],
-        'approval_pending': db.execute("SELECT COUNT(*) FROM approval_requests WHERE status='待审批'").fetchone()[0],
-        'external_total': db.execute('SELECT COUNT(*) FROM external_systems').fetchone()[0],
     })
 
 @app.route('/api/global-search')
 def api_global_search():
-    """全局搜索API（v11.0 跨插件聚合）：WBS 项目/任务 + 需求 + 外部系统"""
+    """全局搜索API（v10.5.0 只保留 WBS）：搜索 WBS 项目与任务"""
     q = request.args.get('q', '').strip()
     if len(q) < 2:
         return jsonify({'success': False, 'results': []})
@@ -1009,30 +664,6 @@ def api_global_search():
                 'title': (t['wbs_code'] or '') + ' ' + t['name'],
                 'subtitle': '负责人：' + (t['owner'] or '') + ' · ' + (t['status'] or ''),
                 'url': '/wbs/' + str(t['project_id'])
-            })
-    except Exception:
-        pass
-    # 搜索需求（req_items）
-    try:
-        reqs = db.execute('SELECT id, code, title, status, owner FROM req_items WHERE is_deleted=0 AND (title LIKE ? OR code LIKE ? OR customer LIKE ? OR source_dept LIKE ?) LIMIT 10', (like, like, like, like)).fetchall()
-        for r in reqs:
-            results.append({
-                'type': '需求',
-                'title': (r['code'] or '') + ' ' + r['title'],
-                'subtitle': '状态：' + (r['status'] or '') + ' · 负责人：' + (r['owner'] or ''),
-                'url': '/requirements/' + str(r['id'])
-            })
-    except Exception:
-        pass
-    # 搜索外部系统
-    try:
-        exts = db.execute('SELECT id, name, system_type, status FROM external_systems WHERE name LIKE ? OR plugin_id LIKE ? LIMIT 5', (like, like)).fetchall()
-        for e in exts:
-            results.append({
-                'type': '外部系统',
-                'title': e['name'],
-                'subtitle': (e['system_type'] or '') + ' · ' + (e['status'] or ''),
-                'url': '/admin/external'
             })
     except Exception:
         pass
@@ -1192,7 +823,7 @@ if __name__ == '__main__':
     migrate_db()
     host, port, debug = get_config()
     print('='*60)
-    print('  AI驱动的业务高效运转系统')
+    print('  业务高效运转系统')
     print(f'  本机访问: http://127.0.0.1:{port}')
     print(f'  内网访问: http://<本机IP>:{port}')
     print(f'  调试模式: {"开启(Flask开发服务器)" if debug else "关闭(waitress生产服务器)"}')

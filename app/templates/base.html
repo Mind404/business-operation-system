@@ -15,7 +15,7 @@
                 <div class="logo-icon">⚙</div>
                 <div class="logo-text">
                     <h1>业务运转系统</h1>
-                    <span>AI驱动 · 高效协同</span>
+                    <span>单点登录 · 信息聚合 · 统一权限</span>
                 </div>
             </div>
             <nav class="nav-menu">
@@ -44,34 +44,17 @@
                 </div>
                 {% endif %}
 
-                {# v11.1 平台工具：AI 助手（只读监控/问答）+ 插件全景（所有登录用户可见） #}
-                <div class="nav-group">
-                    <div class="nav-group-title">平台工具</div>
-                    <a href="{{ url_for('assistant') }}" class="nav-item {% if request.path.startswith('/assistant') %}active{% endif %}">
-                        <span class="nav-icon">🤖</span> AI 助手
-                    </a>
-                    <a href="{{ url_for('plugin_center') }}" class="nav-item {% if request.path.startswith('/plugins') %}active{% endif %}">
-                        <span class="nav-icon">🧩</span> 插件全景
-                    </a>
-                </div>
-
-                {# v11.0.3 系统管理（仅平台管理员可见）：用户管理/外部系统接入/AI 设置 #}
-                {% if current_role == 'platform_admin' %}
+                {# v10.5.0 用户管理（仅管理员可见） #}
+                {% if current_role == 'admin' %}
                 <div class="nav-group">
                     <div class="nav-group-title">系统管理</div>
-                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
+                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin') %}active{% endif %}">
                         <span class="nav-icon">👥</span> 用户管理
-                    </a>
-                    <a href="{{ url_for('admin_external') }}" class="nav-item {% if request.path.startswith('/admin/external') %}active{% endif %}">
-                        <span class="nav-icon">🔌</span> 外部系统接入
-                    </a>
-                    <a href="{{ url_for('admin_ai_settings') }}" class="nav-item {% if request.path.startswith('/admin/ai-settings') %}active{% endif %}">
-                        <span class="nav-icon">🤖</span> AI 设置
                     </a>
                 </div>
                 {% endif %}
 
-                {# v11.0.3 审批中心已合并进个人中心（/profile#approvals），不再单独导航 #}
+                {# 审批中心（v10.3.6 暂下线：用户反馈未关联使用，代码保留便于日后恢复） #}
 
                 {# 插件中心（v10.5.0 软下线：系统仅保留 WBS，订阅机制无实际意义，代码保留可恢复） #}
                 {% if false %}
@@ -104,7 +87,7 @@
                     <div class="user-info">
                         <span class="user-avatar">{{ current_user[0] if current_user else 'U' }}</span>
                         <span class="user-name">{{ current_user or '未登录' }}</span>
-                        <span class="user-role">{{ {'platform_admin':'平台管理员','admin':'管理员','user':'普通用户'}.get(current_role, current_role) or '' }}</span>
+                        <span class="user-role">{{ current_role or '' }}</span>
                         <a href="{{ url_for('logout') }}" class="logout-btn">退出</a>
                     </div>
                 </div>

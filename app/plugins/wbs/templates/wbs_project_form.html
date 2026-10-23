@@ -27,13 +27,13 @@
     <!-- 负责人 + 参与人：两列 -->
     <div style="display:grid;grid-template-columns:1fr 1.5fr;gap:16px;margin-bottom:20px;">
         <div>
-            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目负责人 <span style="color:#c0392b;">*</span></label>
-            <input type="text" name="owner" value="{{ p.owner if p else '' }}" required placeholder="如：admin"
+            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目负责人</label>
+            <input type="text" name="owner" value="{{ p.owner if p else '' }}" placeholder="如：余丽莎"
                    style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
         </div>
         <div>
             <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目参与人员</label>
-            <input type="text" name="participants" value="{{ p.participants if p else '' }}" placeholder="多人用顿号分隔，如：admin、product"
+            <input type="text" name="participants" value="{{ p.participants if p else '' }}" placeholder="多人用逗号分隔，如：谭富元、李雪、何思佳"
                    style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
         </div>
     </div>
@@ -52,7 +52,7 @@
         </div>
     </div>
 
-    {% if not p and current_role not in ('admin', 'platform_admin') %}
+    {% if not p and current_role != 'admin' %}
     <div style="margin-bottom:20px;padding:14px;background:#fff8e6;border:1px solid #ffe0a0;border-radius:6px;">
         <label style="display:block;font-size:13px;color:#856404;margin-bottom:8px;font-weight:500;">
             ⚠️ 普通用户创建项目需管理员审批。审批通过后才能导入WBS任务。请选择审批人：

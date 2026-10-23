@@ -53,7 +53,7 @@ del get-pip.py
 :: 安装应用依赖
 echo.
 echo [5/6] 安装应用依赖（Flask, waitress等）...
-"%PYTHON_EXE%" -m pip install --no-warn-script-location Flask==3.0.0 Werkzeug==3.0.1 Jinja2==3.1.2 itsdangerous==2.1.2 click==8.1.7 blinker==1.7.0 waitress==2.1.2 requests==2.31.0 openpyxl==3.1.2
+"%PYTHON_EXE%" -m pip install --no-warn-script-location Flask==3.0.0 Werkzeug==3.0.1 Jinja2==3.1.2 itsdangerous==2.1.2 click==8.1.7 blinker==1.7.0 waitress==2.1.2
 
 :: 复制应用代码
 echo.
