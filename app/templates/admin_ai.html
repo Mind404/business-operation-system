@@ -43,12 +43,27 @@
     .badge-off { font-size:11px; color:#9ca3af; background:#f3f4f6; border-radius:4px; padding:1px 6px; }
 
     /* ===== 对话页（仿豆包 / Kimi） ===== */
-    .chat-wrap { display:flex; flex-direction:column; height:calc(100vh - 190px); min-height:480px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; }
+    .chat-layout { display:flex; gap:12px; height:calc(100vh - 190px); min-height:480px; }
+    .conv-side { width:236px; flex-shrink:0; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; display:flex; flex-direction:column; overflow:hidden; }
+    .conv-head { padding:12px; border-bottom:1px solid #eef0f3; }
+    .conv-head .btn { width:100%; }
+    .conv-list { flex:1; overflow-y:auto; padding:6px; }
+    .conv-item { padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:4px; border:1px solid transparent; }
+    .conv-item:hover { background:#eef2f7; }
+    .conv-item.active { background:#e8f0fe; border-color:#bfdbfe; }
+    .conv-item .t { font-size:12.5px; color:#1f2937; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .conv-item .m { font-size:11px; color:#9ca3af; margin-top:3px; display:flex; justify-content:space-between; align-items:center; }
+    .conv-item .del { border:none; background:none; color:#c4c8cf; font-size:12px; cursor:pointer; padding:0 2px; }
+    .conv-item .del:hover { color:#dc2626; }
+    .conv-item .usage { color:#64748b; }
+    .conv-empty { padding:26px 12px; text-align:center; color:#9ca3af; font-size:12px; line-height:1.8; }
+    .chat-wrap { display:flex; flex-direction:column; flex:1; min-width:0; background:#fff; border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; }
     .chat-top { display:flex; gap:10px; align-items:center; padding:10px 14px; border-bottom:1px solid #eef0f3; flex-wrap:wrap; }
     .chat-top select { height:32px; border:1px solid #d1d5db; border-radius:6px; padding:0 8px; font-size:13px; max-width:260px; }
     .chat-top .spacer { flex:1; }
     .chat-top .btn-clear { color:#6b7280; font-size:12px; }
     .chat-top .btn-clear:hover { color:#dc2626; }
+    .ctx-usage { font-size:11px; color:#64748b; background:#f3f4f6; border-radius:4px; padding:2px 8px; white-space:nowrap; }
     .chat-body { flex:1; overflow-y:auto; padding:20px 24px; background:#f7f8fa; }
     .chat-msg { display:flex; gap:10px; margin-bottom:22px; }
     .chat-msg .avatar { width:34px; height:34px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:16px; }
@@ -101,25 +116,36 @@
 
 <!-- ============ 子页面①：AI 对话（仿豆包/Kimi） ============ -->
 <div class="ai-panel active" id="panel-chat">
-    <div class="chat-wrap">
-        <div class="chat-top">
-            <select id="chatProvider" onchange="chatProviderChanged()"></select>
-            <select id="chatModel"></select>
-            <span class="ai-hint">（AI 仅读取有数据的业务表，分析结果基于真实数据）</span>
-            <span class="spacer"></span>
-            <button class="btn btn-clear" onclick="clearChat()">🗑 清空对话</button>
-        </div>
-        <div class="chat-body" id="chatBody">
-            <div class="chat-empty" id="chatEmpty">
-                <div class="big">🤖</div>
-                你好，我是系统 AI 分析助手。<br>
-                可以问我系统里的业务数据，例如：<br>
-                「汇总各 WBS 项目的任务数量与进度」「分析需求收集表的填写情况」「哪些计划有逾期风险」
+    <div class="chat-layout">
+        <div class="conv-side">
+            <div class="conv-head">
+                <button class="btn btn-primary" onclick="newConversation()">＋ 新建会话</button>
+            </div>
+            <div class="conv-list" id="convList">
+                <div class="conv-empty">暂无历史会话<br>点击上方「新建会话」开始</div>
             </div>
         </div>
-        <div class="chat-input-row">
-            <textarea class="chat-input-box" id="chatQ" rows="1" placeholder="输入要分析的问题，Enter 发送，Shift+Enter 换行…"></textarea>
-            <button class="btn btn-primary btn-send" id="btnSend" onclick="sendChat()">发送</button>
+        <div class="chat-wrap">
+            <div class="chat-top">
+                <select id="chatProvider" onchange="chatProviderChanged()"></select>
+                <select id="chatModel"></select>
+                <span class="ai-hint">（AI 仅读取有数据的业务表）</span>
+                <span class="ctx-usage" id="ctxUsage" title="当前会话上下文占用：消息字符总数（约 1 汉字≈1 字符）">上下文 ≈ 0 字符</span>
+                <span class="spacer"></span>
+                <button class="btn btn-clear" onclick="clearChat()">🗑 清空对话</button>
+            </div>
+            <div class="chat-body" id="chatBody">
+                <div class="chat-empty" id="chatEmpty">
+                    <div class="big">🤖</div>
+                    你好，我是系统 AI 分析助手。<br>
+                    可以问我系统里的业务数据，例如：<br>
+                    「汇总各 WBS 项目的任务数量与进度」「分析需求收集表的填写情况」「哪些计划有逾期风险」
+                </div>
+            </div>
+            <div class="chat-input-row">
+                <textarea class="chat-input-box" id="chatQ" rows="1" placeholder="输入要分析的问题，Enter 发送，Shift+Enter 换行…"></textarea>
+                <button class="btn btn-primary btn-send" id="btnSend" onclick="sendChat()">发送</button>
+            </div>
         </div>
     </div>
 </div>
@@ -471,6 +497,101 @@ function copyMsg(btn) {
 function clearChat() {
     const body = document.getElementById('chatBody');
     body.innerHTML = '<div class="chat-empty" id="chatEmpty"><div class="big">🤖</div>你好，我是系统 AI 分析助手。<br>可以问我系统里的业务数据，例如：<br>「汇总各 WBS 项目的任务数量与进度」「分析需求收集表的填写情况」「哪些计划有逾期风险」</div>';
+    updateCtxUsage(0);
+}
+
+// ============================================================
+// 会话管理（持久化）：新建 / 列表 / 打开 / 删除 / 上下文占用
+// ============================================================
+let conversations = [];
+let currentConvId = null;
+
+function fmtTime(s) {
+    if (!s) return '';
+    const m = s.match(/\d{4}-\d{2}-\d{2} (\d{2}:\d{2})/);
+    return m ? m[1] : s.slice(5, 16);
+}
+function fmtUsage(chars) {
+    if (!chars) return '0';
+    if (chars >= 1000000) return (chars / 1000000).toFixed(1) + 'M';
+    if (chars >= 1000) return (chars / 1000).toFixed(1) + 'K';
+    return '' + chars;
+}
+function updateCtxUsage(chars) {
+    const el = document.getElementById('ctxUsage');
+    const tokens = Math.round((chars || 0) / 2); // 中文约 1 字 ≈ 1-2 token，取估算
+    el.textContent = '上下文 ≈ ' + fmtUsage(chars || 0) + ' 字符 / ≈' + fmtUsage(tokens) + ' tokens';
+}
+function renderConvList() {
+    const el = document.getElementById('convList');
+    if (!conversations.length) {
+        el.innerHTML = '<div class="conv-empty">暂无历史会话<br>点击上方「新建会话」开始</div>';
+        return;
+    }
+    el.innerHTML = conversations.map(c =>
+        '<div class="conv-item' + (c.id === currentConvId ? ' active' : '') + '" onclick="openConversation(' + c.id + ')">' +
+            '<div class="t">' + esc(c.title || '新会话') + '</div>' +
+            '<div class="m"><span>' + fmtTime(c.updated_at) + '</span>' +
+            '<span class="usage">' + (c.msg_count || 0) + ' 条 · ' + fmtUsage(c.char_count || 0) + '</span>' +
+            '<button class="del" title="删除会话" onclick="event.stopPropagation(); deleteConversation(' + c.id + ')">✕</button></div>' +
+        '</div>'
+    ).join('');
+}
+function loadConversations() {
+    return fetch('/admin/ai/api/conversations')
+        .then(r => r.json())
+        .then(d => {
+            conversations = d.conversations || [];
+            renderConvList();
+            return conversations;
+        });
+}
+function newConversation() {
+    return api('/admin/ai/api/conversations', {}).then(d => {
+        if (!d.ok) return;
+        currentConvId = d.id;
+        clearChat();
+        return loadConversations().then(() => {
+            // 回到对话 tab（若在配置 tab）
+            switchTab('chat');
+        });
+    });
+}
+function openConversation(id) {
+    currentConvId = id;
+    return fetch('/admin/ai/api/conversations/' + id + '/messages')
+        .then(r => r.json())
+        .then(d => {
+            renderConvList();
+            if (!d.ok) { clearChat(); return; }
+            const body = document.getElementById('chatBody');
+            body.innerHTML = '';
+            const msgs = d.messages || [];
+            msgs.forEach(m => {
+                addMsg(m.role === 'user' ? 'user' : 'ai', mdRender(m.content || ''));
+            });
+            if (!msgs.length) clearChat();
+            updateCtxUsage(d.conversation ? d.conversation.char_count : 0);
+            document.getElementById('chatQ').focus();
+        });
+}
+function deleteConversation(id) {
+    if (!confirm('确认删除该会话及其全部消息？')) return;
+    api('/admin/ai/api/conversations/' + id + '/delete', {}).then(d => {
+        if (!d.ok) return;
+        if (id === currentConvId) {
+            currentConvId = null;
+            // 自动打开最近会话或新建
+            const next = conversations.find(c => c.id !== id);
+            if (next) openConversation(next.id);
+            else newConversation();
+        } else {
+            loadConversations();
+        }
+    });
+}
+function refreshConversationInList() {
+    loadConversations();
 }
 function sendChat() {
     const q = document.getElementById('chatQ').value.trim();
@@ -494,9 +615,16 @@ function sendChat() {
     addTyping();
     const btn = document.getElementById('btnSend');
     btn.disabled = true;
-    api('/admin/ai/api/chat', { provider_id: parseInt(pid), model, question: q }).then(d => {
+    api('/admin/ai/api/chat', { provider_id: parseInt(pid), model, question: q, conv_id: currentConvId }).then(d => {
         removeTyping();
-        if (d.ok) addMsg('ai', mdRender(d.answer || '（空回复）'));
+        if (d.ok) {
+            addMsg('ai', mdRender(d.answer || '（空回复）'));
+            if (d.conv_id) currentConvId = d.conv_id;
+            refreshConversationInList();
+            // 更新上下文占用
+            const conv = conversations.find(c => c.id === currentConvId);
+            if (conv) updateCtxUsage(conv.char_count);
+        }
         else addMsg('ai', '<span class="err">' + esc(d.msg || '调用失败') + '</span>');
     }).catch(e => {
         removeTyping();
@@ -520,15 +648,22 @@ qInput.addEventListener('keydown', function(e) {
     }
 });
 
-// 初始化：加载服务商；已有启用服务商 → 默认对话页；无服务商 → 提示先配置
+// 初始化：加载服务商与会话；已有启用服务商 → 默认对话页并恢复最近会话；无服务商 → 提示先配置
 loadProviders().then(function() {
     const hasEnabled = providers.some(p => p.enabled);
     if (!hasEnabled && providers.length === 0) {
-        // 无任何服务商 → 自动切到配置页引导添加
+        // 无任何服务商 → 自动切到配置页引导添加；同时恢复最近会话（供查看历史）
         switchTab('cfg');
+        loadConversations().then(function() {
+            if (conversations.length) openConversation(conversations[0].id);
+        });
     } else {
         refreshChatSelects();
-        document.getElementById('chatQ').focus();
+        loadConversations().then(function() {
+            // 跳转页面回来：自动恢复最近更新的会话
+            if (conversations.length) openConversation(conversations[0].id);
+            else document.getElementById('chatQ').focus();
+        });
     }
 });
 </script>

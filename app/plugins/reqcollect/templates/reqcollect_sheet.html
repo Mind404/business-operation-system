@@ -169,6 +169,50 @@ function scheduleMoveBarsToTop() {
     }, 1200);
 }
 
+// ============ 点击错位修复（视觉命中校正） ============
+// 背景：Luckysheet 点击换算使用的“固定高度基准”在滚动/移动底部栏后与真实布局
+// 不一致，滚动后点击单元格会错位（偏移约等于滚动量）。这里在 mousedown 捕获阶段
+// 拦截点击，按“实时 DOM 基准 + 滚动量”计算目标单元格，直接设置选区，绕开内部换算。
+let LS_ZOOM = 1;
+function lsCurrentZoom() {
+    try {
+        const f = luckysheet.getluckysheetfile();
+        if (f && f[0] && f[0].zoomRatio) return f[0].zoomRatio;
+    } catch (e) {}
+    return LS_ZOOM;
+}
+document.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    const cm = document.getElementById('luckysheet-cell-main');
+    if (!cm) return;
+    const r = cm.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+    // 列标/行标/弹层/悬浮菜单等区域放行给 Luckysheet 自身处理
+    if (e.target && e.target.closest && e.target.closest('.luckysheet-mousedown-cancel, #luckysheet-cols-h-c, #luckysheet-rows-h, #luckysheet-scrollbar-y, #luckysheet-scrollbar-x, .luckysheet-cols-menu, .luckysheet-cols-menuitem, .luckysheet-menu, .luckysheet-menu-item, #luckysheet-rightclick-menu, #luckysheet-icon-morebtn-div, .luckysheet-submenu, .luckysheet-toolbar-menu-button')) return;
+    // 计算视觉目标单元格（实时 DOM 基准，免疫内部缓存失效）
+    const colsH = document.getElementById('luckysheet-cols-h-c');
+    const rowsH = document.getElementById('luckysheet-rows-h');
+    if (!colsH || !rowsH) return;
+    const colsBottom = colsH.getBoundingClientRect().bottom;
+    const rowsRight = rowsH.getBoundingClientRect().right;
+    const st = cm.scrollTop, sl = cm.scrollLeft;
+    const zoom = lsCurrentZoom();
+    const rowH = 20 * zoom, colW = 74 * zoom;
+    const row = Math.max(0, Math.floor((e.clientY - colsBottom + st) / rowH));
+    const col = Math.max(0, Math.floor((e.clientX - rowsRight + sl) / colW));
+    e.preventDefault();
+    e.stopPropagation();
+    const range = {
+        left: col * colW, width: colW, top: row * rowH, height: rowH,
+        left_move: col * colW, width_move: colW, top_move: row * rowH, height_move: rowH,
+        row: [row, row], column: [col, col], row_focus: row, column_focus: col
+    };
+    try {
+        luckysheet.setluckysheet_select_save([range]);
+        luckysheet.selectHightlightShow();
+    } catch (err) { console.error('选中单元格失败', err); }
+}, true);
+
 // Ctrl + 滚轮 缩放（Excel 习惯）
 document.getElementById('luckysheet').addEventListener('wheel', function(e) {
     if (!e.ctrlKey) return;
@@ -180,6 +224,7 @@ document.getElementById('luckysheet').addEventListener('wheel', function(e) {
         if (f && f[0] && f[0].zoomRatio) cur = f[0].zoomRatio;
     } catch (err) {}
     const nz = Math.max(0.5, Math.min(2, Math.round((cur + step) * 10) / 10));
+    LS_ZOOM = nz;
     try { luckysheet.setSheetZoom(nz); } catch (err) {}
     // 缩放后触发布局重算，防止坐标计算残留旧缩放值
     setTimeout(function(){ try { window.dispatchEvent(new Event('resize')); } catch(err) {} }, 80);

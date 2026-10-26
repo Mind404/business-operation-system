@@ -23,7 +23,28 @@ def _db():
     if 'ai_db' not in g:
         g.ai_db = sqlite3.connect(current_app.config['DATABASE'])
         g.ai_db.row_factory = sqlite3.Row
+        _init_tables(g.ai_db)
     return g.ai_db
+
+
+def _init_tables(db):
+    """会话与消息表（幂等建表）"""
+    db.execute('''CREATE TABLE IF NOT EXISTS ai_conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT DEFAULT '新会话',
+        created_at TEXT,
+        updated_at TEXT,
+        msg_count INTEGER DEFAULT 0,
+        char_count INTEGER DEFAULT 0
+    )''')
+    db.execute('''CREATE TABLE IF NOT EXISTS ai_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conv_id INTEGER NOT NULL,
+        role TEXT,
+        content TEXT,
+        created_at TEXT
+    )''')
+    db.commit()
 
 
 def _require_platform():
@@ -137,6 +158,58 @@ def detect():
 
 
 # ============================================================
+# 会话管理（持久化）：新建 / 列表 / 消息 / 删除
+# ============================================================
+def _now_str():
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+@ai_bp.route('/api/conversations')
+def list_conversations():
+    if not _require_platform():
+        return _deny()
+    rows = _db().execute(
+        'SELECT id, title, created_at, updated_at, msg_count, char_count '
+        'FROM ai_conversations ORDER BY updated_at DESC LIMIT 100').fetchall()
+    return jsonify({'ok': True, 'conversations': [dict(r) for r in rows]})
+
+
+@ai_bp.route('/api/conversations', methods=['POST'])
+def new_conversation():
+    if not _require_platform():
+        return _deny()
+    db = _db()
+    now = _now_str()
+    cur = db.execute('INSERT INTO ai_conversations (title, created_at, updated_at) VALUES (?,?,?)',
+                     ('新会话', now, now))
+    db.commit()
+    return jsonify({'ok': True, 'id': cur.lastrowid})
+
+
+@ai_bp.route('/api/conversations/<int:cid>/messages')
+def conv_messages(cid):
+    if not _require_platform():
+        return _deny()
+    db = _db()
+    conv = db.execute('SELECT * FROM ai_conversations WHERE id=?', (cid,)).fetchone()
+    if not conv:
+        return jsonify({'ok': False, 'msg': '会话不存在'}), 404
+    rows = db.execute('SELECT id, role, content, created_at FROM ai_messages WHERE conv_id=? ORDER BY id', (cid,)).fetchall()
+    return jsonify({'ok': True, 'conversation': dict(conv), 'messages': [dict(r) for r in rows]})
+
+
+@ai_bp.route('/api/conversations/<int:cid>/delete', methods=['POST'])
+def delete_conversation(cid):
+    if not _require_platform():
+        return _deny()
+    db = _db()
+    db.execute('DELETE FROM ai_messages WHERE conv_id=?', (cid,))
+    db.execute('DELETE FROM ai_conversations WHERE id=?', (cid,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+# ============================================================
 # 数据库上下文采集（含插件表）：只读、白名单表名、按问题相关性、仅注入有数据表
 # ============================================================
 _SAFE_TABLE = re.compile(r'^[A-Za-z0-9_]+$')
@@ -236,6 +309,7 @@ def chat():
     pid = d.get('provider_id')
     model = (d.get('model') or '').strip()
     question = (d.get('question') or '').strip()
+    cid = d.get('conv_id')
     if not pid:
         return jsonify({'ok': False, 'msg': '请先选择 AI 服务商'})
     if not question:
@@ -251,6 +325,18 @@ def chat():
     if not model:
         return jsonify({'ok': False, 'msg': '请选择模型（可先点击“检测”拉取模型列表）'})
 
+    # 会话归属：指定会话必须存在；未指定则自动新建
+    if cid:
+        conv = db.execute('SELECT * FROM ai_conversations WHERE id=?', (cid,)).fetchone()
+        if not conv:
+            return jsonify({'ok': False, 'msg': '会话不存在或已删除'})
+    else:
+        now = _now_str()
+        cur = db.execute('INSERT INTO ai_conversations (title, created_at, updated_at) VALUES (?,?,?)',
+                         ('新会话', now, now))
+        cid = cur.lastrowid
+        db.commit()
+
     context = _collect_db_context(question)
     messages = [
         {'role': 'system', 'content': _SYSTEM_PROMPT},
@@ -258,12 +344,30 @@ def chat():
     ]
     answer = _chat_request(prov['api_url'], prov['api_key'], model, messages)
     try:
+        now = _now_str()
+        # 写入会话消息
+        db.execute('INSERT INTO ai_messages (conv_id, role, content, created_at) VALUES (?,?,?,?)',
+                   (cid, 'user', question, now))
+        db.execute('INSERT INTO ai_messages (conv_id, role, content, created_at) VALUES (?,?,?,?)',
+                   (cid, 'assistant', answer, now))
+        # 更新会话：标题（取首个用户问题前 24 字）、消息数、上下文占用（字符数）
+        title_row = db.execute('SELECT content FROM ai_messages WHERE conv_id=? AND role=? ORDER BY id LIMIT 1',
+                               (cid, 'user')).fetchone()
+        new_title = '新会话'
+        if title_row:
+            t = (title_row['content'] or '').strip().replace('\n', ' ')
+            new_title = t[:24] if t else '新会话'
+        cc = db.execute('SELECT COALESCE(SUM(LENGTH(content)),0) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
+        mc = db.execute('SELECT COUNT(*) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
+        db.execute('UPDATE ai_conversations SET title=?, updated_at=?, msg_count=?, char_count=? WHERE id=?',
+                   (new_title, now, mc, cc, cid))
+        # 兼容保留 ai_chat_logs
         db.execute('INSERT INTO ai_chat_logs (provider_id, model, question, answer) VALUES (?,?,?,?)',
                    (pid, model, question, answer))
         db.commit()
     except Exception:
         pass
-    return jsonify({'ok': True, 'answer': answer})
+    return jsonify({'ok': True, 'answer': answer, 'conv_id': cid})
 
 
 def _chat_request(api_url, api_key, model, messages, timeout=120):
