@@ -218,6 +218,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/purify.min.js') }}"></script>
 <script>
 // ============================================================
 // 子页面切换
@@ -232,71 +234,30 @@ function switchTab(which) {
 }
 
 // ============================================================
-// 轻量 Markdown 渲染（离线零依赖）：标题/粗体/斜体/列表/引用/代码块/表格/hr/链接
+// Markdown 渲染：marked（GFM 表格/代码块/列表）+ DOMPurify（XSS 消毒），离线内置零外网
 // ============================================================
+if (typeof marked !== 'undefined') {
+    marked.setOptions({
+        gfm: true,             // GitHub 风格：表格、自动链接、删除线
+        breaks: true,          // 单换行也换行显示（贴近豆包/Kimi 对话体验）
+        pedantic: false,
+        headerIds: false,
+        mangle: false,
+        silent: true
+    });
+}
 function mdRender(src) {
     if (!src) return '';
-    let s = src.replace(/\r\n/g, '\n').replace(/\t/g, '    ');
-    // 代码块先取出
-    const blocks = [];
-    s = s.replace(/```([\s\S]*?)```/g, function(m, code) {
-        blocks.push('<pre><code>' + esc(code.replace(/^[a-zA-Z0-9_+-]+?\n/, '')) + '</code></pre>');
-        return '\u0000BLOCK' + (blocks.length - 1) + '\u0000';
-    });
-    // 行内代码
-    s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    // 转义其余 HTML
-    s = esc(s);
-    // 标题
-    s = s.replace(/^###### (.*)$/gm, '<h6>$1</h6>').replace(/^##### (.*)$/gm, '<h5>$1</h5>')
-         .replace(/^#### (.*)$/gm, '<h4>$1</h4>').replace(/^### (.*)$/gm, '<h3>$1</h3>')
-         .replace(/^## (.*)$/gm, '<h2>$1</h2>').replace(/^# (.*)$/gm, '<h1>$1</h1>');
-    // 水平线
-    s = s.replace(/^-{3,}\s*$/gm, '<hr>');
-    // 引用块（多行合并）
-    s = s.replace(/^&gt; ?/gm, '\u0000Q');
-    s = s.replace(/(\u0000Q[^\n]*\n?)+/g, function(m) {
-        return '<blockquote>' + m.replace(/\u0000Q/g, '').trim() + '</blockquote>\n';
-    });
-    // 表格：| a | b | 连续行
-    s = s.replace(/(\|[^\n]+\|\n\|[\s:-|]+\|\n(\|[^\n]+\|\n?)*)/g, function(m) {
-        const lines = m.trim().split('\n').filter(l => l.trim());
-        let html = '<table>';
-        lines.forEach((line, i) => {
-            const cells = line.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
-            const tag = i === 0 ? 'th' : 'td';
-            html += '<tr>' + cells.map(c => '<' + tag + '>' + c + '</' + tag + '>').join('') + '</tr>';
+    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+        var html = marked.parse(src);
+        return DOMPurify.sanitize(html, {
+            USE_PROFILES: { html: true },
+            ADD_TAGS: ['del'],
+            ADD_ATTR: ['target', 'rel', 'class', 'id']
         });
-        return html + '</table>';
-    });
-    // 无序列表
-    s = s.replace(/^[-*+] (.+)$/gm, '<li>$1</li>');
-    s = s.replace(/(<li>.*<\/li>\n?)+/g, function(m) {
-        return '<ul>' + m.replace(/\n/g, '') + '</ul>';
-    });
-    // 有序列表
-    s = s.replace(/^\d+[.、] (.+)$/gm, '<li>$1</li>');
-    s = s.replace(/(<li>.*<\/li>\n?)+/g, function(m) {
-        return '<ol>' + m.replace(/\n/g, '') + '</ol>';
-    });
-    // 加粗 / 斜体（行首 * 已在列表处理，此处只匹配词内/词后）
-    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
-    // 链接
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    // 段落
-    const parts = s.split(/\n{2,}/);
-    s = parts.map(function(p) {
-        p = p.trim();
-        if (!p) return '';
-        if (/^(<h\d>|<pre|<blockquote|<table|<ul|<ol|<hr)/.test(p) || p.indexOf('\u0000') === 0) return p + '\n';
-        // 块内换行（无空行）转 <br>
-        p = p.replace(/\n/g, '<br>');
-        return '<p>' + p + '</p>';
-    }).join('');
-    // 还原代码块
-    s = s.replace(/\u0000BLOCK(\d+)\u0000/g, function(m, i) { return blocks[+i]; });
-    return s;
+    }
+    // 兜底：库缺失时退回纯文本（转义 HTML，保可读）
+    return esc(src).replace(/\n/g, '<br>');
 }
 function esc(s) {
     return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
