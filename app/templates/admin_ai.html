@@ -74,6 +74,20 @@
     .chat-msg .meta .name { color:#6b7280; font-weight:600; }
     .chat-msg .meta .copy-btn { border:none; background:none; color:#9ca3af; font-size:11px; cursor:pointer; padding:0; }
     .chat-msg .meta .copy-btn:hover { color:#2563eb; }
+    /* 消息操作：编辑 / 删除 / 中止 */
+    .msg-ops { display:flex; gap:4px; margin-top:4px; align-items:center; }
+    .msg-ops .op { border:1px solid #e5e7eb; background:#fff; color:#6b7280; font-size:11px; border-radius:6px; padding:2px 8px; cursor:pointer; }
+    .msg-ops .op:hover { border-color:#2563eb; color:#2563eb; }
+    .msg-ops .op.danger:hover { border-color:#dc2626; color:#dc2626; }
+    .msg-ops .op.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .msg-ops .op.primary:hover { background:#1d4ed8; }
+    .msg-ops .op:disabled { opacity:.5; cursor:not-allowed; }
+    .msg-ops .abort { border-color:#dc2626; color:#dc2626; font-weight:600; }
+    .msg-ops .abort:hover { background:#dc2626; color:#fff; }
+    .edit-ta { width:100%; box-sizing:border-box; min-height:80px; border:1px solid #2563eb; border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; resize:vertical; }
+    .msg-aborted { color:#dc2626; font-size:11px; margin-top:6px; }
+    .stream-cursor::after { content:'▍'; color:#2563eb; animation:blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity:0; } }
     .chat-msg .content { padding:12px 16px; border-radius:12px; font-size:13.5px; line-height:1.7; color:#1f2937; word-break:break-word; overflow-wrap:break-word; }
     .chat-msg.ai .content { background:#fff; border:1px solid #e5e7eb; border-top-left-radius:4px; }
     .chat-msg.user .content { background:#2563eb; color:#fff; border-top-right-radius:4px; }
@@ -439,12 +453,14 @@ function nowTime() {
     function p(n) { return (n < 10 ? '0' : '') + n; }
     return p(d.getHours()) + ':' + p(d.getMinutes());
 }
-function addMsg(role, txt, cls) {
+function addMsg(role, txt, cls, mid, aborted) {
     const body = document.getElementById('chatBody');
     const empty = document.getElementById('chatEmpty');
     if (empty) empty.style.display = 'none';
     const wrap = document.createElement('div');
     wrap.className = 'chat-msg ' + role;
+    wrap.dataset.mid = mid || '';
+    const abortTag = role === 'ai' && aborted ? '<div class="msg-aborted">⏹ 已中止生成（已自动保存已生成部分）</div>' : '';
     wrap.innerHTML =
         '<div class="avatar">' + (role === 'ai' ? '🤖' : '👤') + '</div>' +
         '<div class="bubble">' +
@@ -453,10 +469,26 @@ function addMsg(role, txt, cls) {
             (role === 'ai' && txt ? '<button class="copy-btn" onclick="copyMsg(this)">📋 复制</button>' : '') +
             '</div>' +
             '<div class="content ' + (cls || '') + '">' + txt + '</div>' +
+            abortTag +
+            (mid ? opsHtml(role, mid) : '') +
         '</div>';
     body.appendChild(wrap);
     body.scrollTop = body.scrollHeight;
     return wrap;
+}
+function opsHtml(role, mid) {
+    const editBtn = role === 'user'
+        ? '<button class="op" onclick="editMsg(this,' + mid + ')" title="修改这条问题并重新提问">✏️ 编辑</button>' : '';
+    return '<div class="msg-ops">' + editBtn +
+        '<button class="op danger" onclick="delMsg(this,' + mid + ')" title="从对话中删除这条消息">🗑 删除</button></div>';
+}
+function bindMsgActions(wrap, mid) {
+    // 流式完成后补绑定操作按钮（编辑/删除）
+    if (!wrap || !mid || wrap.dataset.mid) return;
+    wrap.dataset.mid = mid;
+    const bubble = wrap.querySelector('.bubble');
+    if (!bubble) return;
+    bubble.insertAdjacentHTML('beforeend', opsHtml(wrap.classList.contains('user') ? 'user' : 'ai', mid));
 }
 function addTyping() {
     const body = document.getElementById('chatBody');
@@ -495,6 +527,7 @@ function copyMsg(btn) {
     }
 }
 function clearChat() {
+    if (streaming) { alert('AI 正在生成中，请先点击「⏹ 中止生成」'); return; }
     const body = document.getElementById('chatBody');
     body.innerHTML = '<div class="chat-empty" id="chatEmpty"><div class="big">🤖</div>你好，我是系统 AI 分析助手。<br>可以问我系统里的业务数据，例如：<br>「汇总各 WBS 项目的任务数量与进度」「分析需求收集表的填写情况」「哪些计划有逾期风险」</div>';
     updateCtxUsage(0);
@@ -568,7 +601,7 @@ function openConversation(id) {
             body.innerHTML = '';
             const msgs = d.messages || [];
             msgs.forEach(m => {
-                addMsg(m.role === 'user' ? 'user' : 'ai', mdRender(m.content || ''));
+                addMsg(m.role === 'user' ? 'user' : 'ai', mdRender(m.content || ''), '', m.id, !!m.aborted);
             });
             if (!msgs.length) clearChat();
             updateCtxUsage(d.conversation ? d.conversation.char_count : 0);
@@ -593,7 +626,105 @@ function deleteConversation(id) {
 function refreshConversationInList() {
     loadConversations();
 }
+// ============================================================
+// 流式发送：可中止 / 可删除 / 可编辑重发
+// ============================================================
+let streaming = false;
+let chatController = null;
+let streamAiWrap = null;
+let streamCollect = '';
+let lastUserWrap = null;
+let lastQ = '';
+
+function addStreamBubble() {
+    const body = document.getElementById('chatBody');
+    const empty = document.getElementById('chatEmpty');
+    if (empty) empty.style.display = 'none';
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-msg ai';
+    wrap.innerHTML =
+        '<div class="avatar">🤖</div>' +
+        '<div class="bubble">' +
+            '<div class="meta"><span class="name">AI 分析助手</span>' +
+            '<span>' + nowTime() + '</span>' +
+            '<span class="stream-cursor"></span></div>' +
+            '<div class="content"></div>' +
+            '<div class="msg-ops"><button class="op abort" id="btnAbort" onclick="stopStream()" title="停止生成，保留已生成部分">⏹ 中止生成</button></div>' +
+        '</div>';
+    body.appendChild(wrap);
+    body.scrollTop = body.scrollHeight;
+    return wrap;
+}
+function updateStreamContent(html) {
+    if (!streamAiWrap) return;
+    const c = streamAiWrap.querySelector('.content');
+    c.innerHTML = html;
+    streamAiWrap.scrollIntoView({ block: 'end' });
+    const body = document.getElementById('chatBody');
+    body.scrollTop = body.scrollHeight;
+}
+function stopStream() {
+    if (chatController) {
+        chatController.abort();
+    }
+}
+function markAborted() {
+    if (!streamAiWrap) return;
+    const ops = streamAiWrap.querySelector('.msg-ops');
+    if (ops) ops.remove();
+    const c = streamAiWrap.querySelector('.content');
+    c.innerHTML = mdRender(streamCollect || '【已中止】');
+    c.insertAdjacentHTML('beforeend', '<div class="msg-aborted">⏹ 已中止生成（已自动保存已生成部分）</div>');
+}
+function parseSSE(buf) {
+    // 按 \n\n 切事件，返回 {events, rest}
+    let idx;
+    const events = [];
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+        events.push(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+    }
+    return { events: events, rest: buf };
+}
+function handleSSEEvent(evt) {
+    let data = '';
+    const lines = evt.split('\n');
+    for (const ln of lines) {
+        if (ln.startsWith('data:')) data = ln.slice(5).trim();
+    }
+    if (!data) return;
+    let obj = null;
+    try { obj = JSON.parse(data); } catch (e) { return; }
+    if (obj.conv_id !== undefined) {
+        currentConvId = obj.conv_id;
+        if (obj.user_msg_id && lastUserWrap) bindMsgActions(lastUserWrap, obj.user_msg_id);
+        return;
+    }
+    if (obj.delta) {
+        streamCollect += obj.delta;
+        updateStreamContent(mdRender(streamCollect));
+        return;
+    }
+    if (obj.answer !== undefined) {
+        // end 事件
+        const done = !!obj.ok;
+        streamCollect = obj.answer || streamCollect;
+        if (done) {
+            // 移除"中止生成"按钮，补绑定编辑/删除
+            const ops = streamAiWrap.querySelector('.msg-ops');
+            if (ops) ops.remove();
+            updateStreamContent(mdRender(streamCollect));
+            if (obj.msg_id) bindMsgActions(streamAiWrap, obj.msg_id);
+        } else {
+            markAborted();
+        }
+    }
+}
 function sendChat() {
+    if (streaming) {
+        alert('AI 正在生成中，请先点击「⏹ 中止生成」再操作');
+        return;
+    }
     const q = document.getElementById('chatQ').value.trim();
     const pid = document.getElementById('chatProvider').value;
     const model = document.getElementById('chatModel').value;
@@ -610,28 +741,120 @@ function sendChat() {
         return;
     }
     addMsg('user', mdRender(q));
+    lastUserWrap = document.getElementById('chatBody').lastElementChild;
+    lastQ = q;
     document.getElementById('chatQ').value = '';
     autoGrow();
-    addTyping();
+    startStream(q);
+}
+async function startStream(question, convId, reuseMsgId) {
+    const pid = document.getElementById('chatProvider').value;
+    const model = document.getElementById('chatModel').value;
+    streaming = true;
+    streamCollect = '';
+    streamAiWrap = addStreamBubble();
     const btn = document.getElementById('btnSend');
     btn.disabled = true;
-    api('/admin/ai/api/chat', { provider_id: parseInt(pid), model, question: q, conv_id: currentConvId }).then(d => {
-        removeTyping();
-        if (d.ok) {
-            addMsg('ai', mdRender(d.answer || '（空回复）'));
-            if (d.conv_id) currentConvId = d.conv_id;
-            refreshConversationInList();
-            // 更新上下文占用
-            const conv = conversations.find(c => c.id === currentConvId);
-            if (conv) updateCtxUsage(conv.char_count);
+    chatController = new AbortController();
+    try {
+        const res = await fetch('/admin/ai/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider_id: parseInt(pid), model: model, question: question, conv_id: convId || currentConvId, user_msg_id: reuseMsgId || null }),
+            signal: chatController.signal,
+        });
+        if (!res.ok || !res.body) {
+            markAborted();
+            return;
         }
-        else addMsg('ai', '<span class="err">' + esc(d.msg || '调用失败') + '</span>');
-    }).catch(e => {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const parsed = parseSSE(buf);
+            buf = parsed.rest;
+            for (const evt of parsed.events) handleSSEEvent(evt);
+        }
+        // 末尾残留事件
+        if (buf.trim()) handleSSEEvent(buf.trim());
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            markAborted();
+            // 中止后：稍等后端把已生成部分落库，再刷新列表+重载会话（消息带 id + 中止标记，统计准确）
+            if (currentConvId) {
+                setTimeout(function() {
+                    loadConversations().then(function() {
+                        openConversation(currentConvId);
+                    });
+                }, 800);
+            }
+            return;
+        }
         removeTyping();
         addMsg('ai', '<span class="err">请求出错：' + esc(e) + '</span>');
-    }).finally(() => {
+        return;
+    } finally {
+        streaming = false;
+        chatController = null;
+        streamAiWrap = null;
         btn.disabled = false;
+        refreshConversationInList();
+        const conv = conversations.find(c => c.id === currentConvId);
+        if (conv) updateCtxUsage(conv.char_count);
         document.getElementById('chatQ').focus();
+    }
+}
+// ============================================================
+// 消息操作：编辑重发 / 删除气泡
+// ============================================================
+function editMsg(btn, mid) {
+    if (streaming) { alert('AI 正在生成中，请先中止再编辑'); return; }
+    const bubble = btn.closest('.bubble');
+    const contentEl = bubble.querySelector('.content');
+    const opsEl = bubble.querySelector('.msg-ops');
+    const old = contentEl.innerText;
+    contentEl.innerHTML =
+        '<textarea class="edit-ta">' + esc(old) + '</textarea>' +
+        '<div class="msg-ops">' +
+        '<button class="op primary" onclick="saveEdit(this,' + mid + ')">💾 保存并重发</button>' +
+        '<button class="op" onclick="cancelEdit(this)">取消</button></div>';
+    if (opsEl) opsEl.style.display = 'none';
+    contentEl.querySelector('.edit-ta').focus();
+}
+function cancelEdit(btn) {
+    // 取消：恢复原文（重新打开会话渲染）
+    if (currentConvId) openConversation(currentConvId);
+}
+function saveEdit(btn, mid) {
+    if (streaming) { alert('AI 正在生成中，请先中止再重发'); return; }
+    const ta = btn.closest('.content').querySelector('.edit-ta');
+    const text = ta.value.trim();
+    if (!text) { alert('内容不能为空'); return; }
+    btn.disabled = true;
+    api('/admin/ai/api/messages/' + mid + '/edit', { content: text, reask: true }).then(d => {
+        if (!d.ok) { alert(d.msg || '编辑失败'); btn.disabled = false; return; }
+        currentConvId = d.conv_id;
+        // 重载会话渲染编辑后的消息（正常按钮），再重新流式提问（复用消息 id，不重复插入）
+        openConversation(d.conv_id).then(function() {
+            const users = document.querySelectorAll('.chat-msg.user');
+            lastUserWrap = users.length ? users[users.length - 1] : null;
+            lastQ = text;
+            startStream(text, d.conv_id, mid);
+        });
+    });
+}
+function delMsg(btn, mid) {
+    if (streaming) { alert('AI 正在生成中，请先中止再删除'); return; }
+    if (!confirm('删除这条消息？\n删除后 AI 后续回答将不再基于这条消息（历史会话仍可从左侧恢复）。')) return;
+    api('/admin/ai/api/messages/' + mid + '/delete', {}).then(d => {
+        if (!d.ok) return;
+        btn.closest('.chat-msg').remove();
+        refreshConversationInList();
+        const conv = conversations.find(c => c.id === currentConvId);
+        if (conv) updateCtxUsage(conv.char_count);
     });
 }
 // 输入框自适应高度 + 快捷键

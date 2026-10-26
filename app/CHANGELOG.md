@@ -468,3 +468,22 @@ git commit -m "vX.Y.Z: 一句话概述本次功能"
 - 插件开发规范新增：并发写事务/表隔离/错误处理章节
 - 操作日志页支持按操作人/模块筛选
 - 全局搜索 JSON ensure_ascii=False（中文可读）+ 异常打日志
+
+# v12.4.6 AI 对话升级：流式输出 + 中止 + 删除气泡 + 编辑重发（2026-10-26）
+
+- 后端 ai_routes.py：
+  - chat() 改造为流式 SSE（OpenAI 兼容 stream=True）：先落库用户消息（中断也不丢）→ 闭包准备上下文 → 逐块 yield delta
+  - 修复 waitress 生产服务器关键坑：generator 实际执行时 Flask 请求/应用上下文已弹出，
+    gen() 只读闭包变量 + _save_ai_message 改为 sqlite3 直连保存（修复前首次流式直接报 Working outside of application context）
+  - 新增中止保存：客户端断开（GeneratorExit）→ 已生成部分自动入库，消息标 aborted=1（ai_messages 幂等迁移补 aborted 列）
+  - 新增 POST /api/messages/<mid>/delete：删气泡 + 重算会话统计（标题/条数/字符数）
+  - 新增 POST /api/messages/<mid>/edit：改内容；reask=true 时删除该条之后同会话全部消息（防上下文污染）
+  - chat() 支持 user_msg_id 复用：编辑重发复用已更新消息，不重复插入用户消息
+- 前端 templates/admin_ai.html：
+  - 流式渲染：fetch + ReadableStream + 逐块 Markdown 渲染 + 光标动画；meta/delta/end 事件契约
+  - 中止：流式中用户消息旁/气泡下方显示「⏹ 中止生成」，点击立即停 + 已生成部分自动保存 + 「已中止」标注
+  - 消息操作：用户气泡 ✏️编辑 / 🗑删除，AI 气泡 🗑删除；删除后统计同步
+  - 编辑重发：内联 textarea → 保存并重发 → 重载会话（渲染编辑后文本）→ 复用消息 id 重新流式
+  - 修复流式完成后「中止生成」按钮残留；中止后延迟 800ms 刷新列表+重载（等后端落库，统计准确）
+- 测试：mock 流式服务（5599 端口）验证——流式逐块输出、中止后部分内容入库（330 字符）+标注+可删除、
+  编辑重发消息数不重复、删除气泡统计刷新、完成后无按钮残留；测试数据/服务商已清理（交付库 ai_providers=0）

@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from flask import Blueprint, current_app, g, jsonify, render_template, request, session
+from flask import Blueprint, Response, current_app, g, jsonify, render_template, request, session
 
 ai_bp = Blueprint('ai_admin', __name__, url_prefix='/admin/ai')
 
@@ -42,8 +42,13 @@ def _init_tables(db):
         conv_id INTEGER NOT NULL,
         role TEXT,
         content TEXT,
-        created_at TEXT
+        created_at TEXT,
+        aborted INTEGER DEFAULT 0
     )''')
+    # 幂等迁移：中止标记列（旧库补列）
+    cols = [r[1] for r in db.execute('PRAGMA table_info(ai_messages)').fetchall()]
+    if 'aborted' not in cols:
+        db.execute('ALTER TABLE ai_messages ADD COLUMN aborted INTEGER DEFAULT 0')
     db.commit()
 
 
@@ -194,7 +199,7 @@ def conv_messages(cid):
     conv = db.execute('SELECT * FROM ai_conversations WHERE id=?', (cid,)).fetchone()
     if not conv:
         return jsonify({'ok': False, 'msg': '会话不存在'}), 404
-    rows = db.execute('SELECT id, role, content, created_at FROM ai_messages WHERE conv_id=? ORDER BY id', (cid,)).fetchall()
+    rows = db.execute('SELECT id, role, content, created_at, aborted FROM ai_messages WHERE conv_id=? ORDER BY id', (cid,)).fetchall()
     return jsonify({'ok': True, 'conversation': dict(conv), 'messages': [dict(r) for r in rows]})
 
 
@@ -357,7 +362,7 @@ _SYSTEM_PROMPT = (
 
 
 # ============================================================
-# 问答 / 数据分析
+# 问答 / 数据分析（流式：支持前端中止）
 # ============================================================
 @ai_bp.route('/api/chat', methods=['POST'])
 def chat():
@@ -383,7 +388,7 @@ def chat():
     if not model:
         return jsonify({'ok': False, 'msg': '请选择模型（可先点击“检测”拉取模型列表）'})
 
-    # 会话归属：指定会话必须存在；未指定则自动新建
+    # 会话归属：指定会话必须存在；未指定则自动新建（在请求上下文内完成，保证中断也不丢用户消息）
     if cid:
         conv = db.execute('SELECT * FROM ai_conversations WHERE id=?', (cid,)).fetchone()
         if not conv:
@@ -395,39 +400,140 @@ def chat():
         cid = cur.lastrowid
         db.commit()
 
+    # 编辑重发：复用已更新的用户消息（不重复插入）；否则插入新用户消息
+    reuse_msg_id = d.get('user_msg_id')
+    if reuse_msg_id:
+        um = db.execute('SELECT * FROM ai_messages WHERE id=? AND conv_id=?', (reuse_msg_id, cid)).fetchone()
+        if not um or um['role'] != 'user':
+            return jsonify({'ok': False, 'msg': '待重发消息不存在'})
+        user_msg_id = um['id']
+    else:
+        now = _now_str()
+        cur = db.execute('INSERT INTO ai_messages (conv_id, role, content, created_at) VALUES (?,?,?,?)',
+                         (cid, 'user', question, now))
+        user_msg_id = cur.lastrowid
+        _refresh_conv_stats(db, cid)
+        db.commit()
+
+    # —— 以下闭包变量全部在请求上下文内准备；generator 运行时上下文已弹出，只能读闭包 ——
+    db_path = current_app.config['DATABASE']
     context = _collect_db_context(question)
     overdue = _overdue_report()
     extra = '\n\n%s' % overdue if overdue else ''
-    messages = [
+    req_messages = [
         {'role': 'system', 'content': _SYSTEM_PROMPT},
         {'role': 'user', 'content': '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s%s\n\n请回答/分析：%s' % (context, extra, question)},
     ]
-    answer = _chat_request(prov['api_url'], prov['api_key'], model, messages)
+    api_url, api_key = prov['api_url'], prov['api_key']
+
+    def gen():
+        collected = ''
+        done = False
+        assistant_id = None
+        try:
+            yield 'event: meta\ndata: %s\n\n' % json.dumps({'conv_id': cid, 'user_msg_id': user_msg_id})
+            for chunk in _stream_chat(api_url, api_key, model, req_messages):
+                collected += chunk
+                yield 'data: %s\n\n' % json.dumps({'delta': chunk})
+            done = True
+        except GeneratorExit:
+            # 客户端断开（点击中止）：保留已生成部分
+            pass
+        except Exception:
+            pass
+        finally:
+            try:
+                assistant_id = _save_ai_message(db_path, cid, collected, pid, model, question,
+                                                aborted=not done)
+            except Exception:
+                pass
+        yield 'event: end\ndata: %s\n\n' % json.dumps({'ok': done, 'answer': collected, 'msg_id': assistant_id})
+
+    return Response(gen(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+def _last_user_msg_id(cid):
+    """返回会话中最近一条用户消息 id（供前端绑定编辑/删除）"""
+    db = _db()
+    row = db.execute('SELECT id FROM ai_messages WHERE conv_id=? AND role=? ORDER BY id DESC LIMIT 1',
+                     (cid, 'user')).fetchone()
+    return row['id'] if row else None
+
+
+def _refresh_conv_stats(db, cid):
+    """重算会话标题 / 消息数 / 上下文字符数（删除、编辑后保持列表准确）"""
+    now = _now_str()
+    title_row = db.execute('SELECT content FROM ai_messages WHERE conv_id=? AND role=? ORDER BY id LIMIT 1',
+                           (cid, 'user')).fetchone()
+    new_title = '新会话'
+    if title_row:
+        t = (title_row['content'] or '').strip().replace('\n', ' ')
+        new_title = t[:24] if t else '新会话'
+    cc = db.execute('SELECT COALESCE(SUM(LENGTH(content)),0) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
+    mc = db.execute('SELECT COUNT(*) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
+    db.execute('UPDATE ai_conversations SET title=?, updated_at=?, msg_count=?, char_count=? WHERE id=?',
+               (new_title, now, mc, cc, cid))
+
+
+def _save_ai_message(db_path, cid, content, pid, model, question, aborted=False):
+    """保存 AI 回复（正常完成=完整内容；中止=已生成部分），返回消息 id。
+    独立直连数据库（流式 generator 阶段请求上下文已弹出，不能依赖 flask g）"""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     try:
-        now = _now_str()
-        # 写入会话消息
-        db.execute('INSERT INTO ai_messages (conv_id, role, content, created_at) VALUES (?,?,?,?)',
-                   (cid, 'user', question, now))
-        db.execute('INSERT INTO ai_messages (conv_id, role, content, created_at) VALUES (?,?,?,?)',
-                   (cid, 'assistant', answer, now))
-        # 更新会话：标题（取首个用户问题前 24 字）、消息数、上下文占用（字符数）
-        title_row = db.execute('SELECT content FROM ai_messages WHERE conv_id=? AND role=? ORDER BY id LIMIT 1',
-                               (cid, 'user')).fetchone()
-        new_title = '新会话'
-        if title_row:
-            t = (title_row['content'] or '').strip().replace('\n', ' ')
-            new_title = t[:24] if t else '新会话'
-        cc = db.execute('SELECT COALESCE(SUM(LENGTH(content)),0) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
-        mc = db.execute('SELECT COUNT(*) AS c FROM ai_messages WHERE conv_id=?', (cid,)).fetchone()['c']
-        db.execute('UPDATE ai_conversations SET title=?, updated_at=?, msg_count=?, char_count=? WHERE id=?',
-                   (new_title, now, mc, cc, cid))
-        # 兼容保留 ai_chat_logs
-        db.execute('INSERT INTO ai_chat_logs (provider_id, model, question, answer) VALUES (?,?,?,?)',
-                   (pid, model, question, answer))
-        db.commit()
-    except Exception:
-        pass
-    return jsonify({'ok': True, 'answer': answer, 'conv_id': cid})
+        if not content or not content.strip():
+            content = '【已中止】未生成内容' if aborted else '（空回复）'
+        cur = conn.execute('INSERT INTO ai_messages (conv_id, role, content, created_at, aborted) VALUES (?,?,?,?,?)',
+                           (cid, 'assistant', content, _now_str(), 1 if aborted else 0))
+        _refresh_conv_stats(conn, cid)
+        try:
+            conn.execute('INSERT INTO ai_chat_logs (provider_id, model, question, answer) VALUES (?,?,?,?)',
+                         (pid, model, question, content))
+        except Exception:
+            pass
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 消息管理：删除气泡 / 编辑并重发（防上下文污染）
+# ============================================================
+@ai_bp.route('/api/messages/<int:mid>/delete', methods=['POST'])
+def delete_message(mid):
+    if not _require_platform():
+        return _deny()
+    db = _db()
+    row = db.execute('SELECT conv_id FROM ai_messages WHERE id=?', (mid,)).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'msg': '消息不存在'})
+    db.execute('DELETE FROM ai_messages WHERE id=?', (mid,))
+    _refresh_conv_stats(db, row['conv_id'])
+    db.commit()
+    return jsonify({'ok': True, 'conv_id': row['conv_id']})
+
+
+@ai_bp.route('/api/messages/<int:mid>/edit', methods=['POST'])
+def edit_message(mid):
+    if not _require_platform():
+        return _deny()
+    d = request.get_json(silent=True) or {}
+    content = (d.get('content') or '').strip()
+    if not content:
+        return jsonify({'ok': False, 'msg': '内容不能为空'})
+    db = _db()
+    row = db.execute('SELECT conv_id FROM ai_messages WHERE id=?', (mid,)).fetchone()
+    if not row:
+        return jsonify({'ok': False, 'msg': '消息不存在'})
+    db.execute('UPDATE ai_messages SET content=? WHERE id=?', (content, mid))
+    if d.get('reask'):
+        # 编辑并重发：删除本条之后的全部旧回复，避免上下文污染
+        db.execute('DELETE FROM ai_messages WHERE conv_id=? AND id>?', (row['conv_id'], mid))
+    _refresh_conv_stats(db, row['conv_id'])
+    db.commit()
+    return jsonify({'ok': True, 'conv_id': row['conv_id']})
 
 
 def _chat_request(api_url, api_key, model, messages, timeout=120):
@@ -453,3 +559,46 @@ def _chat_request(api_url, api_key, model, messages, timeout=120):
         return '【调用失败】HTTP %d：%s' % (e.code, e.read().decode('utf-8', errors='replace')[:400])
     except Exception as e:
         return '【调用失败】%s' % e
+
+
+def _stream_chat(api_url, api_key, model, messages, timeout=180):
+    """流式调用 OpenAI 兼容接口（stream=True），逐块 yield 增量内容。
+    - 正常：每块内容逐段返回
+    - HTTP 错误：yield 一条【调用失败】文本
+    - 连接中断（前端中止 / 网络断开）：向上抛异常，由调用方保存已生成部分
+    """
+    url = api_url.rstrip('/') + '/chat/completions'
+    body = json.dumps({
+        'model': model,
+        'messages': messages,
+        'temperature': 0.2,
+        'stream': True,
+    }).encode('utf-8')
+    headers = {'Content-Type': 'application/json'}
+    if api_key:
+        headers['Authorization'] = 'Bearer ' + api_key
+    req = urllib.request.Request(url, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw in resp:
+                line = raw.decode('utf-8', errors='replace').strip()
+                if not line or not line.startswith('data:'):
+                    continue
+                payload = line[len('data:'):].strip()
+                if not payload or payload == '[DONE]':
+                    continue
+                try:
+                    obj = json.loads(payload)
+                    choices = obj.get('choices') or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get('delta') or {}
+                    content = delta.get('content')
+                    if content:
+                        yield content
+                except Exception:
+                    continue
+    except urllib.error.HTTPError as e:
+        yield '【调用失败】HTTP %d：%s' % (e.code, e.read().decode('utf-8', errors='replace')[:400])
+    except Exception:
+        raise
