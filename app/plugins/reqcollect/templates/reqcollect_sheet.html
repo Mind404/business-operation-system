@@ -26,6 +26,11 @@
     /* sheet 标签/统计栏移到顶部后的布局补偿 */
     #luckysheet .luckysheet-sheet-bar { z-index: 20; }
     #luckysheet .luckysheet-statistic-bar { z-index: 20; }
+    /* 隐藏顶栏冗余元素：花朵+Luckysheet 品牌 logo 与左侧撤销"<"按钮 */
+    #luckysheet .luckysheet-share-logo,
+    #luckysheet .luckysheet-icon-undo {
+        display: none !important;
+    }
 </style>
 
 <div class="book-wrap">

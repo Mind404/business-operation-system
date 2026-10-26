@@ -523,3 +523,8 @@ git commit -m "vX.Y.Z: 一句话概述本次功能"
 - 回归测试：登录/工作台/WBS/需求收集/插件管理/AI对话/用户管理/操作日志/全局搜索全部 200；
   启动日志 [插件表校验] 全部插件表与登记一致（零告警）；启动后表数稳定 15 张
 - 删除前已备份：backups/business_db_57tables_20261026_*.db + 启动自动备份（保留最近 7 份）
+
+# v12.4.9 需求收集子表顶栏精简（2026-10-26）
+
+- 隐藏 Luckysheet 顶栏冗余元素：花朵+Luckysheet 品牌 logo（.luckysheet-share-logo）与
+  左侧撤销"<"按钮（.luckysheet-icon-undo），保留表格标题与保存状态提示，界面更清爽
