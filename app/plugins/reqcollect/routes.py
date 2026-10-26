@@ -85,7 +85,7 @@ def _default_book(name, description):
 # ============================================================
 # 列表页
 # ============================================================
-@bp.route('/reqcollect')
+@bp.route('/reqcollect', strict_slashes=False)
 def index():
     _init_tables()
     db = get_db()

@@ -22,7 +22,7 @@ def close_db(exception):
         db.close()
 
 # ============================================================
-@blueprint.route('/wbs')
+@blueprint.route('/wbs', strict_slashes=False)
 def wbs_projects():
     from datetime import date, timedelta
     db = get_db()

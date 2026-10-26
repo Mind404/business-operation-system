@@ -137,17 +137,38 @@ def detect():
 
 
 # ============================================================
-# 数据库上下文采集（含插件表）：只读、白名单表名、限量
+# 数据库上下文采集（含插件表）：只读、白名单表名、按问题相关性、仅注入有数据表
 # ============================================================
 _SAFE_TABLE = re.compile(r'^[A-Za-z0-9_]+$')
 _EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers')
 
 
-def _collect_db_context(max_chars=14000):
+def _table_words(question):
+    """从问题中提取关键词（中英文单词/短语片段），用于表相关性匹配"""
+    words = set()
+    # 英文单词/数字
+    for w in re.findall(r'[a-zA-Z][a-zA-Z0-9_]{1,}', question.lower()):
+        words.add(w)
+    # 中文 2-4 字片段（去常见虚词）
+    cn = re.findall(r'[\u4e00-\u9fa5]{2,6}', question)
+    stop = {'什么', '多少', '如何', '怎么', '为什么', '是否', '统计', '分析', '汇总', '查看', '查询',
+            '目前', '当前', '情况', '状态', '数量', '进度', '完成', '计划', '项目', '任务', '数据',
+            '有没有', '需要', '一下', '可以', '帮我', '以及', '还有', '全部', '各个'}
+    for w in cn:
+        for i in range(len(w)):
+            for j in range(i + 2, min(i + 5, len(w) + 1)):
+                frag = w[i:j]
+                if frag not in stop:
+                    words.add(frag)
+    return words
+
+
+def _collect_db_context(question, max_chars=8000):
+    """只注入【有数据】的表；按问题关键词做相关性排序（相关表优先完整注入），
+    空表与无关表直接跳过 —— 让小模型聚焦真实业务数据，避免被无关空表干扰发散。"""
     db = _db()
     rows = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
-    parts = []
-    used = 0
+    tables = []
     for r in rows:
         t = r['name']
         if t in _EXCLUDE_TABLES or not _SAFE_TABLE.match(t):
@@ -155,25 +176,52 @@ def _collect_db_context(max_chars=14000):
         try:
             cols = [c[1] for c in db.execute('PRAGMA table_info(%s)' % t).fetchall()]
             cnt = db.execute('SELECT COUNT(*) AS c FROM %s' % t).fetchone()['c']
-            sample_rows = db.execute('SELECT * FROM %s LIMIT 3' % t).fetchall()
+            tables.append((t, cnt, cols))
+        except Exception:
+            pass
+    # 只保留有数据的表
+    active = [x for x in tables if x[1] > 0]
+    if not active:
+        return '（当前数据库中暂无任何业务数据）'
+
+    words = _table_words(question)
+    scored = []
+    for t, cnt, cols in active:
+        hay = (t + ' ' + ' '.join(cols)).lower()
+        score = sum(1 for w in words if w in hay)
+        scored.append((t, cnt, cols, score))
+    # 相关表在前（score 降序），其余有数据表在后
+    scored.sort(key=lambda x: -x[3])
+
+    parts = []
+    used = 0
+    total_active = len(active)
+    related = sum(1 for x in scored if x[3] > 0)
+    for idx, (t, cnt, cols, score) in enumerate(scored):
+        try:
+            sample_rows = db.execute('SELECT * FROM %s LIMIT 2' % t).fetchall()
             sample = [dict(x) for x in sample_rows]
-            part = '【表 %s】（%d 行）列: %s\n样例数据: %s' % (
-                t, cnt, ', '.join(cols), json.dumps(sample, ensure_ascii=False, default=str)[:1400])
+            tag = '相关' if score > 0 else ''
+            part = '【表 %s·%s】（%d 行）列: %s\n样例数据: %s' % (
+                t, tag, cnt, ', '.join(cols), json.dumps(sample, ensure_ascii=False, default=str)[:900])
         except Exception as e:
             part = '【表 %s】读取失败: %s' % (t, e)
         if used + len(part) > max_chars:
             break
         parts.append(part)
         used += len(part)
-    return '\n\n'.join(parts) if parts else '（未读取到业务数据表）'
+    head = '数据库概要：共 %d 张业务表，其中 %d 张有数据（%d 张与你的问题相关）。只列出有数据的表，空表未读取。' % (
+        len(tables), total_active, related)
+    return head + '\n\n' + '\n\n'.join(parts) if parts else head
 
 
 _SYSTEM_PROMPT = (
     '你是一名企业业务系统“业务高效运转系统”的数据分析助手。系统包含单点登录、统一权限、'
     'WBS计划管理、需求收集管理（在线云表格）等插件，数据保存在 SQLite 数据库中。\n'
-    '用户会提供数据库各表的表结构、行数与样例数据。请基于这些真实数据回答用户的问题；'
-    '可以进行汇总统计、趋势分析、问题归因等分析。数据不足或无法确定时，请明确说明，不要编造数字。\n'
-    '回答用中文，简洁、条理清晰，需要时可使用小标题或列表。'
+    '用户会提供数据库【有数据】的各表结构、行数与样例数据（空表不提供，不代表不存在）。\n'
+    '请只基于这些真实数据回答用户的问题，做汇总统计、趋势分析、问题归因等；'
+    '若相关数据为空或不足，直接说明“当前没有相关数据/无法判断”，不要编造数字，不要推测空表中可能有什么。\n'
+    '回答用中文，先给结论再给依据，条理清晰，可使用小标题、列表、加粗等 Markdown 格式。'
 )
 
 
@@ -203,10 +251,10 @@ def chat():
     if not model:
         return jsonify({'ok': False, 'msg': '请选择模型（可先点击“检测”拉取模型列表）'})
 
-    context = _collect_db_context()
+    context = _collect_db_context(question)
     messages = [
         {'role': 'system', 'content': _SYSTEM_PROMPT},
-        {'role': 'user', 'content': '以下是数据库当前结构与样例数据：\n%s\n\n请回答/分析：%s' % (context, question)},
+        {'role': 'user', 'content': '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s\n\n请回答/分析：%s' % (context, question)},
     ]
     answer = _chat_request(prov['api_url'], prov['api_key'], model, messages)
     try:
