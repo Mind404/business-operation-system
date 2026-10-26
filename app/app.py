@@ -4,16 +4,93 @@
 适用于内网Windows部署，SQLite轻量数据库
 """
 import os
+import sys
+# 便携版兼容：确保脚本所在目录（app\）在模块搜索路径中。
+# embeddable Python 的 ._pth 机制不会自动加入脚本目录，否则 import excel_utils 等同目录模块会失败。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlite3
 import random
+import io
 from datetime import datetime, date, timedelta
-from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file
+import time
+from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, current_app
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 import excel_utils
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'business-system-2024'
+# v12.2.0 安全加固：SECRET_KEY 自动生成并持久化（首次启动生成 secret.key，后续读取）
+_SECRET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'secret.key')
+def _load_or_create_secret(path):
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                key = f.read().strip()
+            if key:
+                return key
+        key = os.urandom(32).hex()
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(key)
+        return key
+    except Exception as e:
+        print(f'[警告] secret.key 生成失败，使用内置密钥（{e}）')
+        return 'business-system-2024'
+app.config['SECRET_KEY'] = _load_or_create_secret(_SECRET_PATH)
 app.config['DATABASE'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'business.db')
+# v12.2.0 会话安全：登录会话 12 小时过期
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
+# ============================================================
+# v12.2.0 登录失败限流：同账号 5 次失败锁定 5 分钟（进程内计数，重启清零）
+# ============================================================
+_LOGIN_FAILS = {}
+_LOGIN_MAX_FAILS = 5
+_LOGIN_LOCK_SECONDS = 300
+
+
+def _check_login_locked(username):
+    """返回剩余锁定秒数；未锁定返回 None"""
+    rec = _LOGIN_FAILS.get(username)
+    if not rec:
+        return None
+    if rec['locked_until'] and time.time() < rec['locked_until']:
+        return int(rec['locked_until'] - time.time()) + 1
+    return None
+
+
+def _record_login_fail(username):
+    rec = _LOGIN_FAILS.setdefault(username, {'fails': 0, 'locked_until': 0})
+    rec['fails'] += 1
+    if rec['fails'] >= _LOGIN_MAX_FAILS:
+        rec['locked_until'] = time.time() + _LOGIN_LOCK_SECONDS
+        rec['fails'] = 0
+
+
+def _record_login_success(username):
+    _LOGIN_FAILS.pop(username, None)
+
+
+def _is_hashed(pwd):
+    """判断密码是否为哈希存储（werkzeug 生成的哈希以算法: 前缀开头）"""
+    return bool(pwd) and (pwd.startswith(('scrypt:', 'pbkdf2:', 'sha256$', 'md5$')) or '$' in pwd)
+
+
+def migrate_plain_passwords():
+    """v12.2.0 密码哈希化迁移：存量明文密码原地升级为哈希（幂等，可安全重复执行）"""
+    try:
+        conn = sqlite3.connect(app.config['DATABASE'], timeout=5.0)
+        rows = conn.execute('SELECT id, password FROM users').fetchall()
+        changed = 0
+        for uid, pwd in rows:
+            if pwd and not _is_hashed(pwd):
+                conn.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(pwd), uid))
+                changed += 1
+        conn.commit()
+        conn.close()
+        if changed:
+            print(f'[安全加固] 已升级 {changed} 个账号的明文密码为哈希存储')
+    except Exception as e:
+        print(f'[警告] 密码迁移失败（不影响启动）: {e}')
 
 # 自定义tojson过滤器（兼容旧版Werkzeug的ensure_ascii参数）
 import json
@@ -42,10 +119,10 @@ from plugins import load_plugins
 load_plugins(app)
 
 # 插件化基底：建表 + 注册插件 + 路由守卫
+# 注意：init_plugin_tables()（含增量迁移 v6 角色升级）必须在 init_db() 之后执行，
+# 否则全新库时迁移早于 schema.sql 建表/种子，admin 角色不会升级为 platform_admin。
 import plugin_system
 from plugin_system import log_operation
-with app.app_context():
-    plugin_system.init_plugin_tables()
 plugin_system.register_plugin_guard(app)
 
 # ============================================================
@@ -53,8 +130,9 @@ plugin_system.register_plugin_guard(app)
 # ============================================================
 @app.before_request
 def require_login():
-    """所有页面需要登录，除了登录页和静态资源"""
-    if request.endpoint in ('login', 'static'):
+    """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
+    ep = request.endpoint or ''
+    if ep in ('login', 'static') or ep.endswith('.static'):
         return None
     if 'user_id' not in session:
         return redirect(url_for('login', next=request.path))
@@ -86,17 +164,25 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         next_url = request.form.get('next', '/')
+        # v12.2.0 登录限流：锁定期间拒绝
+        lock_left = _check_login_locked(username)
+        if lock_left:
+            return render_template('login.html', error=f'账号已锁定（多次登录失败），请 {lock_left} 秒后再试', next=next_url)
         db = get_db()
-        user = db.execute('SELECT * FROM users WHERE username=? AND password=? AND is_active=1',
-                         (username, password)).fetchone()
-        if user:
+        user = db.execute('SELECT * FROM users WHERE username=? AND is_active=1',
+                         (username,)).fetchone()
+        # v12.2.0 密码哈希校验（兼容存量明文迁移后的哈希）
+        if user and (check_password_hash(user['password'], password) if _is_hashed(user['password']) else user['password'] == password):
+            session.permanent = True  # 12 小时后过期
             session['user_id'] = user['id']
             session['user_name'] = user['display_name'] or user['username']
             session['user_role'] = user['role']
             session['username'] = user['username']
+            _record_login_success(username)
             log_operation('系统', '登录', f'{user["username"]} 登录系统', user['username'])
             return redirect(next_url if next_url else '/')
         else:
+            _record_login_fail(username)
             error = '用户名或密码错误'
             return render_template('login.html', error=error, next=next_url)
     return render_template('login.html', next=request.args.get('next', '/'))
@@ -109,15 +195,32 @@ def logout():
     return redirect(url_for('login'))
 
 # ============================================================
-# v10.5.0 用户管理中心（仅管理员）
+# v12.1.0 三级权限：平台管理员 / 管理员 / 普通用户
 # ============================================================
+ROLE_PERMISSIONS = {
+    'platform_admin': {'name': '平台管理员', 'desc': '系统管理（用户管理/插件管理/日志）+ 全部业务'},
+    'admin':          {'name': '管理员',     'desc': '业务管理（插件内管理操作/审批）'},
+    'user':           {'name': '普通用户',   'desc': '业务查看与提交（按插件规范）'},
+}
+
+
+def is_platform_admin():
+    """仅平台管理员：系统级管理（用户管理/插件管理/日志）"""
+    return session.get('user_role') == 'platform_admin'
+
+
+def is_admin():
+    """管理组：平台管理员 + 管理员（业务插件的管理操作）"""
+    return session.get('user_role') in ('platform_admin', 'admin')
+
+
 def _require_admin():
-    """管理员校验：非管理员返回 False"""
-    return session.get('user_role') == 'admin'
+    """系统管理校验：仅平台管理员可访问"""
+    return is_platform_admin()
 
 @app.route('/admin/users')
 def admin_users():
-    """用户管理：用户列表（仅管理员）"""
+    """用户管理：用户列表（仅平台管理员）"""
     if not _require_admin():
         flash('无权限访问用户管理', 'error')
         return redirect(url_for('index'))
@@ -127,7 +230,7 @@ def admin_users():
 
 @app.route('/admin/users/create', methods=['POST'])
 def admin_user_create():
-    """创建用户（仅管理员）"""
+    """创建用户（仅平台管理员）"""
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
@@ -142,7 +245,7 @@ def admin_user_create():
     if len(password) < 4:
         flash('密码至少4位', 'error')
         return redirect(url_for('admin_users'))
-    if role not in ('admin', 'user'):
+    if role not in ('platform_admin', 'admin', 'user'):
         role = 'user'
     db = get_db()
     exists = db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
@@ -151,16 +254,114 @@ def admin_user_create():
         return redirect(url_for('admin_users'))
     db.execute('INSERT INTO users (username, password, display_name, role, is_active, created_at, department) '
                'VALUES (?,?,?,?,1,?,?)',
-               (username, password, display_name, role,
+               (username, generate_password_hash(password), display_name, role,
                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'), department))
     db.commit()
     log_operation('用户管理', '创建用户', f'创建账号 {username}（{display_name}，角色：{role}）', session.get('username'))
     flash(f'用户 {display_name} 创建成功', 'success')
     return redirect(url_for('admin_users'))
 
+# ============================================================
+# v12.2.1 用户 Excel 批量导入 + 模板下载（仅平台管理员）
+# ============================================================
+@app.route('/admin/users/template')
+def admin_users_template():
+    """下载用户导入 Excel 模板（带表头与示例）"""
+    if not _require_admin():
+        return redirect(url_for('index'))
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '用户导入'
+        ws.append(['登录名', '初始密码', '显示名称', '角色', '部门'])
+        for c in ws[1]:
+            c.font = Font(bold=True, color='FFFFFF')
+            c.fill = PatternFill('solid', fgColor='2563EB')
+            c.alignment = Alignment(horizontal='center')
+        ws.append(['zhangsan', '123456', '张三', '普通用户', '计划管理部'])
+        ws.append(['', '', '', '', ''])
+        ws.append(['说明：登录名必填且唯一；初始密码至少4位；角色填写 普通用户/管理员/平台管理员；显示名留空默认用登录名；部门选填。导入从第2行开始逐行读取，遇到空登录名即停止。', '', '', '', ''])
+        ws['A4'].font = Font(color='9CA3AF', size=9)
+        for col, w in zip('ABCDE', [18, 12, 14, 14, 16]):
+            ws.column_dimensions[col].width = w
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return send_file(buf, as_attachment=True, download_name='用户导入模板.xlsx',
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    except Exception as e:
+        flash(f'模板生成失败：{e}', 'error')
+        return redirect(url_for('admin_users'))
+
+
+@app.route('/admin/users/import', methods=['POST'])
+def admin_users_import():
+    """Excel 批量导入用户（仅平台管理员）：逐行校验，返回成功/失败明细"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    f = request.files.get('excel_file')
+    if not f or not f.filename:
+        flash('请选择 Excel 文件', 'error')
+        return redirect(url_for('admin_users'))
+    if not f.filename.lower().endswith(('.xlsx', '.xls')):
+        flash('仅支持 .xlsx / .xls 格式', 'error')
+        return redirect(url_for('admin_users'))
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(f, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+    except Exception as e:
+        flash(f'Excel 解析失败：{e}', 'error')
+        return redirect(url_for('admin_users'))
+    role_map = {'普通用户': 'user', '管理员': 'admin', '平台管理员': 'platform_admin',
+                'user': 'user', 'admin': 'admin', 'platform_admin': 'platform_admin'}
+    db = get_db()
+    ok, fail = 0, []
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for idx, row in enumerate(rows, start=2):
+        if row is None or not any(c is not None and str(c).strip() for c in row):
+            continue
+        username = str(row[0]).strip() if row[0] is not None else ''
+        if not username:
+            fail.append((idx, '登录名为空，停止读取后续行'))
+            break
+        password = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ''
+        display_name = str(row[2]).strip() if len(row) > 2 and row[2] is not None else username
+        role_raw = str(row[3]).strip() if len(row) > 3 and row[3] is not None else '普通用户'
+        department = str(row[4]).strip() if len(row) > 4 and row[4] is not None else ''
+        role = role_map.get(role_raw)
+        if not role:
+            fail.append((idx, f'角色「{role_raw}」不合法（应为 普通用户/管理员/平台管理员）'))
+            continue
+        if len(password) < 4:
+            fail.append((idx, '初始密码少于4位'))
+            continue
+        exists = db.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
+        if exists:
+            fail.append((idx, f'用户名 {username} 已存在'))
+            continue
+        db.execute('INSERT INTO users (username, password, display_name, role, is_active, created_at, department) '
+                   'VALUES (?,?,?,?,1,?,?)',
+                   (username, generate_password_hash(password), display_name, role, now, department))
+        ok += 1
+    db.commit()
+    log_operation('用户管理', '批量导入', f'Excel导入用户：成功{ok}条，失败{len(fail)}条', session.get('username'))
+    if fail:
+        detail = '；'.join(f'第{ln}行：{m}' for ln, m in fail[:10])
+        if len(fail) > 10:
+            detail += f'…（共{len(fail)}条失败）'
+        flash(f'导入完成：成功 {ok} 条，失败 {len(fail)} 条。{detail}', 'error')
+    else:
+        flash(f'导入完成：成功 {ok} 条', 'success')
+    return redirect(url_for('admin_users'))
+
 @app.route('/admin/users/<int:uid>/update', methods=['POST'])
 def admin_user_update(uid):
-    """编辑用户：显示名/角色/部门/启用状态（仅管理员）"""
+    """编辑用户：显示名/角色/部门/启用状态（仅平台管理员）"""
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
@@ -173,13 +374,13 @@ def admin_user_update(uid):
     role = request.form.get('role', user['role'])
     department = request.form.get('department', '').strip()
     is_active = 1 if request.form.get('is_active') == '1' else 0
-    if role not in ('admin', 'user'):
+    if role not in ('platform_admin', 'admin', 'user'):
         role = user['role']
-    # 不允许停用最后一个管理员
-    if user['role'] == 'admin' and is_active == 0:
-        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
+    # 不允许停用最后一个平台管理员
+    if user['role'] == 'platform_admin' and is_active == 0:
+        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
         if admins <= 1:
-            flash('不能停用最后一个管理员', 'error')
+            flash('不能停用最后一个平台管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET display_name=?, role=?, department=?, is_active=? WHERE id=?',
                (display_name, role, department, is_active, uid))
@@ -190,7 +391,7 @@ def admin_user_update(uid):
 
 @app.route('/admin/users/<int:uid>/toggle', methods=['POST'])
 def admin_user_toggle(uid):
-    """启用/停用用户（仅管理员）"""
+    """启用/停用用户（仅平台管理员）"""
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
@@ -200,10 +401,10 @@ def admin_user_toggle(uid):
         flash('用户不存在', 'error')
         return redirect(url_for('admin_users'))
     new_state = 0 if user['is_active'] else 1
-    if user['role'] == 'admin' and new_state == 0:
-        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_active=1").fetchone()['c']
+    if user['role'] == 'platform_admin' and new_state == 0:
+        admins = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='platform_admin' AND is_active=1").fetchone()['c']
         if admins <= 1:
-            flash('不能停用最后一个管理员', 'error')
+            flash('不能停用最后一个平台管理员', 'error')
             return redirect(url_for('admin_users'))
     db.execute('UPDATE users SET is_active=? WHERE id=?', (new_state, uid))
     db.commit()
@@ -213,7 +414,7 @@ def admin_user_toggle(uid):
 
 @app.route('/admin/users/<int:uid>/reset_pwd', methods=['POST'])
 def admin_user_reset_pwd(uid):
-    """管理员重置用户密码（仅管理员）"""
+    """重置用户密码（仅平台管理员）"""
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
@@ -226,11 +427,126 @@ def admin_user_reset_pwd(uid):
     if not user:
         flash('用户不存在', 'error')
         return redirect(url_for('admin_users'))
-    db.execute('UPDATE users SET password=? WHERE id=?', (new_pwd, uid))
+    db.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(new_pwd), uid))
     db.commit()
     log_operation('用户管理', '重置密码', f'重置账号 {user["username"]} 的密码', session.get('username'))
     flash(f'账号 {user["username"]} 密码已重置', 'success')
     return redirect(url_for('admin_users'))
+
+# ============================================================
+# v12.1.0 插件管理（仅平台管理员）：列表/启停/上传安装/卸载
+# ============================================================
+@app.route('/admin/plugins')
+def admin_plugins():
+    if not _require_admin():
+        flash('无权限访问插件管理', 'error')
+        return redirect(url_for('index'))
+    plugins = plugin_system.get_plugins_admin()
+    # v12.1.2 待重启生效提示：上传安装的插件在重启系统前，蓝图未注册（Flask 限制），导航/入口暂不出现
+    registered = set(current_app.view_functions.keys())
+    pending = [p for p in plugins if p.get('install_type') == 'upload'
+               and p.get('endpoint') not in registered]
+    return render_template('admin_plugins.html', plugins=plugins,
+                           role_permissions=ROLE_PERMISSIONS, pending_restart=pending)
+
+@app.route('/admin/plugins/<plugin_id>/toggle', methods=['POST'])
+def admin_plugin_toggle(plugin_id):
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    enabled = request.form.get('enabled') == '1'
+    ok, msg = plugin_system.set_plugin_enabled(plugin_id, enabled)
+    flash(msg, 'success' if ok else 'error')
+    return redirect(url_for('admin_plugins'))
+
+@app.route('/admin/plugins/<plugin_id>/uninstall', methods=['POST'])
+def admin_plugin_uninstall(plugin_id):
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    ok, msg = plugin_system.uninstall_plugin(plugin_id)
+    flash(msg, 'success' if ok else 'error')
+    return redirect(url_for('admin_plugins'))
+
+@app.route('/admin/plugins/upload', methods=['POST'])
+def admin_plugin_upload():
+    """上传安装插件包（zip）：校验 manifest → 解压 plugins/<id> → 登记注册"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    f = request.files.get('plugin_zip')
+    if not f or not f.filename:
+        flash('请选择插件压缩包（zip）', 'error')
+        return redirect(url_for('admin_plugins'))
+    if not f.filename.lower().endswith('.zip'):
+        flash('仅支持 .zip 格式的插件包', 'error')
+        return redirect(url_for('admin_plugins'))
+    import zipfile, io
+    raw = f.read()
+    if len(raw) > 20 * 1024 * 1024:
+        flash('插件包过大（上限 20MB）', 'error')
+        return redirect(url_for('admin_plugins'))
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        flash('压缩包损坏，无法解析', 'error')
+        return redirect(url_for('admin_plugins'))
+    # 顶层目录推断
+    names = zf.namelist()
+    top = None
+    for n in names:
+        parts = [p for p in n.split('/') if p]
+        if parts:
+            top = parts[0]
+            break
+    if not top:
+        flash('压缩包为空', 'error')
+        return redirect(url_for('admin_plugins'))
+    # 防路径穿越
+    for n in names:
+        if n.startswith('/') or '..' in n.split('/'):
+            flash('压缩包包含非法路径', 'error')
+            return redirect(url_for('admin_plugins'))
+    import os, shutil
+    plugins_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plugins')
+    target = os.path.join(plugins_root, top)
+    if os.path.exists(target):
+        flash(f'插件目录 {top} 已存在，请先卸载或使用其他插件id', 'error')
+        return redirect(url_for('admin_plugins'))
+    os.makedirs(target, exist_ok=True)
+    for n in names:
+        if n.endswith('/'):
+            continue
+        dest = os.path.join(target, n[len(top) + 1:] if n.startswith(top + '/') else n)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with zf.open(n) as src, open(dest, 'wb') as dst:
+            dst.write(src.read())
+    # 校验 manifest 并即时注册
+    ok, msg = _load_uploaded_plugin(top, target)
+    if not ok:
+        shutil.rmtree(target, ignore_errors=True)
+        flash(f'插件校验失败，已回滚：{msg}', 'error')
+        return redirect(url_for('admin_plugins'))
+    flash(f'插件 {top} 安装成功（{msg}）。因 Flask 框架限制，上传的插件需重启系统后完全生效：先点「停止系统.bat」，再点「启动系统.bat」。', 'success')
+    return redirect(url_for('admin_plugins'))
+
+
+def _load_uploaded_plugin(plugin_id, target):
+    """加载上传的插件包：检查 manifest + blueprint，登记并即时注册。返回 (ok, msg)"""
+    import importlib, sys
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        mod = importlib.import_module(f'plugins.{plugin_id}')
+        if not hasattr(mod, 'manifest') or not hasattr(mod, 'blueprint'):
+            return False, '插件包缺少 manifest 或 blueprint（见《插件开发规范》）'
+        man = mod.manifest
+        if man.get('id') != plugin_id:
+            return False, f'manifest.id（{man.get("id")}）与目录名（{plugin_id}）不一致'
+        plugin_system.register_uploaded_plugin(plugin_id, man, mod.blueprint)
+        log_operation('插件管理', '安装', f'上传安装插件 {plugin_id}（{man.get("name", plugin_id)}）', session.get('username'))
+        return True, f'{man.get("name", plugin_id)} 已启用'
+    except Exception as e:
+        return False, f'加载失败：{e}'
 
 # ============================================================
 # 插件中心：浏览与订阅业务插件
@@ -289,7 +605,12 @@ def profile_change_password():
     old_pwd = request.form.get('old_password', '')
     new_pwd = request.form.get('new_password', '')
     confirm_pwd = request.form.get('confirm_password', '')
-    if old_pwd != user['password']:
+    # v12.2.0 密码哈希校验（兼容存量明文迁移后的哈希）
+    if not _is_hashed(user['password']):
+        if old_pwd != user['password']:
+            flash('原密码错误', 'error')
+            return redirect(url_for('profile'))
+    elif not check_password_hash(user['password'], old_pwd):
         flash('原密码错误', 'error')
         return redirect(url_for('profile'))
     if len(new_pwd) < 4:
@@ -301,7 +622,7 @@ def profile_change_password():
     if new_pwd == old_pwd:
         flash('新密码不能与原密码相同', 'error')
         return redirect(url_for('profile'))
-    db.execute('UPDATE users SET password=? WHERE id=?', (new_pwd, user_id))
+    db.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(new_pwd), user_id))
     db.commit()
     log_operation('个人中心', '修改密码', f'账号 {user["username"]} 修改了登录密码', user['username'])
     flash('密码修改成功，请牢记新密码', 'success')
@@ -481,9 +802,12 @@ def inject_permissions():
 # ============================================================
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(app.config['DATABASE'])
+        # v12.2.0 并发加固：WAL 模式（读写不互相阻塞）+ busy_timeout（写锁等待）+ 连接超时
+        g.db = sqlite3.connect(app.config['DATABASE'], timeout=5.0)
         g.db.row_factory = sqlite3.Row
         g.db.execute('PRAGMA foreign_keys = ON')
+        g.db.execute('PRAGMA journal_mode = WAL')
+        g.db.execute('PRAGMA busy_timeout = 5000')
     return g.db
 
 @app.teardown_appcontext
@@ -619,8 +943,25 @@ def get_config():
 @app.route('/logs')
 def logs():
     db = get_db()
-    logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 100').fetchall()
-    return render_template('logs.html', logs=logs)
+    # v12.2.0：按操作人/模块筛选
+    user_filter = request.args.get('user', '').strip()
+    mod_filter = request.args.get('mod', '').strip()
+    conds, params = [], []
+    if user_filter:
+        conds.append('operator = ?')
+        params.append(user_filter)
+    if mod_filter:
+        conds.append('module = ?')
+        params.append(mod_filter)
+    sql = 'SELECT * FROM operation_logs'
+    if conds:
+        sql += ' WHERE ' + ' AND '.join(conds)
+    sql += ' ORDER BY created_at DESC LIMIT 200'
+    logs = db.execute(sql, params).fetchall()
+    users = [r['operator'] for r in db.execute("SELECT DISTINCT operator FROM operation_logs WHERE operator IS NOT NULL AND operator != '' ORDER BY operator").fetchall()]
+    mods = [r['module'] for r in db.execute("SELECT DISTINCT module FROM operation_logs WHERE module IS NOT NULL AND module != '' ORDER BY module").fetchall()]
+    return render_template('logs.html', logs=logs, users=users, mods=mods,
+                           user_filter=user_filter, mod_filter=mod_filter)
 
 # ============================================================
 # API接口（供后续扩展）
@@ -653,8 +994,8 @@ def api_global_search():
                 'subtitle': '负责人：' + (p['owner'] or '') + ' · ' + (p['status'] or ''),
                 'url': '/wbs/' + str(p['id'])
             })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[全局搜索] WBS项目查询异常: {e}')
     # 搜索 WBS 任务
     try:
         tasks = db.execute('SELECT id, project_id, name, wbs_code, owner, status FROM wbs_tasks WHERE name LIKE ? OR wbs_code LIKE ? OR owner LIKE ? LIMIT 10', (like, like, like)).fetchall()
@@ -665,8 +1006,9 @@ def api_global_search():
                 'subtitle': '负责人：' + (t['owner'] or '') + ' · ' + (t['status'] or ''),
                 'url': '/wbs/' + str(t['project_id'])
             })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[全局搜索] WBS任务查询异常: {e}')
+    # v12.2.0：ensure_ascii=False，前端/调试直接可见中文
     return jsonify({'success': True, 'results': results[:20]})
 
 
@@ -675,8 +1017,47 @@ def api_global_search():
 # ============================================================
 
 if __name__ == '__main__':
+    # ============================================================
+    # v12.1.2 数据防护：启动时自动全库备份（保留最近 7 份）
+    # 覆盖场景：增加/卸载插件、误操作、升级异常等任何意外，均可回滚
+    # ============================================================
+    def auto_backup_db():
+        try:
+            import shutil
+            src = app.config['DATABASE']
+            if not os.path.exists(src):
+                return
+            # v12.2.0 WAL 模式：先 checkpoint 把 -wal 未落盘数据合并进主库，避免备份缺最新记录
+            try:
+                c = sqlite3.connect(src)
+                c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                c.close()
+            except Exception:
+                pass
+            bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+            os.makedirs(bdir, exist_ok=True)
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            dst = os.path.join(bdir, f'business_备份_{ts}.db')
+            shutil.copy2(src, dst)
+            # 只保留最近 7 份，自动清理更旧的
+            files = sorted([f for f in os.listdir(bdir) if f.startswith('business_备份_') and f.endswith('.db')])
+            for f in files[:-7]:
+                try:
+                    os.remove(os.path.join(bdir, f))
+                except Exception:
+                    pass
+            print(f'[数据防护] 已自动备份数据库 → backups/{os.path.basename(dst)}（保留最近7份）')
+        except Exception as e:
+            print(f'[数据防护] 备份失败（不影响启动）: {e}')
+
+    auto_backup_db()
     # 初始化数据库（CREATE TABLE IF NOT EXISTS，兼容旧数据库）
     init_db()
+    # v12.2.0 密码哈希化迁移：存量明文密码原地升级为哈希（幂等）
+    migrate_plain_passwords()
+    # 插件建表 + 增量迁移（必须在 init_db() 之后：全新库先有 users 表与种子，再执行 v6 角色升级等迁移）
+    with app.app_context():
+        plugin_system.init_plugin_tables()
     # 数据库迁移：为旧数据库添加缺失字段
     def migrate_db():
         db = sqlite3.connect(app.config['DATABASE'])
@@ -829,11 +1210,25 @@ if __name__ == '__main__':
     print(f'  调试模式: {"开启(Flask开发服务器)" if debug else "关闭(waitress生产服务器)"}')
     print('  端口配置: 命令行--port > 环境变量BUSINESS_PORT > config.py > 默认5000')
     print('='*60)
+    # v12.1.0 便携版：启动后自动打开浏览器（2 秒后，等待服务就绪）
+    try:
+        import threading, webbrowser
+
+        def _open_browser():
+            try:
+                webbrowser.open('http://127.0.0.1:%d' % port)
+            except Exception:
+                pass
+
+        threading.Timer(2.0, _open_browser).start()
+    except Exception:
+        pass
     if debug:
         app.run(host=host, port=port, debug=True)
     else:
         from waitress import serve
-        print(f'  waitress生产服务器启动中... 线程数: 8')
+        # v12.2.0 扩容：支持 50-80 人规模（线程16/连接上限100，单机内网足够）
+        print(f'  waitress生产服务器启动中... 线程数: 16')
         print('  按 Ctrl+C 停止服务')
         print('='*60)
-        serve(app, host=host, port=port, threads=8, connection_limit=32)
+        serve(app, host=host, port=port, threads=16, connection_limit=100)

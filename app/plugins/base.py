@@ -13,7 +13,7 @@ from flask import Blueprint
 
 
 def make_blueprint(plugin_id, import_name, template_folder='templates',
-                   static_folder='static', url_prefix=''):
+                   static_folder='static', url_prefix='', static_url_path=None):
     """创建插件 blueprint（统一工厂，保证命名规范一致）。
 
     Args:
@@ -22,11 +22,14 @@ def make_blueprint(plugin_id, import_name, template_folder='templates',
         template_folder: 插件自带模板目录（相对插件包）
         static_folder: 插件自带静态资源目录
         url_prefix: 路由前缀，默认空（保持现有 URL 不变）
+        static_url_path: 静态资源对外路径；无 url_prefix 时必须显式指定
+            （默认 /static 会与平台全局静态目录冲突），如 '/reqcollect/static'
     """
     return Blueprint(
         plugin_id,
         import_name,
         template_folder=template_folder,
         static_folder=static_folder,
+        static_url_path=static_url_path,
         url_prefix=url_prefix,
     )

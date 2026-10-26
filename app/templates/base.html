@@ -44,12 +44,15 @@
                 </div>
                 {% endif %}
 
-                {# v10.5.0 用户管理（仅管理员可见） #}
-                {% if current_role == 'admin' %}
+                {# v12.1.0 系统管理（仅平台管理员可见）：用户管理 + 插件管理 #}
+                {% if current_role == 'platform_admin' %}
                 <div class="nav-group">
                     <div class="nav-group-title">系统管理</div>
-                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin') %}active{% endif %}">
+                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
                         <span class="nav-icon">👥</span> 用户管理
+                    </a>
+                    <a href="{{ url_for('admin_plugins') }}" class="nav-item {% if request.path.startswith('/admin/plugins') %}active{% endif %}">
+                        <span class="nav-icon">🧩</span> 插件管理
                     </a>
                 </div>
                 {% endif %}

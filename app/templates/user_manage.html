@@ -27,6 +27,7 @@
             <select name="role" style="display:block;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
                 <option value="user">普通用户</option>
                 <option value="admin">管理员</option>
+                <option value="platform_admin">平台管理员</option>
             </select>
         </div>
         <div>
@@ -35,6 +36,21 @@
         </div>
         <button type="submit" style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;">创建用户</button>
     </form>
+</div>
+
+<!-- v12.2.1 Excel 批量导入 -->
+<div style="background:#fff;padding:20px;border-radius:10px;border:1px solid #e0e4ea;margin-bottom:16px;">
+    <h3 style="margin:0 0 8px;font-size:15px;color:#111827;">📥 Excel 批量导入用户</h3>
+    <p style="margin:0 0 12px;font-size:12px;color:#6b7280;">一次导入多个用户。支持 .xlsx / .xls；逐行校验，导入后提示成功与失败明细（含行号与原因）。</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <a href="{{ url_for('admin_users_template') }}"
+           style="padding:8px 16px;background:#f0fdf4;color:#15803d;border:1px solid #86efac;border-radius:6px;font-size:13px;text-decoration:none;cursor:pointer;">⬇ 下载导入模板</a>
+        <form method="post" action="{{ url_for('admin_users_import') }}" enctype="multipart/form-data" style="display:flex;gap:10px;align-items:center;">
+            <input type="file" name="excel_file" accept=".xlsx,.xls" required
+                   style="padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <button type="submit" style="padding:8px 18px;background:#059669;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;">开始导入</button>
+        </form>
+    </div>
 </div>
 
 <!-- 用户列表 -->
@@ -60,7 +76,8 @@
                 <td style="padding:8px 10px;font-weight:600;">{{ u.username }}</td>
                 <td style="padding:8px 10px;">{{ u.display_name }}</td>
                 <td style="padding:8px 10px;">
-                    {% if u.role == 'admin' %}<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:12px;">管理员</span>
+                    {% if u.role == 'platform_admin' %}<span style="background:#fce7f3;color:#9d174d;padding:2px 8px;border-radius:4px;font-size:12px;">平台管理员</span>
+                    {% elif u.role == 'admin' %}<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:12px;">管理员</span>
                     {% elif u.role == 'user' %}<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:4px;font-size:12px;">普通用户</span>
                     {% else %}<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:4px;font-size:12px;">{{ u.role }}</span>{% endif %}
                 </td>
@@ -91,6 +108,7 @@
                             <select name="role" style="display:block;padding:6px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;">
                                 <option value="user" {% if u.role == 'user' %}selected{% endif %}>普通用户</option>
                                 <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>管理员</option>
+                                <option value="platform_admin" {% if u.role == 'platform_admin' %}selected{% endif %}>平台管理员</option>
                             </select>
                         </div>
                         <div>

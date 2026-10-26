@@ -1,69 +1,47 @@
 @echo off
-title Business Management System
+chcp 65001 >nul
+title 业务高效运转系统
+set "CUR=%~dp0"
 
-echo ============================================================
-echo   AI-Driven Business Operation System - Quick Start
-echo ============================================================
-echo.
-
-cd /d "%~dp0"
-
-echo [1/4] Checking Python environment...
-python --version >nul 2>&1
-if errorlevel 1 (
+:: 检测是否在压缩包内直接运行（路径含 .zip\）
+set "INZIP=NO"
+if not "%CUR:.zip\=%"=="%CUR%" set "INZIP=YES"
+if "%INZIP%"=="YES" (
+    cls
+    echo ============================================================
+    echo    [重要] 你正在压缩包里面直接运行！
     echo.
-    echo [ERROR] Python not found!
-    echo Please install Python 3.8+ from: https://www.python.org/downloads/
-    echo Make sure to check "Add Python to PATH" during installation.
+    echo    这样会导致程序运行不稳定。请按以下步骤操作：
+    echo.
+    echo    1. 关闭本窗口
+    echo    2. 回到下载文件夹，找到这个 zip 压缩包
+    echo    3. 右键点击它，选择「全部解压」
+    echo    4. 打开解压后出现的【业务系统v12.2.2便携版】文件夹
+    echo    5. 双击里面的「启动系统.bat」
+    echo ============================================================
     echo.
     pause
     exit /b 1
 )
-for /f "tokens=2" %%i in ('python --version 2^>^&1') do echo       Python %%i OK
 
-echo.
-echo [2/4] Checking dependencies...
-python -c "import flask" >nul 2>&1
-if errorlevel 1 (
-    echo       Installing dependencies (first run, please wait)...
-    pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple >nul 2>&1
-    if errorlevel 1 (
-        echo       Tsinghua mirror failed, trying official source...
-        pip install -r requirements.txt >nul 2>&1
-    )
-    echo       Dependencies installed OK
-) else (
-    echo       Dependencies OK
-)
+cd /d "%CUR%app"
 
-echo.
-echo [3/4] Checking database...
-if not exist "business.db" (
-    echo       First run, initializing database...
-    python init_db.py >nul 2>&1
-    echo       Database initialized (with sample data) OK
-) else (
-    echo       Database exists OK
-)
-
-echo.
-echo [4/4] Starting system...
-echo.
 echo ============================================================
-echo   System started successfully!
-echo.
-echo   Local:   http://127.0.0.1:5000
-echo   Network: http://YOUR_IP:5000
-echo.
-echo   Browser will open automatically.
-echo   Close this window to stop the system.
+echo   业务高效运转系统
+echo   正在启动，浏览器将自动打开 http://127.0.0.1:5000
+echo   默认账号：admin / admin123
+echo   关闭本窗口即停止系统
 echo ============================================================
 echo.
 
-start "" cmd /c "timeout /t 2 /nobreak >nul && start http://127.0.0.1:5000"
+if not exist "%CUR%python\python.exe" (
+    echo [错误] 未找到 python 运行环境，请确认是完整解压（含 python 文件夹）。
+    pause
+    exit /b 1
+)
 
-python app.py --no-debug
+"%CUR%python\python.exe" app.py
 
 echo.
-echo System stopped.
+echo 系统已停止运行。
 pause

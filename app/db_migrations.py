@@ -52,7 +52,8 @@ def init_core_tables():
         db.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
     db.execute('''CREATE TABLE IF NOT EXISTS plugin_registry (
         id TEXT PRIMARY KEY, name TEXT, icon TEXT, grp TEXT, core INTEGER DEFAULT 0,
-        description TEXT, endpoint TEXT, tables TEXT)''')
+        description TEXT, endpoint TEXT, tables TEXT, enabled INTEGER DEFAULT 1,
+        install_type TEXT DEFAULT 'builtin')''')
     db.execute('''CREATE TABLE IF NOT EXISTS user_plugins (
         user_id INTEGER, plugin_id TEXT, subscribed_at TEXT,
         PRIMARY KEY (user_id, plugin_id))''')
@@ -122,6 +123,8 @@ MIGRATIONS = [
     (4, '两级审批字段+任务备注', None),
     # v5: 方案A数据库地基 —— plugin_registry 加 tables 列（表清单登记）+ 新建 approval_requests 统一审批表
     (5, 'v10.3.1: plugin_registry.tables + approval_requests 统一审批表', None),
+    # v6: v12.1.0 平台定位 —— plugin_registry 加 enabled 列（平台级启停）+ 三级角色（老库 admin → platform_admin）
+    (6, 'v12.1.0: plugin_registry.enabled + 三级角色', None),
 ]
 
 
@@ -177,6 +180,32 @@ def run_migrations():
                 review_comment TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
                 reviewed_at TEXT)''')
+        elif ver == 6:
+            # v12.1.0 三级角色：老库两级 'admin' 全部升级为 'platform_admin'
+            try:
+                db.execute("UPDATE users SET role='platform_admin' WHERE role='admin'")
+            except sqlite3.OperationalError:
+                pass
+            # users 补 department 列（用户管理创建/编辑引用，v10.5.0 缺失会导致建用户报错）
+            ucols = [r[1] for r in db.execute('PRAGMA table_info(users)').fetchall()]
+            if 'department' not in ucols:
+                try:
+                    db.execute('ALTER TABLE users ADD COLUMN department TEXT')
+                except sqlite3.OperationalError:
+                    pass
+            # plugin_registry 加 enabled 列（平台级启用/停用）
+            cols = [r[1] for r in db.execute('PRAGMA table_info(plugin_registry)').fetchall()]
+            if 'enabled' not in cols:
+                try:
+                    db.execute('ALTER TABLE plugin_registry ADD COLUMN enabled INTEGER DEFAULT 1')
+                except sqlite3.OperationalError:
+                    pass
+            # install_type：builtin=平台内置 / upload=管理页上传安装（仅 upload 可卸载）
+            if 'install_type' not in cols:
+                try:
+                    db.execute("ALTER TABLE plugin_registry ADD COLUMN install_type TEXT DEFAULT 'builtin'")
+                except sqlite3.OperationalError:
+                    pass
         _set_version(db, ver, note)
     db.commit()
 

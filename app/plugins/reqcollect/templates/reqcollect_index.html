@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}需求收集管理 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div style="max-width:1100px;margin:0 auto;padding:24px 20px 40px;">
+    <div style="margin-bottom:28px;">
+        <h1 style="margin:0 0 8px;font-size:24px;">📥 需求收集管理</h1>
+        <p style="color:#6b7280;font-size:14px;margin:0;line-height:1.6;">
+            类 Excel 云文档表格（多工作表、公式、样式、合并单元格），全员协作填写
+        </p>
+    </div>
+
+    {% if is_manager %}
+    <!-- 新建子表：大间距表单 -->
+    <div style="background:#fff;border:1px solid #e0e4ea;border-radius:12px;padding:28px 32px;margin-bottom:36px;">
+        <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:22px;">＋ 新建子表</div>
+        <form method="post" action="{{ url_for('reqcollect.book_add') }}" style="display:flex;flex-direction:column;gap:20px;">
+            <div>
+                <label style="font-size:13px;color:#374151;display:block;margin-bottom:8px;">子表名称（必填）</label>
+                <input name="name" required placeholder="如：2026年外部客户需求收集表"
+                       style="width:100%;padding:12px 14px;border:1px solid #d1d5db;border-radius:8px;font-size:15px;box-sizing:border-box;outline:none;">
+            </div>
+            <div>
+                <label style="font-size:13px;color:#374151;display:block;margin-bottom:8px;">说明（选填）</label>
+                <textarea name="description" rows="3" placeholder="这个表格收集什么信息？填写格式有什么约定？"
+                          style="width:100%;padding:12px 14px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;resize:vertical;outline:none;"></textarea>
+            </div>
+            <div>
+                <button type="submit" style="padding:11px 32px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">创建子表</button>
+            </div>
+        </form>
+    </div>
+    {% else %}
+    <div style="background:#f8fafc;border:1px dashed #d1d5db;border-radius:10px;padding:16px 20px;color:#6b7280;font-size:13px;margin-bottom:32px;">
+        子表的新建与删除需要管理员权限；你可以打开下方任意子表参与填写。
+    </div>
+    {% endif %}
+
+    <div style="font-size:15px;font-weight:600;color:#111827;margin-bottom:14px;">已有子表（{{ books|length }}）</div>
+
+    {% if not books %}
+    <div style="background:#fff;border:1px dashed #d1d5db;border-radius:12px;padding:48px 20px;text-align:center;color:#9ca3af;">
+        <div style="font-size:40px;margin-bottom:12px;">🗂️</div>
+        <div style="font-size:15px;">还没有子表</div>
+        <div style="font-size:13px;margin-top:6px;">{% if is_manager %}请在上方表单中创建第一个云文档表格{% else %}请联系管理员创建子表{% endif %}</div>
+    </div>
+    {% else %}
+    <div style="display:flex;flex-direction:column;gap:12px;">
+        {% for b in books %}
+        <div style="background:#fff;border:1px solid #e0e4ea;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:18px;">
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:15px;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📄 {{ b.name }}</div>
+                <div style="font-size:12px;color:#6b7280;margin-top:5px;line-height:1.5;">{{ b.description or '暂无说明' }}</div>
+                <div style="font-size:12px;color:#9ca3af;margin-top:6px;">
+                    👤 {{ b.created_by }} 创建
+                    {% if b.updated_at %} · 💾 {{ b.updated_by or '' }} {{ (b.updated_at or '')[:16] }}{% endif %}
+                </div>
+            </div>
+            <a href="{{ url_for('reqcollect.book_view', sid=b.id) }}" style="flex-shrink:0;padding:8px 22px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;text-decoration:none;">打开表格 →</a>
+            {% if is_manager %}
+            <button onclick="delBook({{ b.id }}, '{{ b.name }}')" title="删除子表" style="flex-shrink:0;background:none;border:none;color:#c0392b;cursor:pointer;font-size:16px;padding:6px;">🗑</button>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function delBook(id, name) {
+    if (!confirm(`确认删除子表「${name}」？其全部工作表与数据将一并删除，不可恢复！`)) return;
+    const f = document.createElement('form');
+    f.method = 'POST'; f.action = `/reqcollect/${id}/delete`;
+    document.body.appendChild(f); f.submit();
+}
+</script>
+{% endblock %}

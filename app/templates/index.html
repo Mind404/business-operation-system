@@ -63,7 +63,7 @@
                 <span class="qi-icon">👤</span>
                 <span class="qi-text">个人中心</span>
             </a>
-            {% if current_role == 'admin' %}
+            {% if current_role == 'platform_admin' %}
             <a href="{{ url_for('admin_users') }}" class="quick-item q-purple">
                 <span class="qi-icon">👥</span>
                 <span class="qi-text">用户管理</span>

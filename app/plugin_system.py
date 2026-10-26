@@ -51,9 +51,12 @@ _WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/logout')
 
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(current_app.config['DATABASE'])
+        # v12.2.0 并发加固：与平台主库一致的 WAL + busy_timeout
+        g.db = sqlite3.connect(current_app.config['DATABASE'], timeout=5.0)
         g.db.row_factory = sqlite3.Row
         g.db.execute('PRAGMA foreign_keys = ON')
+        g.db.execute('PRAGMA journal_mode = WAL')
+        g.db.execute('PRAGMA busy_timeout = 5000')
     return g.db
 
 
@@ -68,6 +71,7 @@ def init_plugin_tables():
     # 跑增量迁移
     run_migrations()
     # 注册插件清单（UPSERT：新库插入，旧库已有行刷新 desc/tables，保证表清单登记生效）
+    # 注意：不更新 enabled/install_type，避免覆盖平台管理员的手动启停状态
     for p in PLUGINS:
         db.execute('''INSERT INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint, tables) VALUES (?,?,?,?,?,?,?,?)
@@ -76,8 +80,22 @@ def init_plugin_tables():
                 description=excluded.description, endpoint=excluded.endpoint, tables=excluded.tables''',
             (p['id'], p['name'], p['icon'], p['group'], p['core'], p['desc'], p['endpoint'],
              json.dumps(p.get('tables', []), ensure_ascii=False)))
-    # v10.5.0：清理已下线插件的注册与订阅记录（业务数据表保留不动）
-    valid_ids = [p['id'] for p in PLUGINS]
+    # v12.1.0 目录自动发现：扫描 plugins/ 下带 manifest+blueprint 的插件，未登记则登记（放目录即注册）
+    for pid, man in _manifest_map().items():
+        if pid in [p['id'] for p in PLUGINS]:
+            continue
+        db.execute('''INSERT INTO plugin_registry
+            (id, name, icon, grp, core, description, endpoint, tables, enabled, install_type)
+            VALUES (?,?,?,?,?,?,?,?,1,'builtin')
+            ON CONFLICT(id) DO NOTHING''',
+            (man.get('id', pid), man.get('name', pid), man.get('icon', '🧩'),
+             man.get('group', '业务'), 1 if man.get('core') else 0,
+             man.get('description', ''), man.get('endpoint', ''),
+             json.dumps(man.get('tables', []), ensure_ascii=False)))
+    # v10.5.0：清理已下线的注册与订阅记录（静态表+目录中都不存在的插件，如已卸载/删除的插件包）
+    static_ids = [p['id'] for p in PLUGINS]
+    manifest_ids = list(_manifest_map().keys())
+    valid_ids = list(dict.fromkeys(static_ids + manifest_ids))
     placeholders = ','.join('?' * len(valid_ids))
     db.execute(f'DELETE FROM plugin_registry WHERE id NOT IN ({placeholders})', valid_ids)
     db.execute(f'DELETE FROM user_plugins WHERE plugin_id NOT IN ({placeholders})', valid_ids)
@@ -92,21 +110,89 @@ def get_user_plugin_ids(user_id):
 
 
 def inject_nav_context():
-    """注入模板导航：核心（个人中心/工作台）常驻 + WBS（所有登录用户可见，无需订阅）"""
+    """注入模板导航：核心常驻 + 业务插件（仅启用可见）+ 系统管理入口由 base.html 按角色渲染"""
     user_id = session.get('user_id')
     if not user_id:
         return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
     registered = set(current_app.view_functions.keys())
-    available = [p for p in PLUGINS if p['endpoint'] in registered]
+    enabled_ids = _enabled_ids()
+    available = [p for p in PLUGINS if p['endpoint'] in registered and p['id'] in enabled_ids]
     core_plugins = [p for p in available if p['core']]
-    # v10.5.0：WBS 为唯一业务插件，所有登录用户常驻可见（无需订阅）
-    biz_plugins = [p for p in available if not p['core'] and p['id'] == 'wbs']
+    # 业务插件：静态表（wbs）+ 目录自动发现的新插件（启用的）
+    biz_plugins = [p for p in available if not p['core']]
+    for pid, man in _manifest_map().items():
+        if pid not in enabled_ids or pid in [p['id'] for p in biz_plugins]:
+            continue
+        if man.get('core'):
+            continue
+        ep = man.get('endpoint', '')
+        if ep not in registered:
+            continue
+        biz_plugins.append({
+            'id': pid, 'name': man.get('name', pid), 'icon': man.get('icon', '🧩'),
+            'group': man.get('group', '业务'), 'core': 0, 'desc': man.get('description', ''),
+            'endpoint': ep, 'nav_path': man.get('url_prefix', man.get('nav_path', '/' + pid)),
+        })
     return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
             'nav_all_plugins': available, 'user_subscribed': set()}
 
 
+def _plugin_enabled(pid):
+    """读取插件启用状态（缺省视为启用）"""
+    try:
+        db = get_db()
+        row = db.execute('SELECT enabled FROM plugin_registry WHERE id=?', (pid,)).fetchone()
+        if row is None:
+            return True
+        return bool(row['enabled'])
+    except Exception:
+        return True
+
+
+_manifest_prefix_cache = {}
+
+
+def _manifest_prefix_plugin(path):
+    """按 manifest.url_prefix 兜底识别上传/发现的新插件路径归属"""
+    if not _manifest_prefix_cache:
+        for pid, man in _manifest_map().items():
+            up = man.get('url_prefix')
+            if not up:
+                continue
+            for pfx in (up if isinstance(up, (list, tuple)) else [up]):
+                _manifest_prefix_cache.setdefault(str(pfx), pid)
+    for pfx, pid in _manifest_prefix_cache.items():
+        if path == pfx or path.startswith(pfx + '/'):
+            return pid
+    return None
+
+
+# v12.2.0 平台层角色拦截：插件 manifest 声明 min_role 时按路径前缀映射角色等级
+_ROLE_LEVEL = {'platform_admin': 3, 'admin': 2, 'user': 1}
+_min_role_prefix_cache = {}
+
+
+def _min_role_for_path(path):
+    """返回命中路径前缀所声明的最低角色；未声明返回 None（不拦截）"""
+    if not _min_role_prefix_cache:
+        for pid, man in _manifest_map().items():
+            mr = man.get('min_role')
+            if not mr or mr not in _ROLE_LEVEL:
+                continue
+            up = man.get('url_prefix')
+            if not up:
+                continue
+            for pfx in (up if isinstance(up, (list, tuple)) else [up]):
+                _min_role_prefix_cache.setdefault(str(pfx), mr)
+    for pfx, mr in _min_role_prefix_cache.items():
+        if path == pfx or path.startswith(pfx + '/'):
+            return mr
+    return None
+
+
 def register_plugin_guard(app):
-    """路由守卫（v10.5.0）：WBS 为唯一业务插件，所有登录用户可用，不设订阅墙"""
+    """路由守卫（v12.1.0）：登录校验 + 平台级停用拦截；业务插件的操作权限由插件内部按角色校验
+    v12.2.0：新增 manifest.min_role 平台层角色拦截（可选，不声明则不拦截）"""
     @app.before_request
     def _guard():
         if request.path.startswith(_WHITELIST_PREFIX):
@@ -114,25 +200,41 @@ def register_plugin_guard(app):
         # 静态资源、核心路由等放行
         ep = request.endpoint
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
-                            'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search'):
+                            'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search') \
+                            or (ep or '').endswith('.static'):
             return None
         # 前缀守卫兜底——子路由（URL 直连）也按路径判归属
         for free in _GUARD_FREE_PATHS:
             if request.path == free or request.path.startswith(free + '/'):
                 return None
-        # 该 endpoint 属于某个业务插件？（仅 wbs）
+        # 该 endpoint 属于某个业务插件？
         pid = _BIZ_ENDPOINTS.get(ep)
         if not pid:
             pid = _plugin_id_for_path(request.path)
         if not pid:
+            pid = _manifest_prefix_plugin(request.path)
+        if not pid:
             return None
-        # 核心插件 endpoint 放行
-        if pid in ('profile', 'wbs'):
+        # 核心常驻插件放行（不可停用）
+        core_ids = {p['id'] for p in PLUGINS if p['core']}
+        if pid in core_ids:
             return None
-        # 其他业务插件（已删除）不应再出现：直接拒绝
+        # v12.1.0 平台级停用拦截
+        if not _plugin_enabled(pid):
+            flash(f'插件「{pid}」已被平台停用', 'error')
+            return redirect(url_for('index'))
+        # 登录校验
         user_id = session.get('user_id')
         if not user_id:
             return redirect(url_for('login'))
+        # v12.2.0 平台层角色拦截：插件 manifest 声明 min_role 时按角色等级校验
+        need_role = _min_role_for_path(request.path)
+        if need_role:
+            role = session.get('user_role', '')
+            if _ROLE_LEVEL.get(role, 0) < _ROLE_LEVEL.get(need_role, 1):
+                role_name = {'platform_admin': '平台管理员', 'admin': '管理员', 'user': '普通用户'}.get(need_role, need_role)
+                flash(f'无权限：该模块需要「{role_name}」及以上角色', 'error')
+                return redirect(url_for('index'))
         return None
 
 
@@ -194,3 +296,122 @@ def toggle_plugin(user_id, plugin_id):
         log_operation('插件中心', '订阅', f'用户#{user_id} 订阅 {p["name"]}')
     db.commit()
     return True, msg
+
+
+# ============================================================
+# v12.1.0 插件管理（平台管理员）：目录发现 / 启停 / 上传安装 / 卸载
+# ============================================================
+def _registry_rows():
+    db = get_db()
+    return {r['id']: r for r in db.execute('SELECT * FROM plugin_registry').fetchall()}
+
+
+def _manifest_map():
+    """扫描 plugins/ 目录，返回 {plugin_id: manifest}（惰性导入避免循环依赖）"""
+    try:
+        from plugins import discover_plugins
+        return {mid: mod.manifest for mid, mod in discover_plugins()}
+    except Exception:
+        return {}
+
+
+def _enabled_ids():
+    db = get_db()
+    rows = db.execute('SELECT id, enabled FROM plugin_registry').fetchall()
+    return {r['id'] for r in rows if r['enabled']}
+
+
+def get_plugins_admin():
+    """平台管理员插件管理视图：静态清单 + 目录发现的新插件，合并启停状态与表登记"""
+    rows = _registry_rows()
+    merged = {}
+    for p in PLUGINS:
+        item = dict(p)
+        item['tables'] = p.get('tables', [])
+        merged[p['id']] = item
+    for pid, man in _manifest_map().items():
+        if pid in merged:
+            continue
+        merged[pid] = {
+            'id': man.get('id', pid), 'name': man.get('name', pid), 'icon': man.get('icon', '🧩'),
+            'group': man.get('group', '业务'), 'core': 1 if man.get('core') else 0,
+            'desc': man.get('description', ''), 'endpoint': man.get('endpoint', ''),
+            'nav_path': man.get('url_prefix', man.get('nav_path', '/' + pid)),
+            'tables': man.get('tables', []),
+        }
+    out = []
+    for pid, p in merged.items():
+        row = rows.get(pid)
+        item = dict(p)
+        item['registered'] = bool(row)
+        item['install_type'] = row['install_type'] if row and row['install_type'] else 'builtin'
+        item['enabled'] = bool(row['enabled']) if row else True
+        out.append(item)
+    return sorted(out, key=lambda x: (0 if x.get('core') else 1, x['id']))
+
+
+def set_plugin_enabled(plugin_id, enabled):
+    """平台级启用/停用插件。核心插件不可停用。"""
+    row = _registry_rows().get(plugin_id)
+    if row and row['core']:
+        return False, '核心插件不可停用'
+    db = get_db()
+    db.execute('UPDATE plugin_registry SET enabled=? WHERE id=?', (1 if enabled else 0, plugin_id))
+    db.commit()
+    log_operation('插件管理', '启用' if enabled else '停用', f'插件 {plugin_id}')
+    return True, ('已启用' if enabled else '已停用')
+
+
+def uninstall_plugin(plugin_id):
+    """卸载插件：仅限上传安装的插件（install_type=upload）。停用 + 删除插件包目录，数据表保留不动。"""
+    row = _registry_rows().get(plugin_id)
+    if not row:
+        return False, '插件未登记'
+    if row['core']:
+        return False, '核心插件不可卸载'
+    if row['install_type'] != 'upload':
+        return False, '内置插件不可卸载（仅管理页上传安装的插件可卸载）'
+    db = get_db()
+    db.execute('UPDATE plugin_registry SET enabled=0 WHERE id=?', (plugin_id,))
+    db.execute('DELETE FROM user_plugins WHERE plugin_id=?', (plugin_id,))
+    db.execute('DELETE FROM plugin_registry WHERE id=?', (plugin_id,))
+    db.commit()
+    import os, shutil
+    target = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plugins', plugin_id)
+    if os.path.isdir(target) and not plugin_id.startswith('_'):
+        shutil.rmtree(target, ignore_errors=True)
+    log_operation('插件管理', '卸载', f'插件 {plugin_id}（数据表保留）')
+    # 清理插件路径归属缓存，避免残留前缀误判
+    for k in [k for k, v in _manifest_prefix_cache.items() if v == plugin_id]:
+        _manifest_prefix_cache.pop(k, None)
+    return True, f'插件 {plugin_id} 已卸载（业务数据表保留）。重启系统后彻底移除。'
+
+
+def register_uploaded_plugin(plugin_id, manifest, blueprint=None):
+    """上传安装后登记：写入 registry（install_type=upload）+ 即时注册蓝图 + 更新守卫缓存"""
+    db = get_db()
+    db.execute('''INSERT INTO plugin_registry
+        (id, name, icon, grp, core, description, endpoint, tables, enabled, install_type)
+        VALUES (?,?,?,?,?,?,?,?,1,'upload')
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, icon=excluded.icon, grp=excluded.grp, core=excluded.core,
+            description=excluded.description, endpoint=excluded.endpoint, tables=excluded.tables,
+            enabled=1, install_type='upload' ''',
+        (plugin_id, manifest.get('name', plugin_id), manifest.get('icon', '🧩'),
+         manifest.get('group', '业务'), 1 if manifest.get('core') else 0,
+         manifest.get('description', ''), manifest.get('endpoint', ''),
+         json.dumps(manifest.get('tables', []), ensure_ascii=False)))
+    db.commit()
+    # 即时注册蓝图（若当前 app 已有）
+    try:
+        from flask import current_app
+        if blueprint is not None and plugin_id not in current_app.blueprints:
+            current_app.register_blueprint(blueprint)
+    except Exception as e:
+        print(f'[插件管理] 即时注册蓝图失败（{plugin_id}）: {e}')
+    # 更新守卫前缀缓存
+    up = manifest.get('url_prefix')
+    if up:
+        for pfx in (up if isinstance(up, (list, tuple)) else [up]):
+            _manifest_prefix_cache.setdefault(str(pfx), plugin_id)
+    return True

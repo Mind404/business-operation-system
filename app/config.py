@@ -10,7 +10,8 @@
 PORT = 5000
 
 # 调试模式（开发时设为True，生产环境务必设为False）
-DEBUG = True
+# 便携版默认关闭：使用 waitress 生产服务器，更稳定且不需要额外依赖
+DEBUG = False
 
 # 数据库文件路径（默认与 app.py 同目录）
 # DATABASE = 'business.db'

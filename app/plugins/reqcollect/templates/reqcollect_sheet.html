@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}{{ book.name }} - 需求收集管理{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/css/pluginsCss.css') }}">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/plugins.css') }}">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/css/luckysheet.css') }}">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/assets/iconfont/iconfont.css') }}">
+<style>
+    html, body { height: 100%; overflow: hidden; }
+    .book-wrap { display:flex; flex-direction:column; height:calc(100vh - 8px); padding:0 8px; box-sizing:border-box; }
+    .book-top { display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid #e5e7eb; background:#fff; flex-shrink:0; flex-wrap:nowrap; }
+    .book-top .title { font-size:16px; font-weight:600; color:#111827; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
+    .book-top .meta { font-size:12px; color:#9ca3af; white-space:nowrap; max-width:300px; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+    .book-top .btn-plain { flex-shrink:0; }
+    .book-top .btn-save { flex-shrink:0; }
+    #status { font-size:12px; color:#6b7280; margin-left:auto; white-space:nowrap; min-width:150px; text-align:right; flex-shrink:0; }
+    #status.saving { color:#2563eb; }
+    #status.ok { color:#059669; }
+    #status.err { color:#dc2626; }
+    .btn-save { padding:7px 16px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-size:13px; cursor:pointer; }
+    .btn-plain { padding:7px 12px; background:#fff; color:#374151; border:1px solid #d1d5db; border-radius:8px; font-size:13px; cursor:pointer; }
+    .btn-plain:hover { background:#f9fafb; }
+    #luckysheet { flex:1; width:100%; border:1px solid #e0e4ea; border-radius:0 0 8px 8px; overflow:hidden; min-height:480px; }
+    #luckysheet::before { content: '表格加载中…'; display:flex; align-items:center; justify-content:center; height:100%; min-height:480px; color:#9ca3af; font-size:14px; }
+    #luckysheet:not(:empty)::before { display:none; }
+    /* sheet 标签/统计栏移到顶部后的布局补偿 */
+    #luckysheet .luckysheet-sheet-bar { z-index: 20; }
+    #luckysheet .luckysheet-statistic-bar { z-index: 20; }
+</style>
+
+<div class="book-wrap">
+    <div class="book-top">
+        <a href="{{ url_for('reqcollect.index') }}" style="font-size:13px;color:#2563eb;text-decoration:none;flex-shrink:0;">← 返回</a>
+        <div class="title">📄 {{ book.name }}</div>
+        <div class="meta" id="savedMeta">
+            {% if book.updated_at %}上次保存：{{ book.updated_by or '' }} · {{ (book.updated_at or '')[:16] }}{% else %}尚未保存过{% endif %}
+        </div>
+        <button class="btn-plain" onclick="doImportExcel()" title="从 Excel 文件导入，替换当前表格内容">📥 导入 Excel</button>
+        <button class="btn-plain" onclick="doExportExcel()" title="将当前表格导出为 Excel 文件">📤 导出 Excel</button>
+        <button class="btn-save" onclick="doSave(true)">💾 保存</button>
+        <span id="status">已就绪（Ctrl+S 保存）</span>
+    </div>
+    <div id="luckysheet"></div>
+    <input type="file" id="xlsxImport" accept=".xlsx,.xls,.csv" style="display:none;">
+</div>
+
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/plugins/js/plugin.js') }}"></script>
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/luckysheet.umd.js') }}" defer></script>
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/xlsx.full.min.js') }}" defer></script>
+<span id="userMeta" data-user="{{ current_user }}" hidden></span>
+<script>
+const SID = {{ book.id }};
+const CURRENT_USER = document.getElementById('userMeta').dataset.user || '未知用户';
+
+let saving = false;
+let dirty = false;
+let lastSavedJson = '';
+let moveBarTimer = null;
+
+function currentJson() {
+    try { return JSON.stringify(luckysheet.getluckysheetfile()); }
+    catch (e) { return lastSavedJson; }
+}
+function setStatus(text, cls) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = cls || '';
+}
+function markDirty() { dirty = true; }
+function doSave(manual) {
+    if (saving) return;
+    const json = currentJson();
+    if (json === lastSavedJson && !manual) { dirty = false; return; }
+    saving = true;
+    setStatus('保存中…', 'saving');
+    fetch(`/reqcollect/${SID}/save`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({data: JSON.parse(json)}),
+    })
+    .then(r => r.json())
+    .then(d => {
+        saving = false;
+        if (d.ok) {
+            lastSavedJson = json; dirty = false;
+            setStatus('已保存 ' + (d.time || '').slice(11, 16), 'ok');
+            const meta = document.getElementById('savedMeta');
+            meta.textContent = '上次保存：' + (d.by || '') + ' · ' + (d.time || '').slice(0, 16);
+        } else {
+            setStatus('保存失败：' + d.msg, 'err');
+        }
+    })
+    .catch(e => { saving = false; setStatus('保存失败：' + e, 'err'); });
+}
+
+// 加载工作簿并创建 Luckysheet
+function startSheet() {
+    fetch(`/reqcollect/${SID}/data`)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.ok) { setStatus(d.msg, 'err'); return; }
+            lastSavedJson = JSON.stringify(d.data);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                try {
+                    luckysheet.create({
+                        container: 'luckysheet',
+                        lang: 'zh',
+                        data: d.data,
+                        title: d.name,
+                        showinfobar: true,
+                        showsheetbar: true,
+                        showtoolbar: true,
+                        showstatisticBar: true,
+                        allowEdit: true,
+                        enableAddRow: true,
+                        enableAddBackTop: true,
+                        sheetFormulaBar: true,
+                        userinfo: { username: CURRENT_USER, id: 1 },
+                    });
+                    // 编辑后标记未保存
+                    ['cellEditEnd', 'cellUpdated', 'updated', 'sheetUpdate'].forEach(h => {
+                        try { luckysheet.setHook(h, markDirty); } catch (e) {}
+                    });
+                    // 轮询兜底：20 秒检测一次是否有未保存更改
+                    setInterval(() => { if (dirty) doSave(false); }, 20000);
+                    // 底部栏（sheet 标签/统计/缩放）移到顶部
+                    scheduleMoveBarsToTop();
+                } catch (e) {
+                    setStatus('初始化失败：' + e, 'err');
+                    console.error('Luckysheet 初始化失败:', e);
+                }
+            }));
+        })
+        .catch(e => setStatus('加载失败：' + e, 'err'));
+}
+
+// 将 Luckysheet 底部的 sheet 标签栏与统计栏移动到顶部（公式栏之前）
+function moveBarsToTop() {
+    const lk = document.getElementById('luckysheet');
+    if (!lk) return;
+    const sheetbar = lk.querySelector('.luckysheet-sheet-bar');
+    const statbar = lk.querySelector('.luckysheet-statistic-bar');
+    const formula = lk.querySelector('.luckysheet-formula-bar');
+    let moved = false;
+    if (sheetbar && formula && sheetbar.parentNode === lk) {
+        lk.insertBefore(sheetbar, formula);
+        moved = true;
+    }
+    if (statbar && formula && statbar.parentNode === lk) {
+        lk.insertBefore(statbar, formula);
+        moved = true;
+    }
+    if (moved) {
+        // 触发 Luckysheet 重新计算布局
+        setTimeout(function(){ try { window.dispatchEvent(new Event('resize')); } catch(e) {} }, 200);
+    }
+}
+function scheduleMoveBarsToTop() {
+    [600, 1500, 3000].forEach(ms => {
+        setTimeout(moveBarsToTop, ms);
+    });
+}
+
+// Ctrl + 滚轮 缩放（Excel 习惯）
+document.getElementById('luckysheet').addEventListener('wheel', function(e) {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const step = e.deltaY > 0 ? -0.1 : 0.1;
+    let cur = 1;
+    try {
+        const f = luckysheet.getluckysheetfile();
+        if (f && f[0] && f[0].zoomRatio) cur = f[0].zoomRatio;
+    } catch (err) {}
+    const nz = Math.max(0.5, Math.min(2, Math.round((cur + step) * 10) / 10));
+    try { luckysheet.setSheetZoom(nz); } catch (err) {}
+}, { passive: false });
+
+// 导入 Excel
+function doImportExcel() {
+    document.getElementById('xlsxImport').click();
+}
+document.getElementById('xlsxImport').addEventListener('change', function() {
+    const file = this.files[0];
+    if (!file) return;
+    setStatus('正在导入…', 'saving');
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const wb = XLSX.read(new Uint8Array(e.target.result));
+            const sheets = wb.SheetNames.map(function(nm) {
+                const ws = wb.Sheets[nm];
+                const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                const celldata = [];
+                for (let r = 0; r < aoa.length; r++) {
+                    for (let c = 0; c < aoa[r].length; c++) {
+                        const v = aoa[r][c];
+                        if (v !== '' && v !== null && v !== undefined) celldata.push({ r: r, c: c, v: String(v) });
+                    }
+                }
+                return { name: nm, celldata: celldata, row: Math.max(aoa.length + 5, 100), column: 26 };
+            });
+            // 重建表格
+            luckysheet.destroy();
+            document.getElementById('luckysheet').innerHTML = '';
+            luckysheet.create({
+                container: 'luckysheet',
+                lang: 'zh',
+                data: sheets,
+                showtoolbar: true,
+                showsheetbar: true,
+                showstatisticBar: true,
+                allowEdit: true,
+                sheetFormulaBar: true,
+                userinfo: { username: CURRENT_USER, id: 1 },
+            });
+            ['cellEditEnd', 'cellUpdated', 'updated', 'sheetUpdate'].forEach(h => {
+                try { luckysheet.setHook(h, markDirty); } catch (err) {}
+            });
+            lastSavedJson = '';
+            dirty = true;
+            doSave(true);
+            scheduleMoveBarsToTop();
+        } catch (err) {
+            setStatus('导入失败：' + err, 'err');
+        }
+    };
+    reader.readAsArrayBuffer(file);
+    this.value = '';
+});
+
+// 导出 Excel
+function doExportExcel() {
+    try {
+        const file = luckysheet.getluckysheetfile();
+        if (!file || !file.length) { setStatus('没有可导出的内容', 'err'); return; }
+        const wb = XLSX.utils.book_new();
+        file.forEach(function(sheet) {
+            const aoa = (sheet.data || []).map(function(row) {
+                return row.map(function(cell) {
+                    if (!cell) return '';
+                    return (cell.m !== undefined && cell.m !== null && cell.m !== '') ? cell.m : (cell.v !== undefined ? cell.v : '');
+                });
+            });
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+            XLSX.utils.book_append_sheet(wb, ws, String(sheet.name || 'Sheet').slice(0, 31));
+        });
+        XLSX.writeFile(wb, '需求收集_' + SID + '_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+        setStatus('已导出 Excel', 'ok');
+    } catch (err) {
+        setStatus('导出失败：' + err, 'err');
+        console.error(err);
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(startSheet, 150));
+} else {
+    setTimeout(startSheet, 150);
+}
+
+// Ctrl+S 保存
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        doSave(true);
+    }
+});
+// 离开前提示未保存更改
+window.addEventListener('beforeunload', e => {
+    if (dirty && currentJson() !== lastSavedJson) { e.preventDefault(); e.returnValue = '有未保存的更改，确认离开？'; }
+});
+</script>
+{% endblock %}

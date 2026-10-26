@@ -60,19 +60,6 @@
             color: #991b1b; padding: 12px 16px; border-radius: 8px;
             font-size: 14px; margin-bottom: 20px;
         }
-        .demo-accounts {
-            margin-top: 24px; padding-top: 20px;
-            border-top: 1px solid #e5e7eb;
-        }
-        .demo-title { font-size: 12px; color: #9ca3af; margin-bottom: 10px; text-align: center; }
-        .demo-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-        .demo-item {
-            font-size: 11px; color: #6b7280;
-            background: #f9fafb; padding: 6px 8px; border-radius: 4px;
-            cursor: pointer; transition: background 0.15s;
-        }
-        .demo-item:hover { background: #eff6ff; color: #1e40af; }
-        .demo-item strong { color: #374151; }
     </style>
 </head>
 <body>
@@ -99,21 +86,6 @@
             </div>
             <button type="submit" class="btn-login">登 录</button>
         </form>
-
-        <div class="demo-accounts">
-            <div class="demo-title">演示账号（点击自动填充）</div>
-            <div class="demo-list">
-                <div class="demo-item" onclick="fillForm('admin','admin123')"><strong>admin</strong> 管理员</div>
-                <div class="demo-item" onclick="fillForm('bu','bu123')"><strong>bu</strong> 普通用户</div>
-            </div>
-        </div>
     </div>
-
-    <script>
-        function fillForm(username, password) {
-            document.querySelector('input[name="username"]').value = username;
-            document.querySelector('input[name="password"]').value = password;
-        }
-    </script>
 </body>
 </html>

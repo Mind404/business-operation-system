@@ -8,6 +8,19 @@
     <a href="{{ url_for('logs') }}" class="module-tab active">📜 操作日志</a>
 </div>
 <div class="panel">
+    <form method="get" style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+        <select name="user" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <option value="">全部操作人</option>
+            {% for u in users %}<option value="{{ u }}" {% if u == user_filter %}selected{% endif %}>{{ u }}</option>{% endfor %}
+        </select>
+        <select name="mod" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <option value="">全部模块</option>
+            {% for m in mods %}<option value="{{ m }}" {% if m == mod_filter %}selected{% endif %}>{{ m }}</option>{% endfor %}
+        </select>
+        <button type="submit" style="padding:6px 14px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">筛选</button>
+        <a href="{{ url_for('logs') }}" style="font-size:13px;color:#6b7280;">清除筛选</a>
+        <span style="font-size:12px;color:#9ca3af;">共 {{ logs|length }} 条（最近200条）</span>
+    </form>
     <table class="data-table">
         <thead>
             <tr>
