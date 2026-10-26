@@ -441,9 +441,9 @@ _LEGACY_TABLE_PREFIXES = ('wbs_', 'reqcollect_', 'test_', 'ai_', 'production_', 
 _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'user_plugins', 'operation_logs', 'ai_providers',
                            'ai_chat_logs', 'approval_requests'}
-# 平台早期无前缀遗留业务表（白名单豁免；deliveries 已于 v12.4.5 清理删除）
-_PLATFORM_LEGACY_TABLES = {'users', 'products', 'contracts', 'deliveries',
-                           'devices', 'inventory', 'requirements', 'tasks'}
+# 平台早期无前缀遗留业务表（白名单豁免；v12.4.8 已删除 42 张 8 模块时代业务表，
+# 仅剩 users/tasks 两张核心在用：登录与工作台待办）
+_PLATFORM_LEGACY_TABLES = {'users', 'tasks'}
 
 
 def _allocate_table_name(db, desired_name):

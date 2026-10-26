@@ -87,24 +87,8 @@ def init_wbs_tables():
     db.commit()
 
 
-# ============================================================
-# 外部技术需求插件表（自己管）
-# ============================================================
-def init_tech_req_tables():
-    db = get_db()
-    db.execute('''CREATE TABLE IF NOT EXISTS tech_requirements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        stage TEXT, category TEXT, item TEXT, planned_date TEXT,
-        description TEXT, version_response TEXT,
-        product_id INTEGER DEFAULT 1, status TEXT DEFAULT '进行中',
-        sort_order INTEGER DEFAULT 0,
-        created_at TEXT, updated_at TEXT)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS tech_req_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tech_req_id INTEGER, log_date TEXT, content TEXT, author TEXT,
-        created_at TEXT,
-        FOREIGN KEY (tech_req_id) REFERENCES tech_requirements(id) ON DELETE CASCADE)''')
-    db.commit()
+# v12.4.8 清理：外部技术需求插件表（tech_requirements/tech_req_logs）已随 8 模块业务表一并删除，
+# 原 init_tech_req_tables() 建表函数移除（避免新库迁移重建已废弃表）
 
 
 # ============================================================

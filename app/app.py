@@ -6,7 +6,6 @@
 import os
 import sys
 # 便携版兼容：确保脚本所在目录（app\）在模块搜索路径中。
-# embeddable Python 的 ._pth 机制不会自动加入脚本目录，否则 import excel_utils 等同目录模块会失败。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlite3
 import random
@@ -16,7 +15,6 @@ import time
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, current_app
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-import excel_utils
 
 app = Flask(__name__)
 # v12.2.0 安全加固：SECRET_KEY 自动生成并持久化（首次启动生成 secret.key，后续读取）
@@ -737,62 +735,6 @@ def submit_status_change(plugin_id, record_type, record_id, new_status, payload_
     return 'direct', None
 
 
-# ---- 审批落地函数：审批通过后按插件/记录类型分派执行状态变更 ----
-def _apply_requirement_status(db, rid, payload):
-    from plugins.requirements.routes import sync_requirement_status
-    ns = payload.get('new_status')
-    db.execute("UPDATE requirements SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (ns, rid))
-    db.commit()
-    sync_requirement_status(db, rid, ns)
-
-
-def _apply_version_status(db, vid, payload):
-    ns = payload.get('new_status')
-    if ns == '已发布':
-        db.execute("UPDATE software_versions SET status=?, actual_release_date=datetime('now','localtime') WHERE id=?", (ns, vid))
-    else:
-        db.execute("UPDATE software_versions SET status=? WHERE id=?", (ns, vid))
-    db.commit()
-
-
-def _apply_task_status(db, tid, payload):
-    ns = payload.get('new_status')
-    db.execute("UPDATE dev_tasks SET status=? WHERE id=?", (ns, tid))
-    db.commit()
-
-
-def _apply_bug_status(db, bid, payload):
-    fields, params = ['status=?'], [payload.get('new_status', '新建')]
-    for f in ('assignee', 'fix_solution', 'test_result', 'close_reason', 'root_cause', 'corrective_action', 'preventive_action'):
-        if payload.get(f):
-            fields.append(f'{f}=?')
-            params.append(payload[f])
-    if payload.get('new_status') == '已关闭':
-        fields.append('closed_at=datetime("now","localtime")')
-    db.execute(f'UPDATE bug_records SET {",".join(fields)} WHERE id=?', (*params, bid))
-    db.commit()
-
-
-def _apply_contract_status(db, cid, payload):
-    db.execute("UPDATE contracts SET status=? WHERE id=?", (payload.get('new_status'), cid))
-    db.commit()
-
-
-def _apply_device_status(db, did, payload):
-    db.execute("UPDATE devices SET status=? WHERE id=?", (payload.get('new_status'), did))
-    db.commit()
-
-
-_APPROVAL_APPLY = {
-    ('requirements', 'requirement'): _apply_requirement_status,
-    ('planning', 'software_version'): _apply_version_status,
-    ('planning', 'dev_task'): _apply_task_status,
-    ('bug', 'bug'): _apply_bug_status,
-    ('contract', 'contract'): _apply_contract_status,
-    ('device', 'device'): _apply_device_status,
-}
-
-
 @app.context_processor
 def inject_permissions():
     """向模板注入权限相关变量"""
@@ -1076,150 +1018,6 @@ if __name__ == '__main__':
                 print('[插件表校验] 全部插件表与登记一致')
         except Exception as e:
             print(f'[插件表校验] 执行异常（不影响启动）: {e}')
-    # 数据库迁移：为旧数据库添加缺失字段
-    def migrate_db():
-        db = sqlite3.connect(app.config['DATABASE'])
-        db.row_factory = sqlite3.Row
-        # 检查bug_records表的字段
-        cols = [r[1] for r in db.execute('PRAGMA table_info(bug_records)').fetchall()]
-        bug_migrations = [
-            ('bug_type', "TEXT DEFAULT '功能Bug'"),
-            ('priority', "TEXT DEFAULT '中'"),
-            ('close_reason', 'TEXT'),
-            ('fix_solution', 'TEXT'),
-            ('test_result', 'TEXT'),
-        ]
-        for col, definition in bug_migrations:
-            if col not in cols:
-                try:
-                    db.execute(f'ALTER TABLE bug_records ADD COLUMN {col} {definition}')
-                    print(f'  数据库迁移：bug_records表添加字段 {col}')
-                except Exception as e:
-                    print(f'  数据库迁移警告：添加{col}失败 - {e}')
-        # 检查bug_workflow表的字段
-        wf_cols = [r[1] for r in db.execute('PRAGMA table_info(bug_workflow)').fetchall()]
-        wf_migrations = [
-            ('fix_solution', 'TEXT'),
-            ('test_result', 'TEXT'),
-            ('close_reason', 'TEXT'),
-        ]
-        for col, definition in wf_migrations:
-            if col not in wf_cols:
-                try:
-                    db.execute(f'ALTER TABLE bug_workflow ADD COLUMN {col} {definition}')
-                    print(f'  数据库迁移：bug_workflow表添加字段 {col}')
-                except Exception as e:
-                    print(f'  数据库迁移警告：添加{col}失败 - {e}')
-        # 将旧状态"待处理"迁移为"新建"
-        try:
-            db.execute("UPDATE bug_records SET status='新建' WHERE status='待处理'")
-            db.execute("UPDATE bug_records SET status='已修复' WHERE status='待验证'")
-        except Exception as e:
-            print(f'  数据库迁移警告：状态迁移失败 - {e}')
-        # 检查contracts表的字段
-        try:
-            contract_cols = [r[1] for r in db.execute('PRAGMA table_info(contracts)').fetchall()]
-            if 'paid_amount' not in contract_cols:
-                db.execute('ALTER TABLE contracts ADD COLUMN paid_amount REAL DEFAULT 0')
-                print('  数据库迁移：contracts表添加字段 paid_amount')
-            # 将旧合同类型"采购合同"迁移为"物料合同"
-            db.execute("UPDATE contracts SET contract_type='物料合同' WHERE contract_type='采购合同'")
-        except Exception as e:
-            print(f'  数据库迁移警告：合同表迁移失败 - {e}')
-        # 创建contract_payments表（如果不存在）
-        try:
-            db.execute('''CREATE TABLE IF NOT EXISTS contract_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contract_id INTEGER NOT NULL,
-                node_name TEXT NOT NULL,
-                plan_date TEXT,
-                amount REAL CHECK (amount >= 0),
-                status TEXT DEFAULT '待付款',
-                actual_date TEXT,
-                remark TEXT,
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
-            )''')
-        except Exception as e:
-            print(f'  数据库迁移警告：创建contract_payments表失败 - {e}')
-        # 业务流程打通：dev_tasks表增加requirement_id字段
-        try:
-            dt_cols = [r[1] for r in db.execute('PRAGMA table_info(dev_tasks)').fetchall()]
-            if 'requirement_id' not in dt_cols:
-                db.execute('ALTER TABLE dev_tasks ADD COLUMN requirement_id INTEGER')
-                print('  数据库迁移：dev_tasks表添加字段 requirement_id（打通需求与任务关联）')
-        except Exception as e:
-            print(f'  数据库迁移警告：dev_tasks表迁移失败 - {e}')
-        # 业务流程打通：production_orders表增加schedule_id字段
-        try:
-            po_cols = [r[1] for r in db.execute('PRAGMA table_info(production_orders)').fetchall()]
-            if 'schedule_id' not in po_cols:
-                db.execute('ALTER TABLE production_orders ADD COLUMN schedule_id INTEGER')
-                print('  数据库迁移：production_orders表添加字段 schedule_id（打通规划与执行关联）')
-        except Exception as e:
-            print(f'  数据库迁移警告：production_orders表迁移失败 - {e}')
-        # 业务流程打通：requisition_items表增加material_plan_id字段
-        try:
-            ri_cols = [r[1] for r in db.execute('PRAGMA table_info(requisition_items)').fetchall()]
-            if 'material_plan_id' not in ri_cols:
-                db.execute('ALTER TABLE requisition_items ADD COLUMN material_plan_id INTEGER')
-                print('  数据库迁移：requisition_items表添加字段 material_plan_id（打通物料与领用关联）')
-        except Exception as e:
-            print(f'  数据库迁移警告：requisition_items表迁移失败 - {e}')
-        # 业务流程打通：inventory表增加product_id和is_product字段（统一管理物料和成品库存）
-        try:
-            inv_cols = [r[1] for r in db.execute('PRAGMA table_info(inventory)').fetchall()]
-            if 'product_id' not in inv_cols:
-                db.execute('ALTER TABLE inventory ADD COLUMN product_id INTEGER')
-                # v8.8.0：交付管理简化——生产完成/入库完成/是否已交付
-                dp_cols = [r[1] for r in db.execute('PRAGMA table_info(delivery_plans)').fetchall()]
-                for col, ddl in [('production_date', 'TEXT'), ('stock_date', 'TEXT'), ('delivered', 'INTEGER DEFAULT 0')]:
-                    if col not in dp_cols:
-                        db.execute(f'ALTER TABLE delivery_plans ADD COLUMN {col} {ddl}')
-                print('  数据库迁移：inventory表添加字段 product_id（支持成品库存管理）')
-            if 'is_product' not in inv_cols:
-                db.execute('ALTER TABLE inventory ADD COLUMN is_product INTEGER DEFAULT 0')
-                print('  数据库迁移：inventory表添加字段 is_product（区分物料与成品）')
-        except Exception as e:
-            print(f'  数据库迁移警告：inventory表迁移失败 - {e}')
-        # 需求表迁移：增加4类需求的特有字段
-        try:
-            req_cols = [r[1] for r in db.execute('PRAGMA table_info(requirements)').fetchall()]
-            req_new_cols = {
-                'req_type': "TEXT DEFAULT '用户需求'",
-                'product_model': 'TEXT',
-                'batch_delivery': "TEXT DEFAULT '否'",
-                'application_scenario': 'TEXT',
-                'system_verify_point': 'TEXT',
-                'verify_function': 'TEXT',
-                'performance_req': 'TEXT',
-                'support_product': 'TEXT',
-                'certification_type': 'TEXT',
-                'spec_requirement': 'TEXT',
-                'industry_standard': 'TEXT',
-                'baseline_product_type': 'TEXT',
-                'task_progress': 'TEXT',
-                'time_plan': 'TEXT',
-                'deliverable': 'TEXT',
-            }
-            for col, col_type in req_new_cols.items():
-                if col not in req_cols:
-                    db.execute(f'ALTER TABLE requirements ADD COLUMN {col} {col_type}')
-                    print(f'  数据库迁移：requirements表添加字段 {col}（4类需求重构）')
-        except Exception as e:
-            print(f'  数据库迁移警告：requirements表迁移失败 - {e}')
-
-        # gantt_settings 迁移：添加 synced 字段
-        try:
-            gs_cols = [r[1] for r in db.execute('PRAGMA table_info(gantt_settings)').fetchall()]
-            if gs_cols and 'synced' not in gs_cols:
-                db.execute('ALTER TABLE gantt_settings ADD COLUMN synced INTEGER DEFAULT 0')
-                print('  数据库迁移：gantt_settings表添加字段 synced')
-        except Exception:
-            pass
-
-        db.commit()
-    migrate_db()
     host, port, debug = get_config()
     print('='*60)
     print('  业务高效运转系统')

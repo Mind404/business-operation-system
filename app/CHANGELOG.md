@@ -497,3 +497,29 @@ git commit -m "vX.Y.Z: 一句话概述本次功能"
 - 渲染兜底：库加载失败时退回纯文本转义，保证可读
 - 验证：浏览器实测含表格/标题/列表/代码块/引用/行内代码的回复全部正确渲染
   （表格带边框、代码块深色背景、引用左侧蓝条），测试数据已清理
+
+# v12.4.8 陈旧表清理 + 死代码精简（57 → 15 张表）（2026-10-26）
+
+- 数据库：删除 42 张 8 模块时代陈旧业务表（审批/缺陷/合同/交付/开发任务/设备告警/OTA/测试/BOM/
+  生产/质量/物料/技术需求/版本/甘特/里程碑/需求库 requirements 等），仅保留 15 张：
+  平台核心（users/tasks/operation_logs/schema_version/plugin_registry/plugin_tables/user_plugins/
+  approval_requests）+ AI 四表 + WBS（wbs_projects/wbs_tasks）+ 需求收集（reqcollect_books）
+- 根因修复：app.py init_db() 每次启动执行 schema.sql 会把已删业务表全部重建（第一次删表后
+  重启又变回 57 张）。schema.sql 从 51 张建表精简为 9 张在用表（users/operation_logs/tasks/
+  plugin_registry/user_plugins/schema_version/approval_requests/wbs_projects/wbs_tasks），
+  其余表由 db_migrations/插件包建表，启动后保持 15 张、校验零告警
+- 代码精简（连带清理死代码）：
+  - app.py：删除 migrate_db() 启动迁移段（bug_records/bug_workflow/contracts/contract_payments/
+    dev_tasks/production_orders/requisition_items/inventory/delivery_plans/requirements/gantt_settings
+    的历史迁移）；删除 6 个审批落地回调（_apply_requirement_status/_apply_version_status/
+    _apply_task_status/_apply_bug_status/_apply_contract_status/_apply_device_status）与
+    _APPROVAL_APPLY 映射（submit_status_change 已下线直接生效，回调为死代码）；删除
+    import excel_utils 死引用
+  - db_migrations.py：删除 init_tech_req_tables()（tech_requirements/tech_req_logs 建表）
+  - plugin_system.py：_PLATFORM_LEGACY_TABLES 白名单收缩为 {users, tasks}（其余 6 张已删）
+  - 删除孤儿模块：data_utils.py（BUSINESS_TABLES 清单+概览统计无调用者）、excel_utils.py
+    （业务表导入导出映射无调用者，用户导入用 openpyxl 独立实现）、gantt_utils.py、
+    plugins/requirements/ 空目录
+- 回归测试：登录/工作台/WBS/需求收集/插件管理/AI对话/用户管理/操作日志/全局搜索全部 200；
+  启动日志 [插件表校验] 全部插件表与登记一致（零告警）；启动后表数稳定 15 张
+- 删除前已备份：backups/business_db_57tables_20261026_*.db + 启动自动备份（保留最近 7 份）
