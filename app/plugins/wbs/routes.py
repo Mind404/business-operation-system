@@ -34,9 +34,9 @@ def wbs_projects():
     today = date.today().isoformat()
     soon3 = (date.today() + timedelta(days=3)).isoformat()
     soon7 = (date.today() + timedelta(days=7)).isoformat()
-    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status!='已完成' AND parent_id>0", (today,)).fetchone()[0]
-    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status!='已完成' AND parent_id>0", (today, soon3)).fetchone()[0]
-    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status!='已完成' AND parent_id>0", (soon3, soon7)).fetchone()[0]
+    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today,)).fetchone()[0]
+    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today, soon3)).fetchone()[0]
+    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (soon3, soon7)).fetchone()[0]
     return render_template('wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today)
 
 
@@ -52,19 +52,19 @@ def wbs_alerts():
     # 逾期（只统计任务级审批通过的任务，待审批/已驳回的不纳入预警）
     overdue = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
-        WHERE t.plan_end!='' AND t.plan_end<? AND t.status!='已完成' AND t.parent_id>0
+        WHERE t.plan_end!='' AND t.plan_end<? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
     # 3天内
     due3 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
-        WHERE t.plan_end>=? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+        WHERE t.plan_end>=? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
     # 7天内
     due7 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
-        WHERE t.plan_end>? AND t.plan_end<=? AND t.status!='已完成' AND t.parent_id>0
+        WHERE t.plan_end>? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
         ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
     return render_template('wbs_alerts.html', overdue=overdue, due3=due3, due7=due7, today=today_s)

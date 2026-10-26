@@ -117,7 +117,7 @@ def inject_nav_context():
     registered = set(current_app.view_functions.keys())
     enabled_ids = _enabled_ids()
     available = [p for p in PLUGINS if p['endpoint'] in registered and p['id'] in enabled_ids]
-    core_plugins = [p for p in available if p['core']]
+    core_plugins = [p for p in available if p['core'] and p['id'] != 'profile']  # v12.4.4 合并：个人中心并入工作台，导航只留工作台
     # 业务插件：静态表（wbs）+ 目录自动发现的新插件（启用的）
     biz_plugins = [p for p in available if not p['core']]
     for pid, man in _manifest_map().items():

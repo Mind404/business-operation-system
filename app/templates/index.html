@@ -60,8 +60,8 @@
                 <span class="qi-text">新建项目</span>
             </a>
             <a href="{{ url_for('profile') }}" class="quick-item q-orange">
-                <span class="qi-icon">👤</span>
-                <span class="qi-text">个人中心</span>
+                <span class="qi-icon">🔑</span>
+                <span class="qi-text">修改密码</span>
             </a>
             {% if current_role == 'platform_admin' %}
             <a href="{{ url_for('admin_users') }}" class="quick-item q-purple">

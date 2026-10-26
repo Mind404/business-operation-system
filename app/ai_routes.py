@@ -288,12 +288,70 @@ def _collect_db_context(question, max_chars=8000):
     return head + '\n\n' + '\n\n'.join(parts) if parts else head
 
 
+def _overdue_report():
+    """系统侧确定性预判 WBS 任务超期/到期情况（不依赖小模型推理）：
+    规则——计划结束时间 plan_end 早于今天且状态不是“已完成/已取消”= 已逾期（“未开始”也算）；
+    plan_end=今天且未完成 = 今日到期；plan_end 在 1~7 天内且未完成 = 7 日内到期。
+    返回一段权威摘要文本，直接注入 AI 上下文，AI 只需复述。"""
+    try:
+        db = _db()
+        today = datetime.now().strftime('%Y-%m-%d')
+        try:
+            from datetime import timedelta
+            week_end = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+        except Exception:
+            week_end = today
+        rows = db.execute('''
+            SELECT t.name AS task, t.plan_end, t.status, t.owner,
+                   p.name AS project
+            FROM wbs_tasks t LEFT JOIN wbs_projects p ON t.project_id = p.id
+            WHERE t.plan_end IS NOT NULL AND t.plan_end != '' AND (t.parent_id > 0 OR t.parent_id IS NULL)
+            ORDER BY t.plan_end
+        ''').fetchall()
+        done_status = ('已完成', '已取消')
+        overdue, due_today, due_week = [], [], []
+        for r in rows:
+            end = (r['plan_end'] or '').strip()
+            if not end:
+                continue
+            if end < today and r['status'] not in done_status:
+                overdue.append(r)
+            elif end == today and r['status'] not in done_status:
+                due_today.append(r)
+            elif today < end <= week_end and r['status'] not in done_status:
+                due_week.append(r)
+        if not (overdue or due_today or due_week):
+            return ''
+        def _fmt(items):
+            out = []
+            for r in items[:12]:
+                out.append('%s（项目:%s / 负责人:%s / 计划结束:%s / 状态:%s）' % (
+                    r['task'] or '-', r['project'] or '-', r['owner'] or '-', r['plan_end'], r['status']))
+            if len(items) > 12:
+                out.append('……等共 %d 个' % len(items))
+            return '\n'.join(out)
+        parts = []
+        if overdue:
+            parts.append('【已逾期 %d 个】（计划结束时间已过且未完成，含“未开始”）：\n%s' % (len(overdue), _fmt(overdue)))
+        if due_today:
+            parts.append('【今日到期 %d 个】：\n%s' % (len(due_today), _fmt(due_today)))
+        if due_week:
+            parts.append('【7 日内到期 %d 个】：\n%s' % (len(due_week), _fmt(due_week)))
+        head = 'WBS 任务超期预判（系统按规则计算，请直接引用，不要自行推断）——' \
+               '已逾期 = 计划结束时间早于 %s 且状态非“已完成/已取消”（未开始也算逾期）：' % today
+        return head + '\n' + '\n\n'.join(parts)
+    except Exception as e:
+        return ''
+
+
 _SYSTEM_PROMPT = (
     '你是一名企业业务系统“业务高效运转系统”的数据分析助手。系统包含单点登录、统一权限、'
     'WBS计划管理、需求收集管理（在线云表格）等插件，数据保存在 SQLite 数据库中。\n'
     '用户会提供数据库【有数据】的各表结构、行数与样例数据（空表不提供，不代表不存在）。\n'
     '请只基于这些真实数据回答用户的问题，做汇总统计、趋势分析、问题归因等；'
     '若相关数据为空或不足，直接说明“当前没有相关数据/无法判断”，不要编造数字，不要推测空表中可能有什么。\n'
+    '关于超期/逾期/到期类问题：若用户输入中包含“WBS 任务超期预判”，直接采用其中的数字与明细（系统已按'
+    '“计划结束时间已过且状态非已完成/已取消即为逾期，未开始也算逾期”的规则计算），不要自行另行推断或漏掉未开始的任务。\n'
     '回答用中文，先给结论再给依据，条理清晰，可使用小标题、列表、加粗等 Markdown 格式。'
 )
 
@@ -338,9 +396,11 @@ def chat():
         db.commit()
 
     context = _collect_db_context(question)
+    overdue = _overdue_report()
+    extra = '\n\n%s' % overdue if overdue else ''
     messages = [
         {'role': 'system', 'content': _SYSTEM_PROMPT},
-        {'role': 'user', 'content': '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s\n\n请回答/分析：%s' % (context, question)},
+        {'role': 'user', 'content': '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s%s\n\n请回答/分析：%s' % (context, extra, question)},
     ]
     answer = _chat_request(prov['api_url'], prov['api_key'], model, messages)
     try:
