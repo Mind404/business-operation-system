@@ -446,12 +446,15 @@ def admin_plugins():
         flash('无权限访问插件管理', 'error')
         return redirect(url_for('index'))
     plugins = plugin_system.get_plugins_admin()
+    # v12.4.5 表一致性报告（登记 vs 实际建表，冲突/未登记告警红字显示）
+    integrity_warnings, integrity_infos = plugin_system.check_plugin_tables_integrity()
     # v12.1.2 待重启生效提示：上传安装的插件在重启系统前，蓝图未注册（Flask 限制），导航/入口暂不出现
     registered = set(current_app.view_functions.keys())
     pending = [p for p in plugins if p.get('install_type') == 'upload'
                and p.get('endpoint') not in registered]
     return render_template('admin_plugins.html', plugins=plugins,
-                           role_permissions=ROLE_PERMISSIONS, pending_restart=pending)
+                           role_permissions=ROLE_PERMISSIONS, pending_restart=pending,
+                           integrity_warnings=integrity_warnings, integrity_infos=integrity_infos)
 
 @app.route('/admin/plugins/<plugin_id>/toggle', methods=['POST'])
 def admin_plugin_toggle(plugin_id):
@@ -1062,6 +1065,17 @@ if __name__ == '__main__':
     # 插件建表 + 增量迁移（必须在 init_db() 之后：全新库先有 users 表与种子，再执行 v6 角色升级等迁移）
     with app.app_context():
         plugin_system.init_plugin_tables()
+        # v12.4.5 插件表一致性校验：登记 vs 实际建表（冲突/未登记告警打印到启动日志）
+        try:
+            _warns, _infos = plugin_system.check_plugin_tables_integrity()
+            for w in _warns:
+                print(f'[插件表校验·警告] {w}')
+            for i in _infos:
+                print(f'[插件表校验·提示] {i}')
+            if not _warns and not _infos:
+                print('[插件表校验] 全部插件表与登记一致')
+        except Exception as e:
+            print(f'[插件表校验] 执行异常（不影响启动）: {e}')
     # 数据库迁移：为旧数据库添加缺失字段
     def migrate_db():
         db = sqlite3.connect(app.config['DATABASE'])

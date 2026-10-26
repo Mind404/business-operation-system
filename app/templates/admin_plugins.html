@@ -19,6 +19,28 @@
     </div>
     {% endif %}
 
+    <!-- v12.4.5 表一致性校验告警：登记 vs 实际建表，冲突/未登记红字提示 -->
+    {% if integrity_warnings or integrity_infos %}
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 16px;font-size:13px;color:#991b1b;margin-bottom:18px;">
+        <b>🔍 插件表一致性校验：</b>
+        {% if integrity_warnings %}
+        <div style="margin-top:6px;line-height:1.8;">
+            {% for w in integrity_warnings %}
+            <div>⚠️ {{ w }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if integrity_infos %}
+        <div style="margin-top:6px;line-height:1.8;color:#b45309;">
+            {% for i in integrity_infos %}
+            <div>ℹ️ {{ i }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div style="margin-top:6px;color:#6b7280;">详情见系统启动日志（启动系统.bat 窗口）。存量平台表/存量插件表白名单豁免。</div>
+    </div>
+    {% endif %}
+
     <!-- 上传安装 -->
     <div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:18px;">
         <h3 style="margin:0 0 12px;font-size:15px;font-weight:700;">📦 上传安装插件</h3>
@@ -67,7 +89,18 @@
                         {% endif %}
                     </td>
                     <td style="padding:10px;border-bottom:1px solid #f3f4f6;color:#6b7280;font-size:12px;">
-                        {% if p.tables %}
+                        {% if p.table_map %}
+                            {% for m in p.table_map %}
+                            <div style="margin-bottom:3px;">
+                                <span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:4px;">{{ m.logical }}</span>
+                                <span style="color:#9ca3af;">→</span>
+                                <span style="display:inline-block;background:#f3f4f6;padding:1px 6px;border-radius:4px;">{{ m.actual }}</span>
+                                {% if m.actual != m.logical %}
+                                <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:11px;" title="原表名已被其他插件占用，平台已自动分配此实际表名">自动分配</span>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% elif p.tables %}
                             {% for t in p.tables %}<span style="display:inline-block;background:#f3f4f6;padding:1px 6px;border-radius:4px;margin:1px 2px;">{{ t }}</span>{% endfor %}
                         {% else %}<span style="color:#9ca3af;">—</span>{% endif %}
                     </td>

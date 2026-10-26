@@ -127,6 +127,8 @@ MIGRATIONS = [
     (6, 'v12.1.0: plugin_registry.enabled + 三级角色', None),
     # v7: v12.4.1 平台 AI 助手 —— ai_providers（模型服务商配置）+ ai_chat_logs（问答记录，仅平台管理员）
     (7, 'v12.4.1: ai_providers + ai_chat_logs', None),
+    # v8: v12.4.5 插件表管理 —— plugin_tables（插件逻辑表名 → 平台分配实际表名的登记表）
+    (8, 'v12.4.5: plugin_tables 表名登记（统一建表入口 + 撞名自动分配）', None),
 ]
 
 
@@ -227,6 +229,18 @@ def run_migrations():
                 question TEXT,
                 answer TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime')))''')
+        elif ver == 8:
+            # v12.4.5 插件表名登记：插件声明的逻辑表名 → 平台分配的实际表名
+            # - 同一插件同一逻辑名唯一（重装沿用，不漂移）
+            # - 实际表名全局唯一（撞名自动分配 _2/_3 后缀）
+            db.execute('''CREATE TABLE IF NOT EXISTS plugin_tables (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id TEXT NOT NULL,
+                logical_name TEXT NOT NULL,
+                actual_name TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                UNIQUE (plugin_id, logical_name),
+                UNIQUE (actual_name))''')
         _set_version(db, ver, note)
     db.commit()
 

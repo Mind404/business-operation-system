@@ -346,6 +346,15 @@ def get_plugins_admin():
         item['registered'] = bool(row)
         item['install_type'] = row['install_type'] if row and row['install_type'] else 'builtin'
         item['enabled'] = bool(row['enabled']) if row else True
+        # v12.4.5 表登记：该插件在 plugin_tables 中的 逻辑名→实际名 映射
+        item['table_map'] = []
+        try:
+            db = get_db()
+            for r in db.execute('SELECT logical_name, actual_name FROM plugin_tables '
+                                'WHERE plugin_id=? ORDER BY logical_name', (pid,)).fetchall():
+                item['table_map'].append({'logical': r['logical_name'], 'actual': r['actual_name']})
+        except Exception:
+            pass
         out.append(item)
     return sorted(out, key=lambda x: (0 if x.get('core') else 1, x['id']))
 
@@ -415,3 +424,135 @@ def register_uploaded_plugin(plugin_id, manifest, blueprint=None):
         for pfx in (up if isinstance(up, (list, tuple)) else [up]):
             _manifest_prefix_cache.setdefault(str(pfx), plugin_id)
     return True
+
+
+# ============================================================
+# v12.4.5 插件表管理：统一建表入口 + 表名分配 + 一致性校验
+# 目标：名字相近的插件分散开发也不会撞表；插件表名不写死，统一走平台 API 取实际名
+# ============================================================
+
+# 存量（v12.4.5 之前已存在）平台业务表前缀——白名单豁免，不提示未登记
+_LEGACY_TABLE_PREFIXES = ('wbs_', 'reqcollect_', 'test_', 'ai_', 'production_', 'bug_',
+                          'delivery_', 'device_', 'gantt_', 'material_', 'ota_', 'tech_',
+                          'version_', 'approval_', 'bom_', 'contract_', 'defect_', 'dev_',
+                          'milestone_', 'quality_', 'requirement_', 'requisition_', 'revenue_',
+                          'software_', 'timeline_', 'warehouse_')
+# 平台系统表（非插件业务表）
+_PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
+                           'user_plugins', 'operation_logs', 'ai_providers',
+                           'ai_chat_logs', 'approval_requests'}
+# 平台早期无前缀遗留业务表（白名单豁免；deliveries 已于 v12.4.5 清理删除）
+_PLATFORM_LEGACY_TABLES = {'users', 'products', 'contracts', 'deliveries',
+                           'devices', 'inventory', 'requirements', 'tasks'}
+
+
+def _allocate_table_name(db, desired_name):
+    """撞名自动分配：desired_name 已被占用时生成 desired_name_2 / _3 …（全局唯一）"""
+    candidate = desired_name
+    n = 1
+    while True:
+        hit = db.execute('SELECT 1 FROM plugin_tables WHERE actual_name=?', (candidate,)).fetchone()
+        if not hit:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (candidate,)).fetchone()
+            if not exists:
+                return candidate
+        n += 1
+        candidate = f'{desired_name}_{n}'
+
+
+def create_plugin_table(plugin_id, desired_name, ddl, register_only=False):
+    """统一建表入口（v12.4.5，插件必须通过本入口建表）：
+    - 前缀校验：表名必须带业务前缀（形如 xxx_items），禁止裸表名；建议使用「插件id_」前缀（天然隔离）
+    - 占用检查：同一表名被其他插件登记占用 → 自动分配 {name}_2/_3 后缀（插件无需反复改名）
+    - 登记：写入 plugin_tables（plugin_id, logical_name=desired_name, actual_name=实际名）
+    - 建表：DDL 中表名替换为实际名后执行（请写 CREATE TABLE IF NOT EXISTS 保证幂等）
+    - 重装/重复调用：同一插件同一逻辑名 → 沿用已登记实际名，不重新分配（数据不丢）
+    返回实际表名 actual_name（插件读写时统一通过 get_table_name() 获取）。
+    """
+    if '_' not in desired_name or desired_name.startswith('_') or desired_name.endswith('_'):
+        raise ValueError(f'表名「{desired_name}」必须带业务前缀（如 {plugin_id}_items），'
+                         f'禁止使用裸表名，请走平台统一建表入口 create_plugin_table()')
+    db = get_db()
+    # 重装/重复调用：同一插件同一逻辑名 → 沿用已分配名（防表名漂移丢数据）
+    row = db.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
+                     (plugin_id, desired_name)).fetchone()
+    if row:
+        actual = row['actual_name']
+    else:
+        hit = db.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
+                         (desired_name,)).fetchone()
+        if hit and hit['plugin_id'] != plugin_id:
+            actual = _allocate_table_name(db, desired_name)   # 被其他插件占用 → 自动分配
+        else:
+            actual = desired_name                              # 空闲或存量裸表 → 沿用并补登记
+        db.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
+                   (plugin_id, desired_name, actual))
+        db.commit()
+    # 执行 DDL（表名替换为实际名；IF NOT EXISTS 幂等；register_only 只登记不建表）
+    if ddl and not register_only:
+        db.execute(ddl.replace(desired_name, actual))
+        db.commit()
+    return actual
+
+
+def get_table_name(plugin_id, desired_name):
+    """插件读写时获取实际表名（不写死表名，统一走本 API）：
+    - 已登记：直接返回分配名
+    - 未登记：按与 create_plugin_table 相同的规则补登记（沿用空闲表名或自动分配）
+    返回实际表名 str。
+    """
+    db = get_db()
+    row = db.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
+                     (plugin_id, desired_name)).fetchone()
+    if row:
+        return row['actual_name']
+    hit = db.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
+                     (desired_name,)).fetchone()
+    actual = _allocate_table_name(db, desired_name) if (hit and hit['plugin_id'] != plugin_id) else desired_name
+    db.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
+               (plugin_id, desired_name, actual))
+    db.commit()
+    return actual
+
+
+def suffix_table_name(plugin_id, base_name):
+    """可选能力：动态建多张同构表时生成带时间戳后缀的表名（如 xxx_202610261730）。
+    仅用于「一个插件按需动态生成多张结构相同的表」场景；常规单表请用 create_plugin_table()。
+    表名会随调用时刻变化，不可用于重装后仍需恢复数据的持久业务表。
+    """
+    if not base_name.startswith(plugin_id + '_'):
+        raise ValueError(f'表名必须以插件前缀「{plugin_id}_」开头')
+    return f'{base_name}_{datetime.now().strftime("%Y%m%d%H%M")}'
+
+
+def check_plugin_tables_integrity():
+    """启动一致性校验（v12.4.5）：
+    返回 (warnings, infos)：
+    - warnings：登记的 actual_name 在 sqlite_master 中不存在（插件声明了表但未建/未走统一入口建错名）
+    - infos：库中存在未登记的业务表（裸建表，建议改走 create_plugin_table() 补登记）
+    存量平台表/存量插件表白名单豁免。
+    """
+    db = get_db()
+    warnings, infos = [], []
+    try:
+        rows = db.execute('SELECT plugin_id, logical_name, actual_name FROM plugin_tables '
+                          'ORDER BY plugin_id, logical_name').fetchall()
+        for r in rows:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (r['actual_name'],)).fetchone()
+            if not exists:
+                warnings.append(f'插件「{r["plugin_id"]}」登记表 {r["logical_name"]} → '
+                                f'实际 {r["actual_name"]} 尚未建表，请检查是否调用 create_plugin_table()')
+        reg_actuals = {r['actual_name'] for r in rows}
+        all_tabs = [x[0] for x in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+        for t in all_tabs:
+            if t in reg_actuals or t in _PLATFORM_SYSTEM_TABLES or t in _PLATFORM_LEGACY_TABLES:
+                continue
+            if t.startswith(_LEGACY_TABLE_PREFIXES):
+                continue
+            infos.append(f'表「{t}」未走平台统一建表入口（建议插件改用 create_plugin_table() 登记）')
+    except Exception as e:
+        warnings.append(f'表一致性校验执行异常：{e}')
+    return warnings, infos
