@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ book.name }} - 需求收集管理{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/css/pluginsCss.css') }}">
-<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/plugins.css') }}">
-<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/css/luckysheet.css') }}">
-<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/assets/iconfont/iconfont.css') }}">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/css/pluginsCss.css') }}?v=1240">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/plugins/plugins.css') }}?v=1240">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/css/luckysheet.css') }}?v=1240">
+<link rel="stylesheet" href="{{ url_for('reqcollect.static', filename='luckysheet/assets/iconfont/iconfont.css') }}?v=1240">
 <style>
     html, body { height: 100%; overflow: hidden; }
     .book-wrap { display:flex; flex-direction:column; height:calc(100vh - 8px); padding:0 8px; box-sizing:border-box; }
@@ -44,9 +44,9 @@
     <input type="file" id="xlsxImport" accept=".xlsx,.xls,.csv" style="display:none;">
 </div>
 
-<script src="{{ url_for('reqcollect.static', filename='luckysheet/plugins/js/plugin.js') }}"></script>
-<script src="{{ url_for('reqcollect.static', filename='luckysheet/luckysheet.umd.js') }}" defer></script>
-<script src="{{ url_for('reqcollect.static', filename='luckysheet/xlsx.full.min.js') }}" defer></script>
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/plugins/js/plugin.js') }}?v=1240"></script>
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/luckysheet.umd.js') }}?v=1240" defer></script>
+<script src="{{ url_for('reqcollect.static', filename='luckysheet/xlsx.full.min.js') }}?v=1240" defer></script>
 <span id="userMeta" data-user="{{ current_user }}" hidden></span>
 <script>
 const SID = {{ book.id }};
@@ -107,6 +107,7 @@ function startSheet() {
                         lang: 'zh',
                         data: d.data,
                         title: d.name,
+                        cache: false,               // 关键修复：禁用浏览器 localStorage 旧缓存恢复
                         showinfobar: true,
                         showsheetbar: true,
                         showtoolbar: true,
@@ -135,6 +136,7 @@ function startSheet() {
 }
 
 // 将 Luckysheet 底部的 sheet 标签栏与统计栏移动到顶部（公式栏之前）
+// 只在 create 完成后移动一次（多次调度会造成中间态，干扰点击坐标）
 function moveBarsToTop() {
     const lk = document.getElementById('luckysheet');
     if (!lk) return;
@@ -151,14 +153,20 @@ function moveBarsToTop() {
         moved = true;
     }
     if (moved) {
-        // 触发 Luckysheet 重新计算布局
-        setTimeout(function(){ try { window.dispatchEvent(new Event('resize')); } catch(e) {} }, 200);
+        // 触发 Luckysheet 重新计算布局（坐标与滚动条都按新布局重算）
+        setTimeout(function(){ try { window.dispatchEvent(new Event('resize')); } catch(e) {} }, 300);
     }
 }
 function scheduleMoveBarsToTop() {
-    [600, 1500, 3000].forEach(ms => {
-        setTimeout(moveBarsToTop, ms);
-    });
+    // create 渲染完成后移动一次；若 DOM 尚未就绪，仅 1 秒后补一次，避免中间态
+    setTimeout(moveBarsToTop, 400);
+    setTimeout(() => {
+        const lk = document.getElementById('luckysheet');
+        if (!lk.querySelector('.luckysheet-formula-bar') && lk.querySelector('.luckysheet-sheet-bar')) {
+            // 公式栏尚未出现时只补一次
+            setTimeout(moveBarsToTop, 800);
+        }
+    }, 1200);
 }
 
 // Ctrl + 滚轮 缩放（Excel 习惯）
@@ -173,6 +181,8 @@ document.getElementById('luckysheet').addEventListener('wheel', function(e) {
     } catch (err) {}
     const nz = Math.max(0.5, Math.min(2, Math.round((cur + step) * 10) / 10));
     try { luckysheet.setSheetZoom(nz); } catch (err) {}
+    // 缩放后触发布局重算，防止坐标计算残留旧缩放值
+    setTimeout(function(){ try { window.dispatchEvent(new Event('resize')); } catch(err) {} }, 80);
 }, { passive: false });
 
 // 导入 Excel

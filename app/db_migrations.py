@@ -125,6 +125,8 @@ MIGRATIONS = [
     (5, 'v10.3.1: plugin_registry.tables + approval_requests 统一审批表', None),
     # v6: v12.1.0 平台定位 —— plugin_registry 加 enabled 列（平台级启停）+ 三级角色（老库 admin → platform_admin）
     (6, 'v12.1.0: plugin_registry.enabled + 三级角色', None),
+    # v7: v12.4.1 平台 AI 助手 —— ai_providers（模型服务商配置）+ ai_chat_logs（问答记录，仅平台管理员）
+    (7, 'v12.4.1: ai_providers + ai_chat_logs', None),
 ]
 
 
@@ -206,6 +208,25 @@ def run_migrations():
                     db.execute("ALTER TABLE plugin_registry ADD COLUMN install_type TEXT DEFAULT 'builtin'")
                 except sqlite3.OperationalError:
                     pass
+        elif ver == 7:
+            # v12.4.1 平台 AI 助手：模型服务商配置 + 问答记录（仅平台管理员使用）
+            db.execute('''CREATE TABLE IF NOT EXISTS ai_providers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                api_url TEXT,
+                api_key TEXT DEFAULT '',
+                models TEXT DEFAULT '',
+                default_model TEXT DEFAULT '',
+                enabled INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                updated_at TEXT DEFAULT (datetime('now','localtime')))''')
+            db.execute('''CREATE TABLE IF NOT EXISTS ai_chat_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id INTEGER,
+                model TEXT,
+                question TEXT,
+                answer TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime')))''')
         _set_version(db, ver, note)
     db.commit()
 

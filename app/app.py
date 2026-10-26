@@ -114,6 +114,10 @@ def from_json_filter(value):
 from ext_routes import ext_bp
 app.register_blueprint(ext_bp)
 
+# v12.4.1 平台管理员 AI 智能助手（配置 + 数据分析，仅 platform_admin）
+from ai_routes import ai_bp
+app.register_blueprint(ai_bp)
+
 # v10.4.0 插件包化：自动加载 plugins/ 下的独立插件包
 from plugins import load_plugins
 load_plugins(app)

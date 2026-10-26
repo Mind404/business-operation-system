@@ -74,7 +74,7 @@
 <body>
     <div class="error-box">
         <div class="error-icon">⚠️</div>
-        <div class="error-title">输入数据校验未通过</div>
+        <div class="error-title">{{ title or '输入数据校验未通过' }}</div>
         <div class="error-message">{{ message }}</div>
         <a href="{{ back_url }}" class="btn">返回修改</a>
         <a href="/" class="btn btn-secondary">返回首页</a>
