@@ -18,6 +18,44 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+
+# v12.7.2 性能优化：WSGI 层 gzip 压缩中间件（静态文件也能压缩，15MB manifest→~4MB）
+class GzipMiddleware:
+    """轻量 gzip 中间件：对文本类型响应自动压缩，减少局域网传输时间。"""
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        accept_encoding = environ.get('HTTP_ACCEPT_ENCODING', '')
+        if 'gzip' not in accept_encoding.lower():
+            return self.wsgi_app(environ, start_response)
+
+        self._do_gzip = False
+        def custom_start_response(status, headers, exc_info=None):
+            headers_list = list(headers)
+            headers_dict = dict(headers_list)
+            content_type = headers_dict.get('Content-Type', '')
+            content_length = int(headers_dict.get('Content-Length', 0))
+            compressible = (content_type.startswith('text/') or
+                            'application/json' in content_type or
+                            'application/javascript' in content_type or
+                            'application/xml' in content_type)
+            if compressible and content_length > 1024:
+                self._do_gzip = True
+                # 移除 Content-Length（压缩后大小变了），加 gzip 头
+                headers_list = [(k, v) for k, v in headers_list if k.lower() != 'content-length']
+                headers_list.append(('Content-Encoding', 'gzip'))
+                headers_list.append(('Vary', 'Accept-Encoding'))
+            return start_response(status, headers_list, exc_info)
+
+        result = self.wsgi_app(environ, custom_start_response)
+        if self._do_gzip:
+            data = b''.join(result)
+            compressed = gzip.compress(data, compresslevel=6)
+            return [compressed]
+        return result
+
+app.wsgi_app = GzipMiddleware(app.wsgi_app)
 # v12.2.0 安全加固：SECRET_KEY 自动生成并持久化（首次启动生成 secret.key，后续读取）
 _SECRET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'secret.key')
 def _load_or_create_secret(path):
@@ -173,10 +211,17 @@ def _force_static_mime(resp):
         resp.headers['Content-Type'] = 'text/javascript; charset=utf-8'
     elif p.endswith('.css'):
         resp.headers['Content-Type'] = 'text/css; charset=utf-8'
+    elif p.endswith('.json'):
+        resp.headers['Content-Type'] = 'application/json; charset=utf-8'
     # v12667：表格静态资源全部带 ?v= 版本号引用，可安全长缓存一年。
-    # 只有版本号变化（如 12667→12668）浏览器才会重新拉取；否则二次打开秒开，
-    # 避免 19 个分块每次全量重新下载（内网安全软件逐文件扫描是首屏慢的主因）。
-    if p.startswith('/univer/static/'):
+    # v12.7.2：所有静态资源（CSS/JS/JSON/图片）统一长缓存一年，二次打开秒开。
+    is_static = (p.startswith('/univer/static/') or
+                 p.startswith('/static/') or
+                 p.endswith('.js') or p.endswith('.css') or
+                 p.endswith('.json') or p.endswith('.png') or
+                 p.endswith('.jpg') or p.endswith('.svg') or
+                 p.endswith('.woff2') or p.endswith('.woff'))
+    if is_static:
         resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return resp
 
@@ -1089,6 +1134,17 @@ def init_db():
     db = sqlite3.connect(app.config['DATABASE'])
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
+    # v12.7.2 性能优化：高频查询索引（CREATE INDEX IF NOT EXISTS 幂等）
+    db.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_wbs_tasks_project ON wbs_tasks(project_id);
+        CREATE INDEX IF NOT EXISTS idx_wbs_tasks_status ON wbs_tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_wbs_tasks_planend ON wbs_tasks(plan_end);
+        CREATE INDEX IF NOT EXISTS idx_wbs_tasks_parent ON wbs_tasks(parent_id);
+        CREATE INDEX IF NOT EXISTS idx_oplogs_created ON operation_logs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_oplogs_operator ON operation_logs(operator);
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+    """)
     # 首次运行（users 为空）：写入默认账号，保证解压即用
     # 管理员 admin/admin123，普通用户 product/product123
     if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 0:

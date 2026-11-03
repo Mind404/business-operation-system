@@ -167,10 +167,14 @@ def _insert_dup_rows(db, table, rows):
 def wbs_projects():
     from datetime import date, timedelta
     db = get_db()
-    rows = db.execute('''SELECT p.*,
-        (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id) AS task_count,
-        (SELECT COUNT(*) FROM wbs_tasks t WHERE t.project_id=p.id AND t.parent_id=0) AS phase_count
-        FROM wbs_projects p ORDER BY p.id DESC''').fetchall()
+    # v12.7.2 性能优化：批量统计任务数，消除 N+1 子查询
+    rows = db.execute('SELECT p.* FROM wbs_projects p ORDER BY p.id DESC').fetchall()
+    counts = db.execute('''SELECT project_id,
+        COUNT(*) AS task_count,
+        SUM(CASE WHEN parent_id=0 THEN 1 ELSE 0 END) AS phase_count
+        FROM wbs_tasks GROUP BY project_id''').fetchall()
+    count_map = {r['project_id']: (r['task_count'], r['phase_count']) for r in counts}
+    rows = [dict(r, task_count=count_map.get(r['id'], (0,0))[0], phase_count=count_map.get(r['id'], (0,0))[1]) for r in rows]
     # 预警统计
     today = date.today().isoformat()
     soon3 = (date.today() + timedelta(days=3)).isoformat()
