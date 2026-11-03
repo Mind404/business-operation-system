@@ -550,6 +550,7 @@ def _overdue_report():
                    p.name AS project
             FROM wbs_tasks t LEFT JOIN wbs_projects p ON t.project_id = p.id
             WHERE t.plan_end IS NOT NULL AND t.plan_end != '' AND (t.parent_id > 0 OR t.parent_id IS NULL)
+              AND t.approval_status = '已通过'
             ORDER BY t.plan_end
         ''').fetchall()
         done_status = ('已完成', '已取消')

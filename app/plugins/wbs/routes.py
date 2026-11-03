@@ -179,9 +179,10 @@ def wbs_projects():
     today = date.today().isoformat()
     soon3 = (date.today() + timedelta(days=3)).isoformat()
     soon7 = (date.today() + timedelta(days=7)).isoformat()
-    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today,)).fetchone()[0]
-    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today, soon3)).fetchone()[0]
-    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (soon3, soon7)).fetchone()[0]
+    # 口径与预警看板统一：只统计任务级(parent_id>0或NULL)审批已通过的任务，待审批/已驳回不纳入
+    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today,)).fetchone()[0]
+    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today, soon3)).fetchone()[0]
+    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (soon3, soon7)).fetchone()[0]
     return render_template('wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today)
 
 

@@ -1202,7 +1202,8 @@ def index():
         'wbs_tasks_pending': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE approval_status='待审批'").fetchone()[0],
         'wbs_tasks_active': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status IN ('进行中','待开始') AND approval_status='已通过'").fetchone()[0],
         'wbs_tasks_done': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status='已完成'").fetchone()[0],
-        'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')").fetchone()[0],
+        # v12.7.3 口径统一：与 WBS 预警看板一致（叶子任务 + 审批已通过 + 截止<今天 + 非完成/取消 + 截止非空）
+        'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end < date('now','localtime') AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'").fetchone()[0],
     }
     # v12.5.39：最近动态仅平台管理员可见（非 platform_admin 不取数）
     recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall() if session.get('user_role') == 'platform_admin' else []
