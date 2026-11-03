@@ -19,7 +19,6 @@ import io
 import json
 import os
 import re
-import gzip
 import sqlite3
 import urllib.parse
 
@@ -32,33 +31,6 @@ from plugin_system import log_operation, create_plugin_table
 
 bp = make_blueprint('univer_sheet', __name__, static_url_path='/univer/static')
 
-# v12.6.6：内网电脑上有安全软件在 ~6.2MB 处截断 HTTP 响应，
-# 改为启动时一次性读入内存并 gzip 压缩（6.8MB→1.8MB），绕过截断阈值。
-_UNIVER_APP_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), 'static', 'univer', 'univer-app.js')
-
-try:
-    with open(_UNIVER_APP_PATH, 'rb') as _f:
-        _UNIVER_APP_RAW = _f.read()
-    _UNIVER_APP_GZIP = gzip.compress(_UNIVER_APP_RAW, compresslevel=9)
-except Exception:
-    _UNIVER_APP_RAW = b''
-    _UNIVER_APP_GZIP = b''
-
-
-@bp.route('/univer/static/univer/univer-app.js')
-def _serve_univer_app_inmemory():
-    if 'gzip' in request.headers.get('Accept-Encoding', ''):
-        data = _UNIVER_APP_GZIP
-        resp = Response(data, mimetype='text/javascript; charset=utf-8')
-        resp.headers['Content-Encoding'] = 'gzip'
-    else:
-        data = _UNIVER_APP_RAW
-        resp = Response(data, mimetype='text/javascript; charset=utf-8')
-    resp.headers['Content-Length'] = str(len(data))
-    resp.headers['Vary'] = 'Accept-Encoding'
-    resp.headers['Cache-Control'] = 'no-cache'
-    return resp
 
 MANAGER_ROLES = ('admin', 'platform_admin')
 ROOM_NAME_RE = re.compile(r'^[\w\u4e00-\u9fff\u3000-\u303f\-]{1,50}$')

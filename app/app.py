@@ -13,7 +13,7 @@ import io
 import gzip
 from datetime import datetime, date, timedelta
 import time
-from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, current_app, Response
+from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, send_from_directory, current_app, Response
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -169,97 +169,17 @@ def _force_static_mime(resp):
     """v12.6.6：Windows 内嵌 Python 的 mimetypes 注册表可能把 .js 识别成 text/plain，
     导致 ESM 模块被浏览器严格 MIME 检查拒绝。这里对 .js/.mjs/.css 响应强制设置正确 Content-Type。"""
     p = request.path or ''
-    if p == '/univer/engine.js':
-        if request.args.get('raw') == '1':
-            # v12660 HTTPS 静态直发：原文件标准 text/javascript
-            resp.headers['Content-Type'] = 'text/javascript; charset=utf-8'
-        elif request.args.get('seg') is not None or request.args.get('meta') == '1':
-            # v12.6.7 拆文件：分段/元数据走标准 MIME，EDR 按普通 JS 放行
-            resp.headers['Content-Type'] = 'text/javascript; charset=utf-8'
-        else:
-            # 兼容旧版：gzip 字节流（无 Content-Encoding 头），伪装成 octet-stream
-            resp.headers['Content-Type'] = 'application/octet-stream'
-        return resp
     if p.endswith('.js') or p.endswith('.mjs'):
         resp.headers['Content-Type'] = 'text/javascript; charset=utf-8'
     elif p.endswith('.css'):
         resp.headers['Content-Type'] = 'text/css; charset=utf-8'
+    # v12667：表格静态资源全部带 ?v= 版本号引用，可安全长缓存一年。
+    # 只有版本号变化（如 12667→12668）浏览器才会重新拉取；否则二次打开秒开，
+    # 避免 19 个分块每次全量重新下载（内网安全软件逐文件扫描是首屏慢的主因）。
+    if p.startswith('/univer/static/'):
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return resp
 
-# v12.6.6：内网安全软件在 ~6MB 处截断 HTTP 响应，且带 Content-Encoding: gzip 的响应会被清空 body。
-# v12.6.7「拆文件」方案：不再压缩伪装，而是把 6.8MB 引擎文件切成多段，每段 <1.4MB 标准 text/javascript 下发，
-# 每段都远低于 EDR 截断阈值，浏览器逐段下载后拼接成完整文件再动态 import。
-# 懒加载：第一次请求时才定位文件，避免启动时路径/CWD 问题导致空数据。
-_UNIVER_CACHE = {'raw': None, 'gzip': None, 'error': None}
-_UNIVER_SEG_SIZE = 1_400_000  # 每段 1.4MB，EDR 阈值约 6.26MB，留足余量
-
-def _locate_univer_app():
-    """按优先级尝试多个候选路径，返回读到的 bytes 或 None"""
-    candidates = [
-        os.path.join(app.root_path, 'plugins', 'univer_sheet', 'static', 'univer', 'univer-app.js'),
-        os.path.join(os.getcwd(), 'app', 'plugins', 'univer_sheet', 'static', 'univer', 'univer-app.js'),
-        os.path.join(os.getcwd(), 'plugins', 'univer_sheet', 'static', 'univer', 'univer-app.js'),
-    ]
-    for p in candidates:
-        try:
-            if os.path.isfile(p) and os.path.getsize(p) > 1_000_000:
-                with open(p, 'rb') as f:
-                    return f.read(), p
-        except Exception:
-            continue
-    return None, candidates
-
-@app.route('/univer/engine.js')
-def _serve_univer_engine():
-    if _UNIVER_CACHE['raw'] is None and _UNIVER_CACHE['error'] is None:
-        data, info = _locate_univer_app()
-        if data is None:
-            _UNIVER_CACHE['error'] = '未找到 univer-app.js，已尝试: ' + ' | '.join(info)
-            app.logger.error(_UNIVER_CACHE['error'])
-        else:
-            _UNIVER_CACHE['raw'] = data
-            _UNIVER_CACHE['gzip'] = gzip.compress(data, compresslevel=9)
-            app.logger.info('univer-app.js 已加载 %d 字节，gzip 后 %d 字节，切 %d 段，路径=%s',
-                            len(data), len(_UNIVER_CACHE['gzip']),
-                            (len(data) + _UNIVER_SEG_SIZE - 1) // _UNIVER_SEG_SIZE, info)
-    if _UNIVER_CACHE['error']:
-        return Response('// univer engine load error: ' + _UNIVER_CACHE['error'],
-                        mimetype='text/javascript; charset=utf-8'), 500
-    raw = _UNIVER_CACHE['raw']
-    # v12660 HTTPS 静态直发：EDR 不解密 HTTPS 响应，6.8MB 原文件可完整直达，
-    # 前端用普通 <script> 标签加载，不经 blob 动态构造，绕开进程内净化。
-    if request.args.get('raw') == '1':
-        return Response(raw, mimetype='text/javascript; charset=utf-8',
-                        headers={'Cache-Control': 'no-cache'})
-    seg_count = (len(raw) + _UNIVER_SEG_SIZE - 1) // _UNIVER_SEG_SIZE
-    # ?meta=1：返回分段元数据，供前端并发下载与校验
-    if request.args.get('meta') == '1':
-        return Response(json.dumps({
-            'ok': True,
-            'total_bytes': len(raw),
-            'seg_size': _UNIVER_SEG_SIZE,
-            'seg_count': seg_count,
-        }, ensure_ascii=False), mimetype='application/json; charset=utf-8')
-    # ?seg=N：返回第 N 段（标准 text/javascript，<2MB）
-    seg = request.args.get('seg')
-    if seg is not None:
-        try:
-            n = int(seg)
-        except (TypeError, ValueError):
-            return Response('// bad seg param', mimetype='text/javascript; charset=utf-8'), 400
-        if n < 0 or n >= seg_count:
-            return Response('// seg out of range', mimetype='text/javascript; charset=utf-8'), 416
-        start = n * _UNIVER_SEG_SIZE
-        chunk = raw[start:start + _UNIVER_SEG_SIZE]
-        resp = Response(chunk, mimetype='text/javascript; charset=utf-8')
-        resp.headers['X-Univer-Seg'] = '%d/%d' % (n, seg_count)
-        resp.headers['X-Univer-Total'] = str(len(raw))
-        resp.headers['Cache-Control'] = 'no-cache'
-        return resp
-    # 无参数：v=12659 gzip 伪装流（octet-stream，无 Content-Encoding 头），前端 DecompressionStream 解压
-    resp = Response(_UNIVER_CACHE['gzip'], mimetype='application/octet-stream')
-    resp.headers['Cache-Control'] = 'no-cache'
-    return resp
 
 @app.context_processor
 def inject_user():
@@ -815,6 +735,138 @@ def _load_uploaded_plugin(plugin_id, target):
     except Exception as e:
         return False, f'加载失败：{e}'
 
+
+# ============================================================
+# v12.7.1 数据备份中心（仅平台管理员）：
+# 手动备份 / 备份列表 / 下载备份 / 恢复（恢复前自动保护现场）
+# 自动备份：启动时 perform_backup()；保留策略：各前缀最近 7 份
+# ============================================================
+def _backup_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+
+
+def _backup_list():
+    """返回备份文件列表（按时间倒序）：名称/大小/修改时间/类型"""
+    bdir = _backup_dir()
+    if not os.path.isdir(bdir):
+        return []
+    out = []
+    for f in os.listdir(bdir):
+        if not f.endswith('.db') or '_备份_' not in f:
+            continue
+        fp = os.path.join(bdir, f)
+        try:
+            st = os.stat(fp)
+            pre = f.split('_备份_')[0]
+            kind = '主库' if pre == 'business' else f'插件库({pre})'
+            out.append({'name': f, 'size': st.st_size,
+                        'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime)),
+                        'kind': kind})
+        except Exception:
+            pass
+    out.sort(key=lambda x: x['name'], reverse=True)
+    return out
+
+
+@app.route('/admin/backup')
+def admin_backup():
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    files = _backup_list()
+    return render_template('admin_backup.html', files=files,
+                           current_db=os.path.basename(app.config['DATABASE']))
+
+
+@app.route('/admin/backup/run', methods=['POST'])
+def admin_backup_run():
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    try:
+        ok, msg, made = perform_backup('手动')
+        flash(f'💾 备份成功：{msg}' if ok else f'备份未执行：{msg}', 'success' if ok else 'error')
+    except Exception as e:
+        flash(f'备份失败：{e}', 'error')
+    return redirect(url_for('admin_backup'))
+
+
+@app.route('/admin/backup/download/<path:fname>')
+def admin_backup_download(fname):
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    import re
+    if (not fname.endswith('.db') or '_备份_' not in fname
+            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+        flash('非法的备份文件名', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    if not os.path.exists(os.path.join(bdir, fname)):
+        flash('备份文件不存在', 'error')
+        return redirect(url_for('admin_backup'))
+    return send_from_directory(bdir, fname, as_attachment=True)
+
+
+@app.route('/admin/backup/restore', methods=['POST'])
+def admin_backup_restore():
+    """从备份列表恢复：先把当前库另存为保护备份 → checkpoint → 覆盖目标库 → 清 wal/shm。
+    运行时覆盖受文件占用影响时给出明确指引（先停止系统再恢复）。"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    fname = (request.form.get('backup_file') or '').strip()
+    import re
+    if (not fname.endswith('.db') or '_备份_' not in fname
+            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+        flash('请选择有效的备份文件', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    src = os.path.join(bdir, fname)
+    if not os.path.exists(src):
+        flash('备份文件不存在，无法恢复', 'error')
+        return redirect(url_for('admin_backup'))
+    # 确定目标库
+    pre = fname.split('_备份_')[0]
+    if pre == 'business':
+        target = app.config['DATABASE']
+        kind = '主库'
+    else:
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+        target = os.path.join(data_dir, f'{pre}.db')
+        kind = f'插件库({pre})'
+    # 恢复前自动保护现场（生成新的保护备份）
+    try:
+        ok, msg, _ = perform_backup('恢复前保护')
+    except Exception:
+        ok, msg = False, '保护备份失败'
+    if not ok:
+        flash(f'恢复中止：现场保护备份失败（{msg}）。请先停止系统，手动用备份文件替换 business.db 后重启。', 'error')
+        return redirect(url_for('admin_backup'))
+    try:
+        # 先 checkpoint 当前目标库，把 wal 数据合并，避免覆盖后丢最近未落盘数据
+        try:
+            c = sqlite3.connect(target)
+            c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            c.close()
+        except Exception:
+            pass
+        import shutil
+        shutil.copy2(src, target)
+        for suffix in ('-wal', '-shm'):
+            try:
+                os.remove(target + suffix)
+            except Exception:
+                pass
+        flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。'
+              f'请重启系统（停止.bat → 启动.bat）后完全生效。', 'success')
+    except OSError as e:
+        flash(f'恢复{kind}失败（{e}）：可能系统正在占用数据库文件。'
+              f'请先停止系统，再点恢复；或手动把 backups/{fname} 复制替换 business.db（插件库对应 data/{pre}.db）后重启。', 'error')
+    except Exception as e:
+        flash(f'恢复失败：{e}（不影响现有数据，现场保护备份已生成）', 'error')
+    return redirect(url_for('admin_backup'))
+
 # ============================================================
 # 插件中心：浏览与订阅业务插件
 # ============================================================
@@ -1214,6 +1266,20 @@ def logs_export():
     return send_file(bio, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                      as_attachment=True, download_name=fname)
 
+@app.route('/admin/logs/clear', methods=['POST'])
+def logs_clear():
+    """清空全部动态日志（仅平台管理员，v12668）。清空后写入一条留痕记录，保证审计可溯。"""
+    if session.get('user_role') != 'platform_admin':
+        return jsonify(ok=False, msg='无权限：仅平台管理员可清空动态日志'), 403
+    db = get_db()
+    cur = db.execute('DELETE FROM operation_logs')
+    db.commit()
+    db.execute("INSERT INTO operation_logs (module, action, detail, operator) "
+               "VALUES ('系统', '清空动态日志', '平台管理员清空了全部动态日志', ?)",
+               (session.get('username', 'admin'),))
+    db.commit()
+    return jsonify(ok=True, msg='已清空 %d 条动态日志' % cur.rowcount)
+
 # ============================================================
 # API接口（供后续扩展）
 # ============================================================
@@ -1267,41 +1333,70 @@ def api_global_search():
 # 反向规划模块1：软件版本规划（根据用户需求反向规划版本升级）
 # ============================================================
 
+def perform_backup(label='启动'):
+    """数据备份核心（v12.1.2 启动自动备份 / v12.7.1 管理页手动备份共用）：
+    主库 + 全部插件独立库（v12.7.0 方案B）→ backups/，各前缀保留最近 7 份。
+    返回 (ok, msg, [本次生成的备份文件名])"""
+    import shutil
+    src = app.config['DATABASE']
+    if not os.path.exists(src):
+        return False, f'数据库不存在（{src}），无需备份', []
+    # v12.2.0 WAL 模式：先 checkpoint 把 -wal 未落盘数据合并进主库，避免备份缺最新记录
+    try:
+        c = sqlite3.connect(src)
+        c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        c.close()
+    except Exception:
+        pass
+    bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+    os.makedirs(bdir, exist_ok=True)
+    ts = time.strftime('%Y%m%d_%H%M%S')
+    made = []
+    dst = os.path.join(bdir, f'business_备份_{ts}.db')
+    shutil.copy2(src, dst)
+    made.append(os.path.basename(dst))
+    # v12.7.0 数据隔离（方案B）：上传插件的独立库一并备份
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+    if os.path.isdir(data_dir):
+        for f in sorted(os.listdir(data_dir)):
+            if f.endswith('.db'):
+                pdst = os.path.join(bdir, f.replace('.db', f'_备份_{ts}.db'))
+                try:
+                    shutil.copy2(os.path.join(data_dir, f), pdst)
+                    made.append(os.path.basename(pdst))
+                except Exception:
+                    pass
+    # 只保留最近 7 份（business_ 与各 <插件id>_ 前缀各自保留 7 份），自动清理更旧的
+    groups = {}
+    for f in os.listdir(bdir):
+        if not f.endswith('.db') or '_备份_' not in f:
+            continue
+        pre = f.split('_备份_')[0]
+        groups.setdefault(pre, []).append(f)
+    for pre, fl in groups.items():
+        for f in sorted(fl)[:-7]:
+            try:
+                os.remove(os.path.join(bdir, f))
+            except Exception:
+                pass
+    msg = f'已备份主库 → backups/{os.path.basename(dst)}'
+    if len(made) > 1:
+        msg += f'，另含 {len(made) - 1} 份插件库备份'
+    msg += f'（各前缀保留最近 7 份）'
+    return True, msg, made
+
+
 if __name__ == '__main__':
     # ============================================================
     # v12.1.2 数据防护：启动时自动全库备份（保留最近 7 份）
     # 覆盖场景：增加/卸载插件、误操作、升级异常等任何意外，均可回滚
     # ============================================================
-    def auto_backup_db():
-        try:
-            import shutil
-            src = app.config['DATABASE']
-            if not os.path.exists(src):
-                return
-            # v12.2.0 WAL 模式：先 checkpoint 把 -wal 未落盘数据合并进主库，避免备份缺最新记录
-            try:
-                c = sqlite3.connect(src)
-                c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-                c.close()
-            except Exception:
-                pass
-            bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
-            os.makedirs(bdir, exist_ok=True)
-            ts = time.strftime('%Y%m%d_%H%M%S')
-            dst = os.path.join(bdir, f'business_备份_{ts}.db')
-            shutil.copy2(src, dst)
-            # 只保留最近 7 份，自动清理更旧的
-            files = sorted([f for f in os.listdir(bdir) if f.startswith('business_备份_') and f.endswith('.db')])
-            for f in files[:-7]:
-                try:
-                    os.remove(os.path.join(bdir, f))
-                except Exception:
-                    pass
-            print(f'[数据防护] 已自动备份数据库 → backups/{os.path.basename(dst)}（保留最近7份）')
-        except Exception as e:
-            print(f'[数据防护] 备份失败（不影响启动）: {e}')
-
-    auto_backup_db()
+    try:
+        ok, msg, _ = perform_backup('启动')
+        if ok:
+            print(f'[数据防护] 启动备份完成：{msg}')
+    except Exception as e:
+        print(f'[数据防护] 启动备份失败（不影响启动）: {e}')
     # 初始化数据库（CREATE TABLE IF NOT EXISTS，兼容旧数据库）
     init_db()
     # v12.2.0 密码哈希化迁移：存量明文密码原地升级为哈希（幂等）

@@ -4,10 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{{ room.name }} - 云文档表格</title>
-<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-ui.css') }}?v=12664">
-<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-docs.css') }}?v=12664">
-<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets.css') }}?v=12664">
-<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets-extras.css') }}?v=12664">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-design.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-ui.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-docs.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets-formula.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets-filter.css') }}?v=12667">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets-numfmt.css') }}?v=12667">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   #uv-header {
@@ -51,9 +54,9 @@
 /* v12.6.9 诊断：window.__uvDiag 实时记录加载状态 */
 window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0, head: '' };
 </script>
-<!-- v12664 多chunk方案：入口 engine.js 仅 1.1KB（小文件 EDR 不扫），内部动态加载 7 个 chunk（最大 4.4MB < EDR 阈值 6.26MB） -->
-<script src="/univer/static/univer/static-probe.js?v=12664"></script>
-<script type="module" src="/univer/static/univer/engine.js?v=12664"></script>
+<!-- v12667 多chunk方案：入口 engine.js 2.8KB + 19 个 chunk（最大 5.36MB < EDR 阈值 6.26MB），补渲染引擎插件 -->
+<script src="/univer/static/univer/static-probe.js?v=12667"></script>
+<script type="module" src="/univer/static/univer/engine.js?v=12667"></script>
 <script>
 /* 全局捕获引擎加载/初始化阶段的 JS 错误，直接打到容器中央，避免白屏无信息 */
 (function () {
@@ -130,6 +133,8 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
     }
     app.onDirty(function () {
       if (!booted) return;
+      var t = serialize();
+      if (lastSaved !== null && t === lastSaved) return; // 内容未变（初始化命令），不触发保存
       if (!dirty) setStatus('编辑中…（3 秒后自动保存）');
       dirty = true;
       scheduleSave();

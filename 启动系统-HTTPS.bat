@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 业务高效运转系统(HTTPS模式)
+title 业务高效运转系统(HTTPS模式·端口5443)
 set "CUR=%~dp0"
 
 :: 检测是否在压缩包内直接运行（路径含 .zip\）
@@ -28,7 +28,7 @@ cd /d "%CUR%app"
 
 echo ============================================================
 echo   业务高效运转系统
-echo   正在启动 HTTPS 模式，浏览器将自动打开 https://127.0.0.1:5000
+echo   正在启动 HTTPS 模式，浏览器将自动打开 https://127.0.0.1:5443
 echo   默认账号：admin / admin123
 echo   关闭本窗口即停止系统
 echo ============================================================
@@ -37,11 +37,11 @@ echo.
 :: 检测 HTTPS 证书是否已装入本机受信任根（仅提示，不阻塞启动）
 certutil -user -store Root business.local >nul 2>&1
 if %errorlevel%==0 (
-    echo   [证书] 已装入受信任根，浏览器可直接访问 https://127.0.0.1:5000
+    echo   [证书] 已装入受信任根，浏览器可直接访问 https://127.0.0.1:5443
 ) else (
     echo   [重要] 本机尚未安装本系统 HTTPS 证书！
     echo          请先双击「安装HTTPS证书.bat」完成安装，
-    echo          否则浏览器访问 https://127.0.0.1:5000 会超时打不开。
+    echo          否则浏览器访问 https://127.0.0.1:5443 会超时打不开。
     echo          装完证书后，重新双击本 bat 启动即可。
 )
 echo.
@@ -54,7 +54,7 @@ if not exist "%CUR%python\python.exe" (
 
 echo.
 echo   （启动日志同时写入 app\https_启动日志.txt，若闪退请把该文件发开发人员）
-"%CUR%python\python.exe" app.py --https > "%CUR%app\https_启动日志.txt" 2>&1
+"%CUR%python\python.exe" app.py --https --port 5443 > "%CUR%app\https_启动日志.txt" 2>&1
 
 echo.
 echo 系统已停止运行。

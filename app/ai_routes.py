@@ -473,7 +473,46 @@ def _collect_db_context(question, max_chars=8000):
         used += len(part)
     head = '数据库概要：共 %d 张业务表，其中 %d 张有数据（%d 张与你的问题相关）。只列出有数据的表，空表未读取。' % (
         len(tables), total_active, related)
-    return head + '\n\n' + '\n\n'.join(parts) if parts else head
+    # v12.7.0 数据隔离（方案B）：上传插件的数据表在独立库 app/data/<插件id>.db，跨库只读注入
+    import os as _os
+    data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
+    plug_parts, plug_files = [], []
+    if _os.path.isdir(data_dir):
+        for fn in sorted(_os.listdir(data_dir)):
+            if not fn.endswith('.db'):
+                continue
+            pid = fn[:-3]
+            try:
+                cdb = sqlite3.connect(_os.path.join(data_dir, fn), timeout=3.0)
+                cdb.row_factory = sqlite3.Row
+                tabs = [x[0] for x in cdb.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                    "ORDER BY name").fetchall()]
+                ptabs = []
+                for t in tabs:
+                    if t in _EXCLUDE_TABLES or not _SAFE_TABLE.match(t):
+                        continue
+                    try:
+                        cols = [c[1] for c in cdb.execute('PRAGMA table_info(%s)' % t).fetchall()]
+                        cnt = cdb.execute('SELECT COUNT(*) AS c FROM %s' % t).fetchone()['c']
+                        if cnt > 0:
+                            ptabs.append((t, cnt, cols))
+                    except Exception:
+                        pass
+                if ptabs:
+                    lines = ['插件「%s」独立库数据（%d 张有数据表）：' % (pid, len(ptabs))]
+                    for t, cnt, cols in ptabs:
+                        lines.append(_sample_part(cdb, t, cnt, cols, 1))
+                    plug_parts.append('\n'.join(lines))
+                    plug_files.append(pid)
+                cdb.close()
+            except Exception as e:
+                plug_parts.append('插件「%s」独立库读取失败: %s' % (pid, e))
+    extra = '\n\n'.join(plug_parts) if plug_parts else ''
+    if plug_files:
+        head += '另有 %d 个上传插件的独立库数据已读取（%s）。' % (len(plug_files), '、'.join(plug_files))
+    body = '\n\n'.join(parts) if parts else ''
+    return head + (('\n\n' + extra) if extra else '') + (('\n\n' + body) if body else '')
 
 
 def _sample_part(db, t, cnt, cols, score):

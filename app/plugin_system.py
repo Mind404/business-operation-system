@@ -4,9 +4,10 @@
 v10.5.0 只保留 WBS：核心常驻（个人中心/工作台）+ 唯一业务插件 WBS（所有登录用户可用）
 """
 import json
+import os
 import sqlite3
 from datetime import datetime
-from flask import g, session, current_app, redirect, url_for, request, flash
+from flask import g, session, current_app, redirect, url_for, request, flash, has_request_context
 
 # ============================================================
 # 插件清单
@@ -49,15 +50,80 @@ def _plugin_id_for_path(path):
 _WHITELIST_PREFIX = ('/login', '/static', '/plugins', '/profile', '/logout')
 
 
-def get_db():
+# ============================================================
+# v12.7.0 数据隔离（方案B）：
+#   内置/核心插件表留在主库；上传插件（install_type=upload）的数据表
+#   落到 app/data/<插件id>.db 独立库；登记表 plugin_tables 仍在主库。
+#   判定依据 = 当前请求 endpoint 前缀（blueprint 名 = 插件 id）。
+# ============================================================
+
+def _app_dir():
+    """plugin_system.py 所在目录（= app/）"""
+    return os.path.dirname(os.path.abspath(__file__))
+
+_upload_ids_cache = None
+
+def _upload_plugin_ids():
+    """当前 install_type='upload' 的插件 id 集合（独立短连接查主库，避免递归 get_db）"""
+    global _upload_ids_cache
+    if _upload_ids_cache is None:
+        try:
+            con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+            _upload_ids_cache = {r[0] for r in con.execute(
+                "SELECT id FROM plugin_registry WHERE install_type='upload'").fetchall()}
+            con.close()
+        except Exception:
+            _upload_ids_cache = set()
+    return _upload_ids_cache
+
+def _invalidate_upload_cache():
+    global _upload_ids_cache
+    _upload_ids_cache = None
+
+def _plugin_db_path(plugin_id):
+    """upload 插件 → app/data/<id>.db；内置/核心/未登记 → None（主库）"""
+    if not plugin_id or plugin_id not in _upload_plugin_ids():
+        return None
+    return os.path.join(_app_dir(), 'data', plugin_id + '.db')
+
+def _endpoint_plugin_id():
+    """当前请求所属插件 id（endpoint 前缀 = blueprint 名 = 插件 id）；非请求上下文返回 None"""
+    if not has_request_context():
+        return None
+    ep = getattr(request, 'endpoint', None) or ''
+    return ep.split('.')[0] if '.' in ep else None
+
+def _main_db():
+    """平台主库连接（系统表 / 登记表 plugin_tables / 内置插件数据）"""
     if 'db' not in g:
-        # v12.2.0 并发加固：与平台主库一致的 WAL + busy_timeout
         g.db = sqlite3.connect(current_app.config['DATABASE'], timeout=5.0)
         g.db.row_factory = sqlite3.Row
         g.db.execute('PRAGMA foreign_keys = ON')
         g.db.execute('PRAGMA journal_mode = WAL')
         g.db.execute('PRAGMA busy_timeout = 5000')
     return g.db
+
+def _db_for_plugin_id(plugin_id):
+    """按插件返回连接：upload → 独立库 data/<id>.db（不存在自动建）；其余 → 主库
+    注意：g 只支持属性式存取（g.db），不支持 g['key']= 赋值"""
+    pdb = _plugin_db_path(plugin_id)
+    if pdb is None:
+        return _main_db()
+    os.makedirs(os.path.dirname(pdb), exist_ok=True)
+    key = 'pdb_' + plugin_id
+    conn = getattr(g, key, None)
+    if conn is None:
+        conn = sqlite3.connect(pdb, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA journal_mode = WAL')
+        conn.execute('PRAGMA busy_timeout = 5000')
+        setattr(g, key, conn)
+    return conn
+
+def get_db():
+    """当前请求的数据库连接：上传插件的请求自动路由到其独立库，其余走主库"""
+    return _db_for_plugin_id(_endpoint_plugin_id())
 
 
 def init_plugin_tables():
@@ -100,6 +166,7 @@ def init_plugin_tables():
     db.execute(f'DELETE FROM plugin_registry WHERE id NOT IN ({placeholders})', valid_ids)
     db.execute(f'DELETE FROM user_plugins WHERE plugin_id NOT IN ({placeholders})', valid_ids)
     db.commit()
+    _invalidate_upload_cache()  # v12.7.0：registry 可能已变化，失效 upload ids 缓存
 
 
 def get_user_plugin_ids(user_id):
@@ -411,6 +478,7 @@ def uninstall_plugin(plugin_id):
     for k in [k for k, v in _manifest_prefix_cache.items() if v == plugin_id]:
         _manifest_prefix_cache.pop(k, None)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
+    _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
     return True, f'插件 {plugin_id} 已卸载（业务数据表保留）。重启系统后彻底移除。'
 
 
@@ -442,6 +510,7 @@ def register_uploaded_plugin(plugin_id, manifest, blueprint=None):
         for pfx in (up if isinstance(up, (list, tuple)) else [up]):
             _manifest_prefix_cache.setdefault(str(pfx), plugin_id)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
+    _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
     return True
 
 
@@ -492,26 +561,42 @@ def create_plugin_table(plugin_id, desired_name, ddl, register_only=False):
     if '_' not in desired_name or desired_name.startswith('_') or desired_name.endswith('_'):
         raise ValueError(f'表名「{desired_name}」必须带业务前缀（如 {plugin_id}_items），'
                          f'禁止使用裸表名，请走平台统一建表入口 create_plugin_table()')
-    db = get_db()
+    main = _main_db()                       # 登记库（始终主库）
+    target = _db_for_plugin_id(plugin_id)   # 建表目标库：upload → 独立库；内置 → 主库
     # 重装/重复调用：同一插件同一逻辑名 → 沿用已分配名（防表名漂移丢数据）
-    row = db.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
-                     (plugin_id, desired_name)).fetchone()
+    row = main.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
+                       (plugin_id, desired_name)).fetchone()
     if row:
         actual = row['actual_name']
     else:
-        hit = db.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
-                         (desired_name,)).fetchone()
+        hit = main.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
+                           (desired_name,)).fetchone()
         if hit and hit['plugin_id'] != plugin_id:
-            actual = _allocate_table_name(db, desired_name)   # 被其他插件占用 → 自动分配
+            actual = _allocate_table_name(main, desired_name)   # 被其他插件占用 → 自动分配
         else:
             actual = desired_name                              # 空闲或存量裸表 → 沿用并补登记
-        db.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
-                   (plugin_id, desired_name, actual))
-        db.commit()
+        main.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
+                     (plugin_id, desired_name, actual))
+        main.commit()
     # 执行 DDL（表名替换为实际名；IF NOT EXISTS 幂等；register_only 只登记不建表）
     # v12.5.39：改用 executescript，支持 CREATE TABLE + CREATE INDEX 等多语句 DDL（单条同样兼容）
+    # v12.6.9：DDL 失败时回滚本次新建的登记行，避免失败安装残留脏登记（plugin_tables 与实际物理表不一致）
+    # v12.7.0：DDL 目标库按插件路由（upload → 独立库），登记仍在主库
+    inserted = False
     if ddl and not register_only:
-        db.executescript(ddl.replace(desired_name, actual))
+        try:
+            target.executescript(ddl.replace(desired_name, actual))
+        except Exception:
+            if row is None:  # 本次新插入的登记行（非重装沿用），建表失败即回滚
+                main.execute('DELETE FROM plugin_tables WHERE plugin_id=? AND actual_name=?',
+                             (plugin_id, actual))
+                main.commit()
+            raise
+        inserted = True
+    if ddl and register_only and row is None:
+        inserted = True
+    if not ddl and row is None:
+        inserted = True
     return actual
 
 
@@ -521,17 +606,17 @@ def get_table_name(plugin_id, desired_name):
     - 未登记：按与 create_plugin_table 相同的规则补登记（沿用空闲表名或自动分配）
     返回实际表名 str。
     """
-    db = get_db()
-    row = db.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
-                     (plugin_id, desired_name)).fetchone()
+    main = _main_db()   # 登记表始终在主库
+    row = main.execute('SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
+                       (plugin_id, desired_name)).fetchone()
     if row:
         return row['actual_name']
-    hit = db.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
-                     (desired_name,)).fetchone()
-    actual = _allocate_table_name(db, desired_name) if (hit and hit['plugin_id'] != plugin_id) else desired_name
-    db.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
-               (plugin_id, desired_name, actual))
-    db.commit()
+    hit = main.execute('SELECT plugin_id FROM plugin_tables WHERE actual_name=?',
+                       (desired_name,)).fetchone()
+    actual = _allocate_table_name(main, desired_name) if (hit and hit['plugin_id'] != plugin_id) else desired_name
+    main.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
+                 (plugin_id, desired_name, actual))
+    main.commit()
     return actual
 
 
@@ -618,19 +703,21 @@ def check_plugin_tables_integrity():
     - infos：库中存在未登记的业务表（裸建表，建议改走 create_plugin_table() 补登记）
     存量平台表/存量插件表白名单豁免。
     """
-    db = get_db()
+    main = _main_db()
     warnings, infos = [], []
     try:
-        rows = db.execute('SELECT plugin_id, logical_name, actual_name FROM plugin_tables '
-                          'ORDER BY plugin_id, logical_name').fetchall()
+        rows = main.execute('SELECT plugin_id, logical_name, actual_name FROM plugin_tables '
+                            'ORDER BY plugin_id, logical_name').fetchall()
         for r in rows:
-            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                                (r['actual_name'],)).fetchone()
+            # v12.7.0：upload 插件的物理表在独立库，按插件路由目标库校验
+            check_db = _db_for_plugin_id(r['plugin_id'])
+            exists = check_db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                      (r['actual_name'],)).fetchone()
             if not exists:
                 warnings.append(f'插件「{r["plugin_id"]}」登记表 {r["logical_name"]} → '
                                 f'实际 {r["actual_name"]} 尚未建表，请检查是否调用 create_plugin_table()')
         reg_actuals = {r['actual_name'] for r in rows}
-        all_tabs = [x[0] for x in db.execute(
+        all_tabs = [x[0] for x in main.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
         for t in all_tabs:
             if t in reg_actuals or t in _PLATFORM_SYSTEM_TABLES or t in _PLATFORM_LEGACY_TABLES:
