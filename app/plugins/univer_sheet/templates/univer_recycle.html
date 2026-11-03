@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}回收站 - 云文档表格{% endblock %}
+{% block content %}
+<div style="max-width:1100px;margin:0 auto;padding:24px 20px 40px;">
+    <div style="margin-bottom:24px;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+            <h1 style="margin:0 0 6px;font-size:24px;">🗑 Univer 回收站</h1>
+            <p style="color:#6b7280;font-size:14px;margin:0;">
+                误删的共享表格在这里保留，可随时<b>恢复</b>；<b>彻底删除</b>后不可恢复（仅管理员可彻底删除）。
+            </p>
+        </div>
+        <a href="{{ url_for('univer_sheet.index') }}" style="font-size:13px;color:#2563eb;text-decoration:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:7px 16px;">← 返回表格列表</a>
+    </div>
+
+    {% if not rooms %}
+    <div style="background:#fff;border:1px dashed #d1d5db;border-radius:12px;padding:48px 20px;text-align:center;color:#9ca3af;">
+        <div style="font-size:40px;margin-bottom:12px;">🗑</div>
+        <div style="font-size:15px;">回收站为空</div>
+        <div style="font-size:13px;margin-top:6px;">删除的共享表格会出现在这里</div>
+    </div>
+    {% else %}
+    <div style="display:flex;flex-direction:column;gap:12px;">
+        {% for r in rooms %}
+        <div style="background:#fff;border:1px solid #e0e4ea;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:18px;">
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:15px;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📊 {{ r.name }}</div>
+                <div style="font-size:12px;color:#6b7280;margin-top:5px;line-height:1.5;">{{ r.description or '暂无说明' }}</div>
+                <div style="font-size:12px;color:#9ca3af;margin-top:6px;">
+                    👤 {{ r.created_by }} 创建于 {{ (r.created_at or '')[:16] }}
+                    {% if r.version %} · 版本 v{{ r.version }}{% endif %}
+                    · 🗑 {{ r.deleted_by or '' }} 删除于 {{ (r.deleted_at or '')[:16] }}
+                </div>
+            </div>
+            {% if is_manager or r.created_by == username %}
+            <form method="post" action="{{ url_for('univer_sheet.restore_room', rid=r.id) }}" style="flex-shrink:0;margin:0;">
+                <button type="submit" style="padding:8px 18px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:8px;font-size:13px;cursor:pointer;">↩ 恢复</button>
+            </form>
+            {% endif %}
+            {% if is_manager %}
+            <form method="post" action="{{ url_for('univer_sheet.purge_room', rid=r.id) }}" style="flex-shrink:0;margin:0;"
+                  onsubmit="return confirm('确认彻底删除「{{ r.name }}」？该操作不可恢复！');">
+                <button type="submit" style="padding:8px 16px;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;font-size:13px;cursor:pointer;">🗑 彻底删除</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

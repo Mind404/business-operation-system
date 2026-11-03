@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}到期预警 - WBS计划管理{% endblock %}
+{% block content %}
+<style>
+.alerts-table td, .alerts-table th { vertical-align: top; }
+.cell-sub { font-size:12px; color:#666; line-height:1.4; max-width:260px; word-break:break-all; }
+.task-jump { color:#1d4ed8; text-decoration:none; }
+.task-jump:hover { text-decoration:underline; }
+</style>
+<div class="page-header">
+    <h1>⚠️ 到期预警</h1>
+    <p class="page-desc">跨项目汇总未来7天内到期的任务节点，按紧急程度排序；点击任务名可跳转定位到该任务</p>
+</div>
+
+<a href="{{ url_for('wbs.wbs_projects') }}" style="display:inline-block;margin-bottom:16px;color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+
+<!-- 逾期 -->
+{% if overdue %}
+<div style="margin-bottom:20px;">
+    <h3 style="color:#dc3545;margin:0 0 10px;">🔴 已逾期（{{ overdue|length }}个任务）</h3>
+    <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
+        <thead><tr style="background:#f8d7da;">
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">任务</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">工作内容</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">交付物标准</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">所属项目</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">负责人</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:center;">截止日期</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:center;">超期</th>
+            <th style="padding:8px;border:1px solid #f5c6cb;text-align:center;">状态</th>
+        </tr></thead>
+        <tbody>
+        {% for t in overdue %}
+        <tr style="background:#fff5f5;">
+            <td style="padding:8px;border:1px solid #f5c6cb;"><b>{{ t.wbs_code }}</b> <a class="task-jump" href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}?task_highlight={{ t.id }}">{{ t.name }}</a></td>
+            <td style="padding:8px;border:1px solid #f5c6cb;"><div class="cell-sub">{{ t.work_content or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #f5c6cb;"><div class="cell-sub">{{ t.deliverable or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #f5c6cb;"><a href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
+            <td style="padding:8px;border:1px solid #f5c6cb;">{{ t.owner or '—' }}</td>
+            <td style="padding:8px;border:1px solid #f5c6cb;text-align:center;">{{ t.plan_end }}</td>
+            <td style="padding:8px;border:1px solid #f5c6cb;text-align:center;color:#dc3545;font-weight:bold;">超期</td>
+            <td style="padding:8px;border:1px solid #f5c6cb;text-align:center;">{{ t.status }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- 3天内 -->
+{% if due3 %}
+<div style="margin-bottom:20px;">
+    <h3 style="color:#fd7e14;margin:0 0 10px;">🟠 3天内到期（{{ due3|length }}个任务）</h3>
+    <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
+        <thead><tr style="background:#ffe5d0;">
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">任务</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">工作内容</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">交付物标准</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">所属项目</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">负责人</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:center;">截止日期</th>
+            <th style="padding:8px;border:1px solid #ffd0a8;text-align:center;">状态</th>
+        </tr></thead>
+        <tbody>
+        {% for t in due3 %}
+        <tr>
+            <td style="padding:8px;border:1px solid #ffd0a8;"><b>{{ t.wbs_code }}</b> <a class="task-jump" href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}?task_highlight={{ t.id }}">{{ t.name }}</a></td>
+            <td style="padding:8px;border:1px solid #ffd0a8;"><div class="cell-sub">{{ t.work_content or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #ffd0a8;"><div class="cell-sub">{{ t.deliverable or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #ffd0a8;"><a href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
+            <td style="padding:8px;border:1px solid #ffd0a8;">{{ t.owner or '—' }}</td>
+            <td style="padding:8px;border:1px solid #ffd0a8;text-align:center;">{{ t.plan_end }}</td>
+            <td style="padding:8px;border:1px solid #ffd0a8;text-align:center;">{{ t.status }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- 7天内 -->
+{% if due7 %}
+<div style="margin-bottom:20px;">
+    <h3 style="color:#0d6efd;margin:0 0 10px;">🔵 7天内到期（{{ due7|length }}个任务）</h3>
+    <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
+        <thead><tr style="background:#dce9ff;">
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">任务</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">工作内容</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">交付物标准</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">所属项目</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">负责人</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:center;">截止日期</th>
+            <th style="padding:8px;border:1px solid #b8d4fe;text-align:center;">状态</th>
+        </tr></thead>
+        <tbody>
+        {% for t in due7 %}
+        <tr>
+            <td style="padding:8px;border:1px solid #b8d4fe;"><b>{{ t.wbs_code }}</b> <a class="task-jump" href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}?task_highlight={{ t.id }}">{{ t.name }}</a></td>
+            <td style="padding:8px;border:1px solid #b8d4fe;"><div class="cell-sub">{{ t.work_content or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #b8d4fe;"><div class="cell-sub">{{ t.deliverable or '—' }}</div></td>
+            <td style="padding:8px;border:1px solid #b8d4fe;"><a href="{{ url_for('wbs.wbs_project_detail', pid=t.project_id) }}" style="color:#2563eb;text-decoration:none;">{{ t.project_name }}</a></td>
+            <td style="padding:8px;border:1px solid #b8d4fe;">{{ t.owner or '—' }}</td>
+            <td style="padding:8px;border:1px solid #b8d4fe;text-align:center;">{{ t.plan_end }}</td>
+            <td style="padding:8px;border:1px solid #b8d4fe;text-align:center;">{{ t.status }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if not overdue and not due3 and not due7 %}
+<div style="text-align:center;padding:60px 20px;color:#999;">
+    <div style="font-size:48px;margin-bottom:16px;">✅</div>
+    <p>未来7天内没有需要预警的任务节点</p>
+</div>
+{% endif %}
+
+{% endblock %}

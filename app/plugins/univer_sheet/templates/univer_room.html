@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{{ room.name }} - 云文档表格</title>
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-ui.css') }}?v=12664">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-docs.css') }}?v=12664">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets.css') }}?v=12664">
+<link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-sheets-extras.css') }}?v=12664">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  #uv-header {
+    background: #1f2937; color: #e5e7eb; padding: 8px 16px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-size: 12px; position: relative; z-index: 20; height: 36px; box-sizing: border-box;
+  }
+  #uv-header a { color: #93c5fd; text-decoration: none; }
+  #uv-header a:hover { text-decoration: underline; }
+  #uv-title { font-size: 14px; font-weight: 600; color: #fff; }
+  #uv-status { margin-left: auto; color: #9ca3af; }
+  #uv-status .ok { color: #4ade80; }
+  #uv-status .warn { color: #fbbf24; }
+  #uv-sync { background: #2563eb; color: #fff; border: none; border-radius: 5px;
+             padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #uv-sync:hover { background: #1d4ed8; }
+  #uv-save { background: #059669; color: #fff; border: none; border-radius: 5px;
+             padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #uv-save:hover { background: #047857; }
+  #uv-save:disabled { background: #6b7280; cursor: not-allowed; }
+  #uv-hint { color: #6b7280; font-size: 11px; }
+  /* Univer 容器占满剩余高度 */
+  #univer-container { position: fixed; top: 36px; left: 0; right: 0; bottom: 0; }
+</style>
+</head>
+<body>
+<div id="uv-header">
+  <a href="{{ url_for('univer_sheet.index') }}">← 返回列表</a>
+  <span id="uv-title">📊 {{ room.name }}</span>
+  <button id="uv-save" type="button">💾 保存</button>
+  <button id="uv-sync" type="button">⟳ 同步</button>
+  <a id="uv-export" href="{{ url_for('univer_sheet.export_room', rid=room.id, fmt='xlsx') }}"
+     style="background:#059669;color:#fff;border:none;border-radius:5px;padding:4px 12px;font-size:12px;text-decoration:none;cursor:pointer;">⬇ 导出 Excel</a>
+  <span id="uv-status">加载中…</span>
+  <span id="uv-hint">👤 {{ room.created_by }} 创建 · 全员可编辑 · 5 秒轮询同步</span>
+</div>
+<div id="univer-container"><div id="uv-loading-box" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#9ca3af;font-size:14px;gap:12px;">表格引擎加载中…</div></div>
+
+<script>
+/* v12.6.9 诊断：window.__uvDiag 实时记录加载状态 */
+window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0, head: '' };
+</script>
+<!-- v12664 多chunk方案：入口 engine.js 仅 1.1KB（小文件 EDR 不扫），内部动态加载 7 个 chunk（最大 4.4MB < EDR 阈值 6.26MB） -->
+<script src="/univer/static/univer/static-probe.js?v=12664"></script>
+<script type="module" src="/univer/static/univer/engine.js?v=12664"></script>
+<script>
+/* 全局捕获引擎加载/初始化阶段的 JS 错误，直接打到容器中央，避免白屏无信息 */
+(function () {
+  var box = document.getElementById('uv-loading-box');
+  function showFatal(msg) {
+    if (!box || box.dataset.dead) return;
+    box.dataset.dead = '1';
+    var diag = window.__uvDiag || {};
+    var diagHtml = '';
+    if (diag.bytes || diag.httpStatus) {
+      diagHtml = '<div style="margin-top:10px;padding:8px;background:#fff;border:1px solid #fecaca;border-radius:4px;font-size:11px;color:#7f1d1d;word-break:break-all;">'
+        + '<b>自检信息：</b><br>'
+        + '协议: ' + (location.protocol.replace(':', '')) + '<br>'
+        + '静态script探测: ' + (window.__staticProbeOK ? 'YES ✓（静态JS未被净化，静态直发方案可行）' : 'FAIL ✗（普通script也被净化/拦截）') + '<br>'
+        + 'HTTP ' + (diag.httpStatus || '?') + ' · Content-Type: ' + (diag.contentType || '?') + '<br>'
+        + '引擎加载: ' + (window.__uvApp ? 'OK ✓' : '加载中…') + '<br>'
+        + '前200字符: <code>' + (diag.head || '(空)').replace(/</g,'&lt;') + '</code>'
+        + '</div>';
+    }
+    box.innerHTML = '<div style="max-width:680px;padding:20px;border:1px solid #fca5a5;background:#fef2f2;border-radius:8px;color:#991b1b;font-size:13px;line-height:1.7;">'
+      + '<b>表格引擎未能启动：</b><br><span style="word-break:break-all;">' + msg + '</span>'
+      + diagHtml + '<br>'
+      + '<a href="javascript:location.reload()" style="color:#2563eb;">点此强制刷新重试</a>（如仍失败，请把上面「自检信息」整段截图发开发人员）'
+      + '</div>';
+  }
+  window.__uvFatal = showFatal;
+  window.addEventListener('error', function (e) {
+    var m = (e && e.message) ? (e.message + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '')) : '未知脚本错误';
+    if (!window.__uvApp) showFatal(m);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason;
+    var m = r ? (r.message || String(r)) : '未处理的 Promise 错误';
+    if (!window.__uvApp) showFatal(m);
+  });
+})();
+</script>
+<script>
+(function () {
+  var RID = {{ room.id }};
+  var initVersion = {{ room.version }};
+  var app = null;
+  var lastSaved = null;      // 本地基准快照 JSON 字符串
+  var lastSynced = initVersion;   // 本地已同步到的服务端版本
+  var dirty = false;
+  var saveTimer = null;
+  var booted = false;
+  var started = false;
+  var $status = document.getElementById('uv-status');
+
+  function setStatus(msg, cls) {
+    $status.innerHTML = '<span class="' + (cls || '') + '">' + msg + '</span>';
+  }
+
+  /* 初始化/重建 Univer 实例：加载服务端快照（JSON），空则新建空白表 */
+  function bootEditor(snapshotStr) {
+    if (app) { try { app.dispose(); } catch (e) {} app = null; }
+    var container = document.getElementById('univer-container');
+    if (!container) return;
+    container.innerHTML = '';
+    var snapshot = null;
+    if (snapshotStr) {
+      try { snapshot = JSON.parse(snapshotStr); }
+      catch (e) { setStatus('数据解析失败，请点「同步」重试', 'warn'); return; }
+    }
+    try {
+      app = window.UniverSheetApp.create({ container: container, snapshot: snapshot });
+      window.__uvApp = app; // 调试/自动化钩子
+    } catch (e) {
+      var em = '表格初始化失败：' + (e.message || e);
+      setStatus(em, 'warn');
+      if (window.__uvFatal) window.__uvFatal(em);
+      return;
+    }
+    app.onDirty(function () {
+      if (!booted) return;
+      if (!dirty) setStatus('编辑中…（3 秒后自动保存）');
+      dirty = true;
+      scheduleSave();
+    });
+    // 以规范化快照为本地基准，避免加载即"编辑中"误报
+    try { lastSaved = JSON.stringify(app.getSnapshot()); } catch (e) { lastSaved = snapshotStr || ''; }
+    booted = true;
+  }
+
+  function serialize() {
+    if (!app) return '';
+    try { return JSON.stringify(app.getSnapshot()); } catch (e) { return ''; }
+  }
+
+  /* 拉取最新状态；force=true 时强制加载 */
+  function fetchState(force) {
+    fetch('/univer/' + RID + '/state')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { setStatus('状态获取失败', 'warn'); return; }
+        if (d.version === lastSynced && !force) return;
+        if (dirty && !force) {
+          setStatus('⚠ 检测到他人更新（v' + d.version + '），编辑完成后点「同步」合并', 'warn');
+          return;
+        }
+        bootEditor(d.state);
+        if (!booted) { setStatus('数据解析失败（v' + d.version + '），请点「同步」重试', 'warn'); return; }
+        lastSynced = d.version;
+        var t = (d.updated_at || '').slice(5, 16);
+        setStatus(d.updated_by ? ('已同步 · ' + d.updated_by + ' ' + t) : '已同步（v' + d.version + '）', 'ok');
+      })
+      .catch(function () { setStatus('网络异常，稍后重试', 'warn'); });
+  }
+
+  function doSave(force) {
+    if (!app) return;
+    if (!force && !dirty) return;
+    var t = serialize();
+    fetch('/univer/' + RID + '/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: t, base_version: lastSynced })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          lastSaved = t; dirty = false; lastSynced = d.version;
+          setStatus('已保存 · ' + (d.updated_at || '').slice(5, 16), 'ok');
+        } else if (d.conflict) {
+          setStatus('⚠ 他人已更新（v' + d.version + '），点「同步」合并', 'warn');
+        } else {
+          setStatus('保存失败：' + (d.msg || d.error || '未知错误'), 'warn');
+        }
+      })
+      .catch(function () { setStatus('保存失败（网络）', 'warn'); });
+  }
+
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () { doSave(false); }, 3000);
+  }
+
+  /* 手动保存：立即把当前内容提交保存（v12.5.39 新增「💾 保存」按钮 + Ctrl/Cmd+S） */
+  function manualSave() {
+    if (!app) { setStatus('表格未就绪，请稍候', 'warn'); return; }
+    var t = serialize();
+    if (!dirty && lastSaved !== null && t === lastSaved) {
+      setStatus('已是最新，无需保存', 'ok');
+      return;
+    }
+    if (saveTimer) clearTimeout(saveTimer);
+    setStatus('正在保存…');
+    doSave(true);
+  }
+
+  function start() {
+    if (started) return;
+    started = true;
+    /* 周期：检测本地编辑 + 轮询他人更新 */
+    setInterval(function () {
+      if (booted && app) {
+        var t = serialize();
+        if (lastSaved !== null && t !== lastSaved) {
+          if (!dirty) setStatus('编辑中…（3 秒后自动保存）');
+          dirty = true;
+          scheduleSave();
+        }
+      }
+      fetchState(false);
+    }, 5000);
+
+    document.getElementById('uv-save').addEventListener('click', function () {
+      manualSave();
+    });
+    document.getElementById('uv-sync').addEventListener('click', function () {
+      if (dirty && !confirm('当前有未保存的本地修改，强制同步将丢弃这些修改。确认继续？')) return;
+      dirty = false; lastSaved = null;
+      fetchState(true);
+    });
+
+    /* Ctrl+S / Cmd+S：拦截浏览器默认「保存网页」，改为保存表格 */
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (booted) manualSave();
+      }
+    });
+
+    fetchState(true);
+    setTimeout(function () { if (!booted) setStatus('加载超时，请刷新', 'warn'); }, 15000);
+  }
+
+  /* 等待 Univer 引擎（module 脚本异步加载）就绪后启动 */
+  var _t0 = Date.now();
+  (function waitEngine() {
+    if (window.UniverSheetApp) { start(); return; }
+    if (Date.now() - _t0 > 20000) {
+      setStatus('表格引擎加载超时，请刷新', 'warn');
+      if (window.__uvFatal) window.__uvFatal('Univer 引擎脚本加载超时（20 秒未就绪）。通常是浏览器缓存了旧版文件——请按 Ctrl+F5 强制刷新，或清缓存后重开本页。');
+      return;
+    }
+    setTimeout(waitEngine, 200);
+  })();
+})();
+</script>
+</body>
+</html>

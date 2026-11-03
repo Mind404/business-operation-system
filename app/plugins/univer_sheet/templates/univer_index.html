@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}云文档表格 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div style="max-width:1100px;margin:0 auto;padding:24px 20px 40px;">
+    <div style="margin-bottom:28px;">
+        <h1 style="margin:0 0 8px;font-size:24px;">📊 云文档表格</h1>
+        <p style="color:#6b7280;font-size:14px;margin:0;line-height:1.6;">
+            基于 <b>Univer 开源项目</b>（字节跳动开源电子表格 SDK v1.3.1，官方引擎 + 官方界面）的真实集成：
+            Excel 级编辑体验（公式 / 样式 / 合并单元格 / 筛选 / 多工作表）、
+            版本轮询同步、乐观锁防覆盖，数据快照落库可备份。
+        </p>
+    </div>
+
+    <div style="background:#fff;border:1px solid #e0e4ea;border-radius:12px;padding:20px 24px;margin-bottom:24px;">
+        <div style="font-size:15px;font-weight:600;color:#111827;margin-bottom:12px;">＋ 新建共享表格</div>
+        <form method="post" action="{{ url_for('univer_sheet.new_room') }}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+            <input name="name" required maxlength="50" placeholder="表格名称（如：团队周会排班表）"
+                   style="flex:2;min-width:220px;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;outline:none;"/>
+            <input name="description" maxlength="200" placeholder="说明（可选）"
+                   style="flex:3;min-width:260px;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;outline:none;"/>
+            <button type="submit" style="padding:9px 22px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">创建</button>
+        </form>
+        <div style="font-size:12px;color:#9ca3af;margin-top:8px;">名称限 1-50 个汉字/字母/数字/下划线/短横线；创建后全员可打开并实时编辑，5 秒自动保存 + 5 秒轮询同步他人更新。</div>
+    </div>
+
+    <div style="font-size:15px;font-weight:600;color:#111827;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;">
+        <span>已有共享表格（{{ rooms|length }}）</span>
+        <a href="{{ url_for('univer_sheet.recycle') }}" style="font-size:13px;color:#6b7280;text-decoration:none;background:#f3f4f6;border:1px solid #e0e4ea;border-radius:8px;padding:6px 14px;">
+            🗑 回收站{% if recycle_count %}（{{ recycle_count }}）{% endif %}
+        </a>
+    </div>
+
+    {% if not rooms %}
+    <div style="background:#fff;border:1px dashed #d1d5db;border-radius:12px;padding:48px 20px;text-align:center;color:#9ca3af;">
+        <div style="font-size:40px;margin-bottom:12px;">📊</div>
+        <div style="font-size:15px;">还没有共享表格</div>
+        <div style="font-size:13px;margin-top:6px;">用上方表单创建第一个共享表格（Univer 官方界面）</div>
+    </div>
+    {% else %}
+    <div style="display:flex;flex-direction:column;gap:12px;">
+        {% for r in rooms %}
+        <div style="background:#fff;border:1px solid #e0e4ea;border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:18px;">
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:15px;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📊 {{ r.name }}</div>
+                <div style="font-size:12px;color:#6b7280;margin-top:5px;line-height:1.5;">{{ r.description or '暂无说明' }}</div>
+                <div style="font-size:12px;color:#9ca3af;margin-top:6px;">
+                    👤 {{ r.created_by }} 创建于 {{ (r.created_at or '')[:16] }}
+                    {% if r.updated_at %} · 💾 {{ r.updated_by or '' }} 保存于 {{ (r.updated_at or '')[:16] }}{% endif %}
+                    {% if r.version %} · 版本 v{{ r.version }}{% endif %}
+                </div>
+            </div>
+            <a href="{{ url_for('univer_sheet.open_room', rid=r.id) }}" style="flex-shrink:0;padding:8px 22px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;text-decoration:none;">打开表格 →</a>
+            {% if is_manager or r.created_by == username %}
+            <button onclick="renameRoom({{ r.id }}, '{{ r.name }}')" title="重命名（写错可改）" style="flex-shrink:0;background:none;border:1px solid #d1d5db;color:#374151;border-radius:8px;cursor:pointer;font-size:13px;padding:8px 12px;">✏️ 重命名</button>
+            {% endif %}
+            {% if is_manager or r.created_by == username %}
+            <button onclick="delRoom({{ r.id }}, '{{ r.name }}')" title="删除" style="flex-shrink:0;background:none;border:none;color:#c0392b;cursor:pointer;font-size:16px;padding:6px;">🗑</button>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function renameRoom(id, oldName) {
+    const n = prompt('输入新的表格名称（写错可随时更改）：', oldName);
+    if (n === null || n.trim() === '' || n === oldName) return;
+    const f = document.createElement('form');
+    f.method = 'POST'; f.action = `/univer/${id}/rename`;
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'name'; inp.value = n.trim();
+    f.appendChild(inp);
+    document.body.appendChild(f); f.submit();
+}
+function delRoom(id, name) {
+    if (!confirm(`确认删除共享表格「${name}」？删除后进入回收站，可在回收站恢复（彻底删除前不会丢失内容）。`)) return;
+    const f = document.createElement('form');
+    f.method = 'POST'; f.action = `/univer/${id}/delete`;
+    document.body.appendChild(f); f.submit();
+}
+</script>
+{% endblock %}

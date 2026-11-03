@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}孤儿表清理 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div style="max-width:1000px;margin:0 auto;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h2 style="margin:0;font-size:20px;color:#111827;">🧹 孤儿表清理</h2>
+        <a href="{{ url_for('admin_plugins') }}" style="font-size:13px;color:#2563eb;text-decoration:none;">← 返回插件管理</a>
+    </div>
+
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:18px;line-height:1.8;">
+        <b>这是什么？</b><br>
+        这里列出的是<b>数据库里存在、但当前没有任何启用中的插件在使用</b>的表——通常是以前卸载/升级插件后残留的旧表。
+        它们不会被新代码读取，但会让数据库越来越臃肿，也可能在升级时造成 schema 混乱（你之前遇到的表格白屏就和这类残留有关）。<br>
+        <span style="color:#b91c1c;"><b>删除前请确认：</b>这些表对应的插件已经不再使用。删除后不可恢复，建议先双击「备份数据库.bat」备份。</span>
+    </div>
+
+    {% if orphans %}
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+                <tr style="background:#f9fafb;text-align:left;">
+                    <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">表名</th>
+                    <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">推断来源</th>
+                    <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">行数</th>
+                    <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">大小</th>
+                    <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for o in orphans %}
+                <tr style="border-bottom:1px solid #f3f4f6;">
+                    <td style="padding:10px 14px;font-family:Consolas,monospace;color:#111827;">{{ o.name }}</td>
+                    <td style="padding:10px 14px;color:#6b7280;">{{ o.hint }}</td>
+                    <td style="padding:10px 14px;color:#374151;">{{ o.rows }}</td>
+                    <td style="padding:10px 14px;color:#374151;">{{ '%.1f KB'|format(o.bytes/1024) if o.bytes else '-' }}</td>
+                    <td style="padding:10px 14px;">
+                        <form method="post" action="{{ url_for('admin_db_cleanup_drop') }}"
+                              onsubmit="return confirm('确认删除表「{{ o.name }}」？\n该表数据将永久丢失，建议先备份数据库。');"
+                              style="display:inline;">
+                            <input type="hidden" name="table_name" value="{{ o.name }}">
+                            <button type="submit" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;">删除</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:24px;text-align:center;color:#15803d;font-size:14px;">
+        ✅ 没有孤儿表——数据库很干净，所有表都在使用中。
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

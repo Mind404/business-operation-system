@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑' if p else '新建' }}WBS项目 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('wbs.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+</div>
+<div class="page-header">
+    <h1>{% if p %}✏️ 编辑项目{% else %}➕ 新建WBS项目{% endif %}</h1>
+    <p style="color:#666;font-size:13px;margin-top:6px;">填写项目基本信息，创建后可进入项目拆解阶段和子任务</p>
+</div>
+
+<form method="post" style="max-width:1100px;margin:0 auto;background:#fff;padding:36px 40px;border-radius:10px;border:1px solid #e6e9ef;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+    <!-- 项目名称：整行 -->
+    <div style="margin-bottom:20px;">
+        <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目名称 <span style="color:#c0392b;">*</span></label>
+        <input type="text" name="name" value="{{ p.name if p else '' }}" required placeholder="如：SAM302模组·窄带切换性能优化"
+               style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+    </div>
+
+    <!-- 项目简介：整行 -->
+    <div style="margin-bottom:20px;">
+        <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目简介</label>
+        <textarea name="description" rows="3" placeholder="简要说明项目目标、范围和预期成果"
+                  style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;resize:vertical;">{{ p.description if p else '' }}</textarea>
+    </div>
+
+    <!-- 负责人 + 参与人：两列 -->
+    <div style="display:grid;grid-template-columns:1fr 1.5fr;gap:16px;margin-bottom:20px;">
+        <div>
+            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目负责人</label>
+            {% if can_change_members %}
+            <div style="border:1px solid #d0d5dd;border-radius:6px;padding:8px 10px;background:#fff;">
+                <input type="text" class="member-search" placeholder="🔍 输入姓名或账号快速筛选" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;outline:none;margin-bottom:6px;">
+                <div class="member-list" style="max-height:160px;overflow-y:auto;">
+                    {% for u in users %}
+                    <label class="member-item" style="display:block;padding:5px 4px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" name="owner" value="{{ u.username }}"
+                               {% if u.username in owner_sel %}checked{% endif %} style="margin-right:6px;vertical-align:middle;">
+                        {{ u.display_name or u.username }}{% if u.username != (u.display_name or '') %}（{{ u.username }}）{% endif %}
+                    </label>
+                    {% endfor %}
+                    {% if not users %}<div style="color:#999;font-size:12px;">暂无启用用户</div>{% endif %}
+                </div>
+            </div>
+            <div style="font-size:12px;color:#888;margin-top:4px;">可多选；负责人可编辑本项目全部任务</div>
+            {% else %}
+            <div style="border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;background:#f9fafb;font-size:13px;color:#374151;min-height:38px;">
+                {% for n in owner_sel %}<span style="background:#eef2ff;border-radius:4px;padding:2px 8px;margin:2px;">{{ n }}</span>{% else %}<span style="color:#999;">未设置</span>{% endfor %}
+            </div>
+            <div style="font-size:12px;color:#b45309;margin-top:4px;">🔒 人员名单仅管理员可调整</div>
+            {% endif %}
+        </div>
+        <div>
+            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目参与人员</label>
+            {% if can_change_members %}
+            <div style="border:1px solid #d0d5dd;border-radius:6px;padding:8px 10px;background:#fff;">
+                <input type="text" class="member-search" placeholder="🔍 输入姓名或账号快速筛选" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid #e2e8f0;border-radius:5px;font-size:13px;outline:none;margin-bottom:6px;">
+                <div class="member-list" style="max-height:160px;overflow-y:auto;">
+                    {% for u in users %}
+                    <label class="member-item" style="display:block;padding:5px 4px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" name="participants" value="{{ u.username }}"
+                               {% if u.username in part_sel %}checked{% endif %} style="margin-right:6px;vertical-align:middle;">
+                        {{ u.display_name or u.username }}{% if u.username != (u.display_name or '') %}（{{ u.username }}）{% endif %}
+                    </label>
+                    {% endfor %}
+                    {% if not users %}<div style="color:#999;font-size:12px;">暂无启用用户</div>{% endif %}
+                </div>
+            </div>
+            <div style="font-size:12px;color:#888;margin-top:4px;">可多选；参与人员可编辑本项目全部任务</div>
+            {% else %}
+            <div style="border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;background:#f9fafb;font-size:13px;color:#374151;min-height:38px;">
+                {% for n in part_sel %}<span style="background:#eef2ff;border-radius:4px;padding:2px 8px;margin:2px;">{{ n }}</span>{% else %}<span style="color:#999;">未设置</span>{% endfor %}
+            </div>
+            <div style="font-size:12px;color:#b45309;margin-top:4px;">🔒 人员名单仅管理员可调整</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 开始 + 结束时间：两列 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px;">
+        <div>
+            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目开始时间</label>
+            <input type="date" name="start_date" value="{{ p.start_date if p else '' }}"
+                   style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+        </div>
+        <div>
+            <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目结束时间</label>
+            <input type="date" name="end_date" value="{{ p.end_date if p else '' }}"
+                   style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+        </div>
+    </div>
+
+    {% if not p and current_role not in ('admin','platform_admin') %}
+    <div style="margin-bottom:20px;padding:14px;background:#fff8e6;border:1px solid #ffe0a0;border-radius:6px;">
+        <label style="display:block;font-size:13px;color:#856404;margin-bottom:8px;font-weight:500;">
+            ⚠️ 普通用户创建项目需管理员审批。审批通过后才能导入WBS任务。请选择审批人：
+        </label>
+        <select name="approver" required style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
+            <option value="">— 请选择审批管理员 —</option>
+            {% for a in admins %}
+            <option value="{{ a.username }}">{{ a.display_name or a.username }}（{{ a.username }}）</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+
+    <!-- 按钮 -->
+    <div style="display:flex;gap:12px;padding-top:20px;border-top:1px solid #eef0f4;">
+        <button type="submit" style="padding:10px 32px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;">保存项目</button>
+        <a href="{{ url_for('wbs.wbs_projects') }}" style="padding:10px 24px;background:#f5f7fa;border:1px solid #d0d5dd;border-radius:6px;text-decoration:none;color:#444;font-size:14px;">取消</a>
+    </div>
+</form>
+
+<script>
+// 人员检索过滤：输入姓名/账号关键字，即时过滤候选复选框
+document.querySelectorAll('.member-search').forEach(inp => {
+    inp.addEventListener('input', () => {
+        const kw = inp.value.trim().toLowerCase();
+        const list = inp.parentElement.querySelector('.member-list');
+        if (!list) return;
+        let visible = 0;
+        list.querySelectorAll('.member-item').forEach(lb => {
+            const hit = lb.textContent.toLowerCase().includes(kw);
+            lb.classList.toggle('search-hide', !hit);
+            if (hit) visible++;
+        });
+        let emptyTip = list.querySelector('.member-empty-tip');
+        if (kw && visible === 0) {
+            if (!emptyTip) {
+                emptyTip = document.createElement('div');
+                emptyTip.className = 'member-empty-tip';
+                emptyTip.style.cssText = 'color:#9ca3af;font-size:12px;padding:6px 4px;';
+                list.appendChild(emptyTip);
+            }
+            emptyTip.textContent = '未找到匹配的人员';
+        } else if (emptyTip) {
+            emptyTip.remove();
+        }
+    });
+});
+</script>
+{% endblock %}

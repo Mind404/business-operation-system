@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}插件管理 - 业务高效运转系统{% endblock %}
+{% block content %}
+<div style="max-width:1200px;margin:0 auto;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h2 style="margin:0;font-size:20px;color:#111827;">🧩 插件管理</h2>
+        <a href="{{ url_for('admin_db_cleanup') }}" style="font-size:13px;color:#dc2626;text-decoration:none;border:1px solid #fecaca;padding:6px 12px;border-radius:6px;background:#fef2f2;">🧹 孤儿表清理</a>
+    </div>
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:18px;">
+        平台定位：<b>单点登录 · 信息聚合 · 统一权限</b>。具体业务由插件实现，插件自己管理数据表与工作流程。
+        按《插件开发规范》开发的插件，可「放进 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">plugins/</code> 目录自动注册」或「上传压缩包安装」两种方式接入，受平台统一管理（登录/权限/导航/启停/表登记）。
+    </div>
+
+    <!-- v12.1.2 待重启生效横幅：上传安装的插件需重启后导航/入口才出现（Flask 框架限制） -->
+    {% if pending_restart %}
+    <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;font-size:13px;color:#92400e;margin-bottom:18px;">
+        <b>⚠ 以下插件已安装登记，但需要重启系统后才会在左侧导航出现：</b>
+        {% for p in pending_restart %}「{{ p['name'] }}」{% if not loop.last %}、{% endif %}{% endfor %}
+        <br>操作：先双击「停止系统.bat」，再双击「启动系统.bat」（重启只需几秒，数据不会丢失）。
+    </div>
+    {% endif %}
+
+    <!-- v12.4.5 表一致性校验告警：登记 vs 实际建表，冲突/未登记红字提示 -->
+    {% if integrity_warnings or integrity_infos %}
+    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 16px;font-size:13px;color:#991b1b;margin-bottom:18px;">
+        <b>🔍 插件表一致性校验：</b>
+        {% if integrity_warnings %}
+        <div style="margin-top:6px;line-height:1.8;">
+            {% for w in integrity_warnings %}
+            <div>⚠️ {{ w }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if integrity_infos %}
+        <div style="margin-top:6px;line-height:1.8;color:#b45309;">
+            {% for i in integrity_infos %}
+            <div>ℹ️ {{ i }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div style="margin-top:6px;color:#6b7280;">详情见系统启动日志（启动系统.bat 窗口）。存量平台表/存量插件表白名单豁免。</div>
+    </div>
+    {% endif %}
+
+    <!-- 上传安装 -->
+    <div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);margin-bottom:18px;">
+        <h3 style="margin:0 0 12px;font-size:15px;font-weight:700;">📦 上传安装插件</h3>
+        <form method="post" action="{{ url_for('admin_plugin_upload') }}" enctype="multipart/form-data" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input type="file" name="plugin_zip" accept=".zip" required style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <button type="submit" class="btn btn-primary" style="flex:0 0 auto;">上传并安装</button>
+            <span style="font-size:12px;color:#6b7280;">支持 .zip（含 manifest 与 blueprint 的插件包，上限 20MB；详见《插件开发规范》）</span>
+        </form>
+    </div>
+
+    <!-- 插件列表 -->
+    <div style="background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+        <h3 style="margin:0 0 14px;font-size:15px;font-weight:700;">插件清单（{{ plugins|length }}）</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+                <tr style="background:#f9fafb;text-align:left;">
+                    <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">插件</th>
+                    <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">类型</th>
+                    <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">状态</th>
+                    <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">数据表（登记于平台注册表）</th>
+                    <th style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in plugins %}
+                <tr>
+                    <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
+                        <div style="font-weight:600;">{{ p.icon }} {{ p.name }}
+                            {% if p.core %}<span style="background:#f3f4f6;color:#6b7280;padding:1px 6px;border-radius:4px;font-size:11px;margin-left:4px;">常驻</span>{% endif %}
+                        </div>
+                        <div style="color:#6b7280;font-size:12px;margin-top:2px;">{{ p.id }} · {{ p.desc }}</div>
+                        {% if p.endpoint %}<div style="color:#9ca3af;font-size:11px;margin-top:2px;">入口：{{ p.endpoint }}</div>{% endif %}
+                    </td>
+                    <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
+                        {% if p.install_type == 'upload' %}
+                        <span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:12px;">上传安装</span>
+                        {% else %}
+                        <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:4px;font-size:12px;">平台内置</span>
+                        {% endif %}
+                    </td>
+                    <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
+                        {% if p.enabled %}
+                        <span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:12px;">已启用</span>
+                        {% else %}
+                        <span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:12px;">已停用</span>
+                        {% endif %}
+                    </td>
+                    <td style="padding:10px;border-bottom:1px solid #f3f4f6;color:#6b7280;font-size:12px;">
+                        {% if p.table_map %}
+                            {% for m in p.table_map %}
+                            <div style="margin-bottom:3px;">
+                                <span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:4px;">{{ m.logical }}</span>
+                                <span style="color:#9ca3af;">→</span>
+                                <span style="display:inline-block;background:#f3f4f6;padding:1px 6px;border-radius:4px;">{{ m.actual }}</span>
+                                {% if m.actual != m.logical %}
+                                <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:11px;" title="原表名已被其他插件占用，平台已自动分配此实际表名">自动分配</span>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% elif p.tables %}
+                            {% for t in p.tables %}<span style="display:inline-block;background:#f3f4f6;padding:1px 6px;border-radius:4px;margin:1px 2px;">{{ t }}</span>{% endfor %}
+                        {% else %}<span style="color:#9ca3af;">—</span>{% endif %}
+                    </td>
+                    <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                            {% if p.enabled %}
+                            <form method="post" action="{{ url_for('admin_plugin_toggle', plugin_id=p.id) }}" style="display:inline;">
+                                <input type="hidden" name="enabled" value="0">
+                                <button type="submit" class="btn" style="padding:4px 10px;font-size:12px;{% if p.core %}opacity:0.5;{% endif %}" {% if p.core %}disabled title="核心插件不可停用"{% endif %}>停用</button>
+                            </form>
+                            {% else %}
+                            <form method="post" action="{{ url_for('admin_plugin_toggle', plugin_id=p.id) }}" style="display:inline;">
+                                <input type="hidden" name="enabled" value="1">
+                                <button type="submit" class="btn btn-primary" style="padding:4px 10px;font-size:12px;">启用</button>
+                            </form>
+                            {% endif %}
+                            {% if p.install_type == 'upload' %}
+                            <form method="post" action="{{ url_for('admin_plugin_uninstall', plugin_id=p.id) }}" style="display:inline;"
+                                  onsubmit="return confirm('确定卸载插件「{{ p.name }}」？\n\n卸载将：\n· 删除插件程序目录与平台注册记录\n· 保留其业务数据表（数据不丢失）\n· 不影响平台数据与其他插件数据\n\n确定继续卸载吗？');">
+                                <button type="submit" class="btn" style="padding:4px 10px;font-size:12px;color:#dc2626;border-color:#fecaca;">卸载</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#92400e;margin-top:18px;">
+        <b>说明：</b>① 停用 = 隐藏导航并拦截访问，业务数据表不受影响，可随时启用；② 卸载 = 仅针对上传安装的插件，删除插件包目录、保留业务数据表；③ 内置插件（WBS 等）不可卸载；④ 新插件放入 <code style="background:#fef3c7;padding:1px 6px;border-radius:4px;">plugins/</code> 目录后，重启系统即自动注册，也可直接在管理页上传 zip 安装；⑤ 上传安装与卸载后均需重启系统完全生效（Flask 框架限制，重启即好）。
+    </div>
+</div>
+{% endblock %}

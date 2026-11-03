@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}操作日志 - 业务运转系统{% endblock %}
+{% block page_title %}系统操作日志{% endblock %}
+
+{% block content %}
+<div class="module-tabs">
+    <a href="{{ url_for('index') }}" class="module-tab">🏠 工作台</a>
+    <a href="{{ url_for('logs') }}" class="module-tab active">📜 操作日志</a>
+</div>
+<div class="panel">
+    <form method="get" style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+        <select name="user" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <option value="">全部操作人</option>
+            {% for u in users %}<option value="{{ u }}" {% if u == user_filter %}selected{% endif %}>{{ u }}</option>{% endfor %}
+        </select>
+        <select name="mod" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+            <option value="">全部模块</option>
+            {% for m in mods %}<option value="{{ m }}" {% if m == mod_filter %}selected{% endif %}>{{ m }}</option>{% endfor %}
+        </select>
+        <button type="submit" style="padding:6px 14px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">筛选</button>
+        <a href="{{ url_for('logs') }}" style="font-size:13px;color:#6b7280;">清除筛选</a>
+        <span style="font-size:12px;color:#9ca3af;">共 {{ logs|length }} 条（最近200条）</span>
+    </form>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th style="width:60px">ID</th>
+                <th style="width:120px">模块</th>
+                <th style="width:100px">操作</th>
+                <th>详情</th>
+                <th style="width:100px">操作人</th>
+                <th style="width:160px">时间</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logs %}
+            <tr>
+                <td class="mono">#{{ log.id }}</td>
+                <td><span class="tag">{{ log.module }}</span></td>
+                <td>{{ log.action }}</td>
+                <td>{{ log.detail }}</td>
+                <td>{{ log.operator }}</td>
+                <td class="mono text-sm">{{ log.created_at }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty-cell">暂无操作日志</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>WBS回收站</title>
+<style>
+  body{font-family:-apple-system,'Microsoft YaHei',sans-serif;background:#f6f8fb;margin:0;padding:24px;}
+  .card{background:#fff;border:1px solid #e0e4ea;border-radius:12px;padding:24px 28px;max-width:1100px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 6px;}
+  .sub{color:#6b7280;font-size:13px;margin:0 0 18px;}
+  a{color:#2563eb;text-decoration:none;font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;}
+  th,td{padding:9px 10px;border:1px solid #d0d7e5;text-align:left;}
+  th{background:#f1f5f9;font-weight:600;}
+  .btn{padding:4px 12px;border:none;border-radius:5px;font-size:12px;cursor:pointer;color:#fff;}
+  .btn-ok{background:#2563eb;}.btn-del{background:#c0392b;margin-left:6px;}
+  .empty{padding:36px;text-align:center;color:#9ca3af;font-size:14px;}
+  .flash{background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;}
+  .flash-err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🗑 WBS 回收站</h1>
+  <p class="sub">删除的项目/任务保留 <b>7 天</b>，到期自动清空（含附件文件）。仅管理员可见。当前访问已自动清理 {{ cleared }} 条过期记录。</p>
+  {% with msgs = get_flashed_messages(with_categories=true) %}{% for c,m in msgs %}
+  <div class="{{ 'flash' if c in ('success','ok') else 'flash-err' }}">{{ m }}</div>{% endfor %}{% endwith %}
+  <a href="{{ url_for('wbs.wbs_projects') }}">← 返回项目列表</a>
+  {% if items %}
+  <table>
+    <tr><th>类型</th><th>名称</th><th>删除人</th><th>删除时间</th><th>到期时间</th><th>操作</th></tr>
+    {% for it in items %}
+    <tr>
+      <td>{{ '📁 项目' if it['obj_type']=='project' else '📄 任务' }}{% if it['obj_type']=='project' %}({{ it['obj_id'] }}){% endif %}</td>
+      <td>{{ it['name'] }}{% if it['obj_type']=='task' %}<span style="color:#9ca3af;font-size:11px;"> (原任务#{{ it['obj_id'] }})</span>{% endif %}</td>
+      <td>{{ it['operator'] or '-' }}</td>
+      <td>{{ it['deleted_at'] }}</td>
+      <td>{{ it['expire_at'] }}</td>
+      <td>
+        <form method="post" action="{{ url_for('wbs.wbs_recycle_restore', rid=it['id']) }}" style="display:inline;"
+              onsubmit="return confirm('确定恢复「{{ it['name'] }}」？恢复后回到删除前状态')">
+          <button class="btn btn-ok">恢复</button>
+        </form>
+        <form method="post" action="{{ url_for('wbs.wbs_recycle_purge', rid=it['id']) }}" style="display:inline;"
+              onsubmit="return confirm('彻底删除「{{ it['name'] }}」？此操作不可恢复！')">
+          <button class="btn btn-del">彻底删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">回收站是空的 🎉</div>
+  {% endif %}
+</div>
+</body>
+</html>
