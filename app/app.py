@@ -30,18 +30,24 @@ class GzipMiddleware:
         if 'gzip' not in accept_encoding.lower():
             return self.wsgi_app(environ, start_response)
 
-        self._do_gzip = False
+        # v12.7.5 修复：gzip 决策必须为「每次请求独立」的局部状态。
+        # 原实现用 self._do_gzip（实例属性）跨请求共享，waitress 多线程下并发请求会互相污染：
+        # 大响应（>1KB 置 True）与小响应（保存接口约 57 字节）同时进入时，小响应被误压缩
+        # 但响应头未更新（Content-Length 未移除、无 Content-Encoding），
+        # 导致 waitress 报 "application-written content exceeded ... Content-Length header" 并截断响应体，
+        # 前端解析保存结果失败 → 数据看似丢失。改为 __call__ 内局部容器，每请求独立。
+        state = {'do_gzip': False}
         def custom_start_response(status, headers, exc_info=None):
             headers_list = list(headers)
             headers_dict = dict(headers_list)
             content_type = headers_dict.get('Content-Type', '')
-            content_length = int(headers_dict.get('Content-Length', 0))
+            content_length = int(headers_dict.get('Content-Length', 0) or 0)
             compressible = (content_type.startswith('text/') or
                             'application/json' in content_type or
                             'application/javascript' in content_type or
                             'application/xml' in content_type)
             if compressible and content_length > 1024:
-                self._do_gzip = True
+                state['do_gzip'] = True
                 # 移除 Content-Length（压缩后大小变了），加 gzip 头
                 headers_list = [(k, v) for k, v in headers_list if k.lower() != 'content-length']
                 headers_list.append(('Content-Encoding', 'gzip'))
@@ -49,7 +55,7 @@ class GzipMiddleware:
             return start_response(status, headers_list, exc_info)
 
         result = self.wsgi_app(environ, custom_start_response)
-        if self._do_gzip:
+        if state['do_gzip']:
             data = b''.join(result)
             compressed = gzip.compress(data, compresslevel=6)
             return [compressed]

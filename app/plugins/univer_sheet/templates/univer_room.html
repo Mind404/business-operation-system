@@ -188,6 +188,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
   var lastSaved = null;      // 本地基准快照 JSON 字符串
   var lastSynced = initVersion;   // 本地已同步到的服务端版本
   var dirty = false;
+  var saving = false;        // v12.7.5：保存请求进行中标记（离开拦截用）
   var saveTimer = null;
   var booted = false;
   var started = false;
@@ -259,6 +260,8 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
     if (!app) return;
     if (!force && !dirty) return;
     var t = serialize();
+    saving = true;
+    if (force) setStatus('正在保存…');
     fetch('/univer/' + RID + '/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -266,6 +269,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
     })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        saving = false;
         if (d.ok) {
           lastSaved = t; dirty = false; lastSynced = d.version;
           setStatus('已保存 · ' + (d.updated_at || '').slice(5, 16), 'ok');
@@ -275,7 +279,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
           setStatus('保存失败：' + (d.msg || d.error || '未知错误'), 'warn');
         }
       })
-      .catch(function () { setStatus('保存失败（网络）', 'warn'); });
+      .catch(function () { saving = false; setStatus('保存失败（网络）', 'warn'); });
   }
 
   function scheduleSave() {
@@ -326,6 +330,24 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         if (booted) manualSave();
+      }
+    });
+
+    /* v12.7.5 离开保护：
+       ① 有未保存修改或保存请求进行中时，阻止静默离开（防「保存后立刻点返回列表」丢数据）；
+       ② 同时用 sendBeacon 尽力兜底发送最后一次快照——页面卸载时普通 fetch 会被浏览器取消，
+          sendBeacon 不受影响（服务端乐观锁 base_version 会防冲突覆盖）。 */
+    window.addEventListener('beforeunload', function (e) {
+      if (booted && app && dirty) {
+        try {
+          var payload = JSON.stringify({ state: serialize(), base_version: lastSynced });
+          navigator.sendBeacon('/univer/' + RID + '/save',
+            new Blob([payload], { type: 'application/json' }));
+        } catch (err) {}
+      }
+      if (dirty || saving) {
+        e.preventDefault();
+        e.returnValue = '有未保存的修改，确定离开？';
       }
     });
 
