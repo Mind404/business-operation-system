@@ -14,7 +14,7 @@
             <div class="hero-focus">WBS 计划管理 · 任务分解 · 进度跟踪 · 交付物管理 →</div>
         </a>
         <a href="/wbs" class="hero-right" style="text-decoration:none;color:inherit;">
-            <div class="hero-todo-card">
+            <div class="hero-todo-card" title="统计口径：仅审批通过的具体任务，不含阶段节点、未审批/已驳回任务">
                 <div class="hero-todo-num {% if stats.wbs_tasks_overdue > 0 %}hero-todo-num-danger{% endif %}">{{ stats.wbs_tasks_overdue }}</div>
                 <div class="hero-todo-label">逾期任务 →</div>
             </div>

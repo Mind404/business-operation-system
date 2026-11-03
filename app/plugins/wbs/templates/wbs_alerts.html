@@ -17,7 +17,8 @@
 <!-- 逾期 -->
 {% if overdue %}
 <div style="margin-bottom:20px;">
-    <h3 style="color:#dc3545;margin:0 0 10px;">🔴 已逾期（{{ overdue|length }}个任务）</h3>
+    <h3 style="color:#dc3545;margin:0 0 2px;">🔴 已逾期（{{ overdue|length }}个任务）</h3>
+    <div style="color:#888;font-size:12px;margin-bottom:10px;">统计口径：仅审批通过的具体任务，不含阶段节点、未审批/已驳回任务</div>
     <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
         <thead><tr style="background:#f8d7da;">
             <th style="padding:8px;border:1px solid #f5c6cb;text-align:left;">任务</th>
