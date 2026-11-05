@@ -323,12 +323,22 @@ def _univer_summary(db, max_chars=6000):
             snap = _json.loads(r['state']) if r['state'] else None
         except Exception:
             snap = None
-        if snap and isinstance(snap, dict) and snap.get('sheets'):
-            for _sk, _s in snap['sheets'].items():
+        if snap and isinstance(snap, dict):
+            sheets = snap.get('sheets')
+            if not isinstance(sheets, dict):
+                continue
+            for _sk, _s in sheets.items():
+                if not isinstance(_s, dict):
+                    continue
                 srows = []
                 maxrow = maxcol = -1
-                cell_data = (_s or {}).get('cellData') or {}
+                cell_data = _s.get('cellData')
+                if not isinstance(cell_data, dict):
+                    # 畸形/空 cellData：跳过该 sheet，不抛异常（v12.7.9）
+                    cell_data = {}
                 for rk, row_map in cell_data.items():
+                    if not isinstance(row_map, dict):
+                        continue
                     try:
                         rr = int(rk)
                     except Exception:
