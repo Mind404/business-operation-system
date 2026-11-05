@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""云文档表格插件。
+"""需求统计管理插件。
 
 本插件将 Univer 开源项目（https://github.com/dream-num/univer，v1.3.1）
 官方 SDK 构建产物真实接入平台：
@@ -148,7 +148,7 @@ def new_room():
                 (name, desc, cur))
             db.commit()
             rid = db.execute('SELECT id FROM univer_rooms WHERE name=?', (name,)).fetchone()['id']
-            log_operation('云文档表格', '新建共享表格', f'新建「{name}」(id={rid})', cur)
+            log_operation('需求统计管理', '新建共享表格', f'新建「{name}」(id={rid})', cur)
             flash(f'共享表格「{name}」已创建', 'ok')
             return redirect(url_for('univer_sheet.open_room', rid=rid))
         except Exception as e:
@@ -191,7 +191,7 @@ def rename_room(rid):
         try:
             db.execute('UPDATE univer_rooms SET name=? WHERE id=?', (name, rid))
             db.commit()
-            log_operation('云文档表格', '重命名表格', '「%s」→「%s」(id=%s)' % (old, name, rid), cur)
+            log_operation('需求统计管理', '重命名表格', '「%s」→「%s」(id=%s)' % (old, name, rid), cur)
             flash('已重命名为「%s」' % name, 'ok')
         except Exception as e:
             db.rollback()
@@ -218,7 +218,7 @@ def delete_room(rid):
     db.execute('UPDATE univer_rooms SET deleted=1, deleted_at=?, deleted_by=? WHERE id=?',
                (now, _username(), rid))
     db.commit()
-    log_operation('云文档表格', '删除共享表格(入回收站)',
+    log_operation('需求统计管理', '删除共享表格(入回收站)',
                   f'删除「{room["name"]}」(id={rid})，已入回收站', _username())
     flash(f'共享表格「{room["name"]}」已删除，可在回收站恢复', 'ok')
     return redirect(url_for('univer_sheet.index'))
@@ -262,7 +262,7 @@ def restore_room(rid):
                    (room['name'] + '（恢复）', rid))
     db.execute('UPDATE univer_rooms SET deleted=0, deleted_at=NULL, deleted_by=NULL WHERE id=?', (rid,))
     db.commit()
-    log_operation('云文档表格', '恢复共享表格', f'恢复「{room["name"]}」(id={rid})', _username())
+    log_operation('需求统计管理', '恢复共享表格', f'恢复「{room["name"]}」(id={rid})', _username())
     flash(f'共享表格「{room["name"]}」已恢复', 'ok')
     return redirect(url_for('univer_sheet.recycle'))
 
@@ -279,7 +279,7 @@ def purge_room(rid):
     db = get_db()
     db.execute('DELETE FROM univer_rooms WHERE id=?', (rid,))
     db.commit()
-    log_operation('云文档表格', '彻底删除共享表格',
+    log_operation('需求统计管理', '彻底删除共享表格',
                   f'彻底删除「{room["name"]}」(id={rid})', _username())
     flash(f'共享表格「{room["name"]}」已彻底删除（不可恢复）', 'ok')
     return redirect(url_for('univer_sheet.recycle'))
@@ -362,7 +362,7 @@ def save_state(rid):
             'updated_by=? WHERE id=?',
             (state, new_version, now, cur, rid))
     db.commit()
-    log_operation('云文档表格', '保存表格', f'保存「{room["name"]}」(id={rid}) v{new_version}', cur)
+    log_operation('需求统计管理', '保存表格', f'保存「{room["name"]}」(id={rid}) v{new_version}', cur)
     return jsonify({'ok': 1, 'version': new_version, 'updated_at': now})
 
 # ------------------------------------------------------------ 导出 ----
@@ -643,8 +643,8 @@ def _summary_for_ai(db, max_chars=6000):
         'SELECT id,name,state,version,updated_at,updated_by FROM univer_rooms '
         'ORDER BY COALESCE(updated_at, created_at) DESC, id DESC').fetchall()
     if not rooms:
-        return '【云文档表格】共 0 张'
-    lines = ['【云文档表格】共 %d 张：' % len(rooms)]
+        return '【需求统计管理】共 0 张'
+    lines = ['【需求统计管理】共 %d 张：' % len(rooms)]
     budget_total = max_chars
     base = max(300, budget_total // max(len(rooms), 1))
     for room in rooms:

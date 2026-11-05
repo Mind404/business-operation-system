@@ -204,6 +204,28 @@ def _insert_dup_rows(db, table, rows):
 
 
 # ============================================================
+def _resolve_display(text):
+    """登录名串（逗号分隔）→ 显示名串；查不到的登录名原样保留（v12.7.7）"""
+    if not text:
+        return text
+    names = [x.strip() for x in str(text).split(',') if x.strip()]
+    if not names:
+        return text
+    db = get_db()
+    placeholders = ','.join('?' * len(names))
+    rows = db.execute('SELECT username, display_name FROM users WHERE username IN (%s)'
+                      % placeholders, names).fetchall()
+    m = {r['username']: (r['display_name'] or r['username']) for r in rows}
+    return ','.join(m.get(n, n) for n in names)
+
+
+def _with_owner_disp(row):
+    """任务行 → dict + owner_disp（预警看板负责人列显示名）"""
+    d = dict(row)
+    d['owner_disp'] = _resolve_display(row['owner'])
+    return d
+
+
 @blueprint.route('/wbs', strict_slashes=False)
 def wbs_projects():
     from datetime import date, timedelta
@@ -215,7 +237,8 @@ def wbs_projects():
         SUM(CASE WHEN parent_id=0 THEN 1 ELSE 0 END) AS phase_count
         FROM wbs_tasks GROUP BY project_id''').fetchall()
     count_map = {r['project_id']: (r['task_count'], r['phase_count']) for r in counts}
-    rows = [dict(r, task_count=count_map.get(r['id'], (0,0))[0], phase_count=count_map.get(r['id'], (0,0))[1]) for r in rows]
+    rows = [dict(r, task_count=count_map.get(r['id'], (0,0))[0], phase_count=count_map.get(r['id'], (0,0))[1],
+                 owner_disp=_resolve_display(r['owner']), participants_disp=_resolve_display(r['participants'])) for r in rows]
     # 预警统计
     today = date.today().isoformat()
     soon3 = (date.today() + timedelta(days=3)).isoformat()
@@ -237,23 +260,23 @@ def wbs_alerts():
     soon3 = (today + timedelta(days=3)).isoformat()
     soon7 = (today + timedelta(days=7)).isoformat()
     # 逾期（只统计任务级审批通过的任务，待审批/已驳回的不纳入预警）
-    overdue = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    overdue = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end!='' AND t.plan_end<? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
+        ORDER BY t.plan_end ASC''', (today_s,)).fetchall()]
     # 3天内
-    due3 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    due3 = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>=? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
+        ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()]
     # 7天内
-    due7 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    due7 = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
+        ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()]
     return render_template('wbs_alerts.html', overdue=overdue, due3=due3, due7=due7, today=today_s)
 
 
@@ -470,6 +493,9 @@ def wbs_project_detail(pid):
     p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
     if not p:
         return redirect(url_for('wbs.wbs_projects'))
+    p = dict(p)
+    p['owner_disp'] = _resolve_display(p.get('owner'))
+    p['participants_disp'] = _resolve_display(p.get('participants'))
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     # 自然排序：按 WBS 编号的数字分段排序（1.10 排在 1.2 之后），同编号按 id 稳定
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
