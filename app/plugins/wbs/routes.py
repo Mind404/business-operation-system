@@ -57,12 +57,53 @@ def _wbs_project_editable(db, pid):
 
 
 def _fmt_date(v):
-    """日期归一化：datetime/date/带时间的字符串 → YYYY-MM-DD（v12.5.11）"""
-    from datetime import datetime, date
-    if isinstance(v, (datetime, date)):
+    """日期归一化（v12.7.6 多格式容错）：任意常见格式 → YYYY-MM-DD；无法解析返回 None。
+
+    支持：
+    - datetime / date 对象
+    - Excel 数值日期序列号（1900 系，如 45701）
+    - 字符串：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 /
+      20261105 / 2026-11-05 10:30（自动截取日期部分）
+    非法值（如 2026-13-99、abc）返回 None，由调用方给出明确错误提示。
+    """
+    from datetime import datetime, date, timedelta
+    if isinstance(v, datetime):
         return v.strftime('%Y-%m-%d')
-    s = str(v or '').strip()
-    return s[:10] if len(s) >= 10 else s
+    if isinstance(v, date):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, (int, float)):
+        try:
+            return (date(1899, 12, 30) + timedelta(days=int(v))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    s = str(v or '').strip().strip('\'"').strip()
+    if not s:
+        return None
+    if _re.fullmatch(r'\d{8}', s):  # 20261105
+        try:
+            return date(int(s[0:4]), int(s[4:6]), int(s[6:8])).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    # 年在前：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 2026-11-5
+    m = _re.search(r'(\d{4})\s*[-/年月.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})(?:日)?', s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(s, fmt).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+    # 美式 MM/DD/YYYY（避免歧义：仅在年月无法匹配时尝试）
+    m = _re.fullmatch(r'(\d{1,2})/(\d{1,2})/(\d{4})', s)
+    if m and 1 <= int(m.group(1)) <= 12:
+        try:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    return None
 
 
 def _all_active_users(db):
@@ -595,7 +636,13 @@ def wbs_import(pid):
     inserted = []  # (row_id, wbs_code)
     updated = []   # (row_id, wbs_code)
     skip = 0
+    # ===== v12.7.6 预检：先全量解析校验，任何一行有问题都不写库（冗余设计）=====
+    parsed = []    # [(row_idx, code, name, work_content, owner, collab, p_start, p_end,
+    #               deliverable, status, progress, remark)]
+    errors = []    # 格式错误清单：'第 N 行：计划开始「xxx」无法识别为日期'
+    row_idx = 1    # Excel 行号（表头占第 1 行，数据从第 2 行起）
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
+        row_idx += 1
         if not row or not row[0]:
             continue
         code = str(row[0]).strip()
@@ -607,6 +654,14 @@ def wbs_import(pid):
         collab = str(row[4] or '').strip()
         p_start = _fmt_date(row[5])
         p_end = _fmt_date(row[6])
+        if row[5] is not None and str(row[5]).strip() != '' and p_start is None:
+            errors.append('第 %d 行：计划开始「%s」无法识别为日期，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 20261105'
+                          % (row_idx, str(row[5]).strip()))
+        if row[6] is not None and str(row[6]).strip() != '' and p_end is None:
+            errors.append('第 %d 行：计划结束「%s」无法识别为日期（格式同上）'
+                          % (row_idx, str(row[6]).strip()))
+        if p_start and p_end and p_start > p_end:
+            errors.append('第 %d 行：计划开始 %s 晚于计划结束 %s' % (row_idx, p_start, p_end))
         deliverable = str(row[7] or '').strip()
         # 新旧格式识别：第9列（索引8）是状态关键字 → 新 12 列格式（状态|进度|备注）
         # 旧 9 列格式：第9列（索引8）是备注（任意文本）
@@ -618,6 +673,7 @@ def wbs_import(pid):
             try:
                 progress = int(float(raw_p.rstrip('%')))
             except Exception:
+                errors.append('第 %d 行：进度「%s」无法识别为 0-100 的数字' % (row_idx, raw_p))
                 progress = 0
         else:
             status = ''
@@ -626,6 +682,19 @@ def wbs_import(pid):
         if status not in ('未开始', '进行中', '已完成', '阻塞'):
             status = '未开始'
         progress = max(0, min(100, progress))
+        parsed.append((row_idx, code, name, work_content, owner, collab,
+                       p_start, p_end, deliverable, status, progress, remark))
+    if errors:
+        head = '导入未执行：发现 %d 处格式问题，请修正后重新导入。' % len(errors)
+        for e in errors[:10]:
+            head += '<br>· ' + e
+        if len(errors) > 10:
+            head += '<br>· …共 %d 处' % len(errors)
+        flash(head, 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    # ===== 预检通过，正式写入 =====
+    for (row_idx, code, name, work_content, owner, collab,
+         p_start, p_end, deliverable, status, progress, remark) in parsed:
         if code in existing:
             if is_admin:
                 # 批量更新：替换内容、状态、进度、备注（保留审批状态、进展、产出物、附件）
@@ -711,6 +780,8 @@ def wbs_task_inline(tid):
             value = 0
     if field in ('plan_start', 'plan_end'):
         value = _fmt_date(value)
+        if value is None:
+            return jsonify({'ok': False, 'msg': '日期格式无法识别，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日'}), 400
     old_value = t[field]
     db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
     db.commit()
@@ -968,7 +1039,7 @@ def wbs_template():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注']
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始(YYYY-MM-DD)','计划结束(YYYY-MM-DD)','交付物/判定标准','状态','进度','备注']
     header_fill = PatternFill('solid', fgColor='2B579A')
     header_font = Font(color='FFFFFF', bold=True, size=11)
     thin = Side(style='thin', color='D0D7E5')
@@ -996,6 +1067,18 @@ def wbs_template():
             cell.alignment = Alignment(vertical='center', wrap_text=True)
             if '.' not in str(row[0]):
                 cell.fill = PatternFill('solid', fgColor='D6E4F5')
+    # 日期格式说明批注（v12.7.6：时间格式容错提示）
+    try:
+        from openpyxl.comments import Comment
+        for rr in range(2, 2 + len(samples)):
+            c6 = ws.cell(row=rr, column=6)
+            c7 = ws.cell(row=rr, column=7)
+            note = Comment('日期支持：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 20261105；'
+                           '也支持 Excel 日期类型直接填写。', '业务高效运转系统', height=90, width=320)
+            c6.comment = note
+            c7.comment = note
+    except Exception:
+        pass
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)

@@ -38,7 +38,7 @@
         <a href="{{ url_for('wbs.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
         <span style="font-size:12px;color:#888;" title="系统所有WBS附件占用的磁盘空间（单文件上限50MB，单任务最多10个附件）">📎 附件共 {{ attach_count }} 个 · {{ attach_mb }} MB</span>
         {% if current_role in ('admin','platform_admin') %}
-        <span style="font-size:12px;color:#777;">导入：模板含状态/进度列；已存在的WBS编号会<b style="color:#2563eb;">同步更新</b>，新编号自动新增并自动排序归类。</span>
+        <span style="font-size:12px;color:#777;">导入：模板含状态/进度列；已存在的WBS编号会<b style="color:#2563eb;">同步更新</b>，新编号自动新增并自动排序归类。<b style="color:#c33;">计划开始/结束</b>支持 2026-11-05、2026/11/05、2026.11.05、2026年11月5日 等格式；格式无法识别时整表不导入并提示行号。</span>
         {% endif %}
         {% if current_role in ('admin','platform_admin') and pending_count > 0 %}
         <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">

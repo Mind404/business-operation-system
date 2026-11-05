@@ -397,7 +397,7 @@ def _snapshot_to_matrix(state):
                 c = int(ck)
             except Exception:
                 continue
-            v = (cell or {}).get('v')
+            v = _cell_text(cell)
             if v is None and (cell or {}).get('s'):
                 v = ''
             if v is None:
@@ -412,6 +412,36 @@ def _snapshot_to_matrix(state):
     if max_r < 0:
         return rows, cols
     return rows, max_c
+
+
+def _cell_text(cell):
+    """单元格显示文本（v12.7.6 修复换行内容缺失）：
+    优先取 v；v 为空但存在富文本段落 p 时（Univer 中带换行的内容常存于此），
+    从段落中提取文本拼接，避免导出 Excel 时内容整体丢失。
+    """
+    if not cell or not isinstance(cell, dict):
+        return None
+    v = cell.get('v')
+    if v is not None:
+        return v
+    p = cell.get('p')
+    if p is None:
+        return None
+    if isinstance(p, str):
+        return p
+    if isinstance(p, dict):
+        p = p.get('p') or p.get('body') or p.get('t') or ''
+    if isinstance(p, str):
+        return p
+    if isinstance(p, list):
+        parts = []
+        for seg in p:
+            if isinstance(seg, str):
+                parts.append(seg)
+            elif isinstance(seg, dict):
+                parts.append(seg.get('t') or seg.get('v') or '')
+        return ''.join(parts)
+    return None
 
 
 def _cell_to_display(v):
@@ -450,7 +480,7 @@ def _snapshot_to_sheets(state):
                     c = int(ck)
                 except Exception:
                     continue
-                v = (cell or {}).get('v')
+                v = _cell_text(cell)
                 if v is None and (cell or {}).get('s'):
                     v = ''
                 row[c] = v
@@ -569,9 +599,16 @@ def export_room(rid):
                 if v == '':
                     continue
                 try:
-                    ws.cell(row=r + 1, column=c + 1, value=v)
+                    cell = ws.cell(row=r + 1, column=c + 1, value=v)
                 except Exception:
-                    ws.cell(row=r + 1, column=c + 1, value=str(v))
+                    cell = ws.cell(row=r + 1, column=c + 1, value=str(v))
+                # v12.7.6：含换行的单元格打开自动换行显示，避免导出后内容被折叠/截断
+                if isinstance(v, str) and '\n' in v:
+                    try:
+                        from openpyxl.styles import Alignment
+                        cell.alignment = Alignment(wrap_text=True, vertical='top')
+                    except Exception:
+                        pass
         # 合并单元格还原
         for (r1, r2, c1, c2) in sh['merges']:
             try:
