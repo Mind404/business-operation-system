@@ -414,10 +414,51 @@ def _snapshot_to_matrix(state):
     return rows, max_c
 
 
+def _seg_text(seg):
+    """从富文本段中提取文本（v12.7.8 补全 Univer 真实结构：body.dataStream）。
+
+    Univer 单元格富文本段落实际结构为
+    {'type':'document','body':{'dataStream':'第一行\\r\\n第二行\\r\\n', ...}}，
+    此前只取 t/v，导致这类单元格导出 Excel / 供 AI 读取时内容整体丢失。
+    同时兼容简化结构（str / {'t':..} / {'v':..} / 嵌套段）。
+    """
+    if seg is None:
+        return ''
+    if isinstance(seg, str):
+        return seg
+    if isinstance(seg, (int, float)):
+        return str(seg)
+    if not isinstance(seg, dict):
+        return ''
+    body = seg.get('body')
+    if isinstance(body, dict):
+        ds = body.get('dataStream')
+        if ds:
+            # dataStream 以 \r\n 收尾；去掉尾部，保留单元格内部换行
+            return ds.rstrip('\r\n')
+        t = body.get('t')
+        if t:
+            return t
+        if body.get('children'):
+            return ''.join(_seg_text(ch) for ch in body['children'])
+    t = seg.get('t')
+    if t:
+        return t
+    v = seg.get('v')
+    if v is not None:
+        return str(v)
+    sub = seg.get('p')
+    if isinstance(sub, list):
+        return ''.join(_seg_text(x) for x in sub)
+    if isinstance(sub, dict):
+        return _seg_text(sub)
+    return ''
+
+
 def _cell_text(cell):
-    """单元格显示文本（v12.7.6 修复换行内容缺失）：
-    优先取 v；v 为空但存在富文本段落 p 时（Univer 中带换行的内容常存于此），
-    从段落中提取文本拼接，避免导出 Excel 时内容整体丢失。
+    """单元格显示文本（v12.7.6 修复换行内容缺失；v12.7.8 补 dataStream 富文本）：
+    优先取 v；v 为空但存在富文本段落 p 时（Univer 中带换行/粘贴内容常存于此），
+    从段落中提取文本拼接，避免导出 Excel / AI 读取时内容整体丢失。
     """
     if not cell or not isinstance(cell, dict):
         return None
@@ -429,18 +470,12 @@ def _cell_text(cell):
         return None
     if isinstance(p, str):
         return p
+    if isinstance(p, (int, float)):
+        return str(p)
     if isinstance(p, dict):
-        p = p.get('p') or p.get('body') or p.get('t') or ''
-    if isinstance(p, str):
-        return p
+        return _seg_text(p) or None
     if isinstance(p, list):
-        parts = []
-        for seg in p:
-            if isinstance(seg, str):
-                parts.append(seg)
-            elif isinstance(seg, dict):
-                parts.append(seg.get('t') or seg.get('v') or '')
-        return ''.join(parts)
+        return ''.join(_seg_text(x) for x in p) or None
     return None
 
 

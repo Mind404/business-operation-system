@@ -267,8 +267,41 @@ def _univer_summary(db, max_chars=6000):
     「坐标=值」可读文本注入 AI（不走通用 LIMIT 2；v12.5.39 改进）：
     - 读取全部未删除表格（deleted=0，排除回收站）
     - 遍历【所有工作表】（不只第一个 sheet），每 sheet 独立成段并标注 sheet 名
-    - 超长内容按字符预算截断并显式标注「…已截断」，AI 不会误以为数据完整"""
+    - 超长内容按字符预算截断并显式标注「…已截断」，AI 不会误以为数据完整
+    v12.7.8：取值统一走 _cell_text（富文本 body.dataStream 不再丢失）"""
     import json as _json
+    try:
+        from plugins.univer_sheet.routes import _cell_text
+    except Exception:
+        def _cell_text(cell):
+            if not cell or not isinstance(cell, dict):
+                return None
+            v = cell.get('v')
+            if v is not None:
+                return v
+            p = cell.get('p')
+            if p is None:
+                return None
+            if isinstance(p, str):
+                return p
+            if isinstance(p, dict):
+                body = p.get('body')
+                if isinstance(body, dict) and body.get('dataStream'):
+                    return body['dataStream'].rstrip('\r\n')
+                return p.get('t')
+            if isinstance(p, list):
+                parts = []
+                for seg in p:
+                    if isinstance(seg, str):
+                        parts.append(seg)
+                    elif isinstance(seg, dict):
+                        b = seg.get('body')
+                        if isinstance(b, dict) and b.get('dataStream'):
+                            parts.append(b['dataStream'].rstrip('\r\n'))
+                        else:
+                            parts.append(seg.get('t') or str(seg.get('v') or ''))
+                return ''.join(parts) or None
+            return None
     try:
         rooms = db.execute(
             'SELECT id, name, description, state, version, updated_at, updated_by '
@@ -302,8 +335,8 @@ def _univer_summary(db, max_chars=6000):
                             cc = int(ck)
                         except Exception:
                             continue
-                        v = (cell or {}).get('v')
-                        if v is None:
+                        v = _cell_text(cell)
+                        if v is None or (isinstance(v, str) and not v.strip()):
                             continue
                         col_letter = ''
                         n = cc + 1
