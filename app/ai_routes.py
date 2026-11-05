@@ -297,10 +297,13 @@ def _univer_summary(db, max_chars=6000):
                     elif isinstance(seg, dict):
                         b = seg.get('body')
                         if isinstance(b, dict) and b.get('dataStream'):
-                            parts.append(b['dataStream'].rstrip('\r\n'))
+                            # 段内 dataStream 原样保留（含段尾 \r\n），
+                            # 拼接后统一去尾部，段间换行不丢失（v12.7.9）
+                            parts.append(b['dataStream'])
                         else:
                             parts.append(seg.get('t') or str(seg.get('v') or ''))
-                return ''.join(parts) or None
+                txt = ''.join(parts)
+                return txt.rstrip('\r\n') if txt else None
             return None
     try:
         rooms = db.execute(

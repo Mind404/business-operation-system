@@ -373,21 +373,29 @@ def _snapshot_to_matrix(state):
     """把 Univer Workbook 快照 JSON 转成 (rows, cols, matrix) 矩阵。
 
     matrix[r][c] = 单元格显示值（v 字段或公式结果），r/c 均为 0 起整数。
+    v12.7.9：畸形快照/空快照统一返回 (rows, -1)，不再抛异常（空表导出 CSV 500）。
     """
     try:
         snap = json.loads(state) if state else None
     except Exception:
         snap = None
-    if not snap or not isinstance(snap, dict) or not snap.get('sheets'):
-        return [], []
+    if not snap or not isinstance(snap, dict):
+        return [], -1
+    sheets = snap.get('sheets')
+    if not isinstance(sheets, dict) or not sheets:
+        return [], -1
     first_sheet = None
-    for _k, _s in snap['sheets'].items():
+    for _k, _s in sheets.items():
         first_sheet = _s
         break
-    cell_data = (first_sheet or {}).get('cellData') or {}
+    cell_data = (first_sheet or {}).get('cellData')
+    if not isinstance(cell_data, dict):
+        return [], -1
     rows, cols = [], []
     max_r, max_c = -1, -1
     for rk, row_map in cell_data.items():
+        if not isinstance(row_map, dict):
+            continue
         try:
             r = int(rk)
         except Exception:
@@ -410,7 +418,7 @@ def _snapshot_to_matrix(state):
             if c > max_c:
                 max_c = c
     if max_r < 0:
-        return rows, cols
+        return rows, -1
     return rows, max_c
 
 
@@ -434,8 +442,9 @@ def _seg_text(seg):
     if isinstance(body, dict):
         ds = body.get('dataStream')
         if ds:
-            # dataStream 以 \r\n 收尾；去掉尾部，保留单元格内部换行
-            return ds.rstrip('\r\n')
+            # 原样返回（含段尾 \r\n）；由 _cell_text 对最终结果统一去尾部换行，
+            # 多段拼接时段间换行得以保留（v12.7.9）
+            return ds
         t = body.get('t')
         if t:
             return t
@@ -456,7 +465,8 @@ def _seg_text(seg):
 
 
 def _cell_text(cell):
-    """单元格显示文本（v12.7.6 修复换行内容缺失；v12.7.8 补 dataStream 富文本）：
+    """单元格显示文本（v12.7.6 修复换行内容缺失；v12.7.8 补 dataStream 富文本；
+    v12.7.9 多段拼接保留段间换行）：
     优先取 v；v 为空但存在富文本段落 p 时（Univer 中带换行/粘贴内容常存于此），
     从段落中提取文本拼接，避免导出 Excel / AI 读取时内容整体丢失。
     """
@@ -473,18 +483,27 @@ def _cell_text(cell):
     if isinstance(p, (int, float)):
         return str(p)
     if isinstance(p, dict):
-        return _seg_text(p) or None
+        txt = _seg_text(p)
+        return txt.rstrip('\r\n') if txt else None
     if isinstance(p, list):
-        return ''.join(_seg_text(x) for x in p) or None
+        txt = ''.join(_seg_text(x) for x in p)
+        return txt.rstrip('\r\n') if txt else None
     return None
 
 
 def _cell_to_display(v):
-    """单元格值 → 可写入文件的值（数字保持数字、公式结果取 v、True/False 转文本）"""
+    """单元格值 → 可写入文件的值（数字保持数字、公式结果取 v、True/False 转文本）。
+
+    v12.7.9 防公式注入（OWASP CSV Injection）：以 = + - @ 开头的字符串
+    加前缀 '，避免导出文件在 Excel/WPS 打开时被当作公式执行；
+    加前缀不影响显示（Excel 打开仍显示原文）。
+    """
     if v is None:
         return ''
     if isinstance(v, bool):
         return 'TRUE' if v else 'FALSE'
+    if isinstance(v, str) and v and v[0] in '=+-@':
+        return "'" + v
     return v
 
 
@@ -497,31 +516,44 @@ def _snapshot_to_sheets(state):
         snap = json.loads(state) if state else None
     except Exception:
         snap = None
-    if not snap or not isinstance(snap, dict) or not snap.get('sheets'):
+    if not snap or not isinstance(snap, dict):
+        return []
+    sheets = snap.get('sheets')
+    if not isinstance(sheets, dict) or not sheets:
         return []
     out = []
-    for _k, _s in snap['sheets'].items():
-        cd = (_s or {}).get('cellData') or {}
-        rows = {}
-        max_c = -1
-        for rk, row_map in cd.items():
-            try:
-                r = int(rk)
-            except Exception:
-                continue
-            row = {}
-            for ck, cell in row_map.items():
+    for _k, _s in sheets.items():
+        if not isinstance(_s, dict):
+            continue
+        cd = _s.get('cellData')
+        if not isinstance(cd, dict) or not cd:
+            # 空/畸形 sheet：仍导出空表头，不抛异常
+            rows, max_c = {}, -1
+        else:
+            rows = {}
+            max_c = -1
+            for rk, row_map in cd.items():
+                if not isinstance(row_map, dict):
+                    continue
                 try:
-                    c = int(ck)
+                    r = int(rk)
                 except Exception:
                     continue
-                v = _cell_text(cell)
-                if v is None and (cell or {}).get('s'):
-                    v = ''
-                row[c] = v
-                if c > max_c:
-                    max_c = c
-            rows[r] = row
+                row = {}
+                for ck, cell in row_map.items():
+                    try:
+                        c = int(ck)
+                    except Exception:
+                        continue
+                    v = _cell_text(cell)
+                    if v is None and (cell or {}).get('s'):
+                        v = ''
+                    if v is None:
+                        continue
+                    row[c] = v
+                    if c > max_c:
+                        max_c = c
+                rows[r] = row
         # 合并区（0-based → Excel 1-based）
         merges = []
         for m in (_s or {}).get('mergeData') or []:
