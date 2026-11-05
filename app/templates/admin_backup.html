@@ -14,7 +14,22 @@
         · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code> 下各插件库）；<br>
         · 自动备份：系统每次启动时自动执行一次；<b>保留策略：每种备份各保留最近 7 份</b>，更旧的自动清理；<br>
         · 恢复提示：恢复会把选中的备份文件覆盖到对应数据库（恢复前系统会自动把当前数据另存一份保护备份），覆盖后<b>请重启系统生效</b>；<br>
-        · 若系统运行中恢复提示「文件被占用」，请先「停止系统.bat」再回到本页重试，或手动用备份文件替换。
+        · 若系统运行中恢复提示「文件被占用」，请先「停止系统.bat」再回到本页重试，或手动用备份文件替换。<br>
+        · <b>换新版本带数据：</b>升级软件后想恢复旧版数据，用下面「导入备份文件」上传旧版备份（或把旧版目录的 <code>app/backups/</code> 整个拷到新版对应位置），即可在列表中恢复。
+    </div>
+
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+        <form method="post" action="{{ url_for('admin_backup_upload') }}" enctype="multipart/form-data"
+              style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
+            <b style="font-size:14px;color:#854d0e;">📥 导入备份文件（升级/换版本后恢复旧数据用）</b>
+            <input type="file" name="backup_file" accept=".db" required
+                   style="border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:13px;background:#fff;">
+            <button type="submit" style="background:#d97706;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;">导入</button>
+        </form>
+        <div style="font-size:12px;color:#92400e;margin-top:6px;">
+            支持上传旧版备份文件（<code>business_备份_*.db</code> 或 <code>&lt;插件id&gt;_备份_*.db</code>，≤512MB）。
+            导入后出现在下方列表，点「恢复」即把旧数据恢复到本版本；恢复前自动保护当前数据。
+        </div>
     </div>
 
     {% if files %}

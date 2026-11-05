@@ -918,6 +918,50 @@ def admin_backup_restore():
         flash(f'恢复失败：{e}（不影响现有数据，现场保护备份已生成）', 'error')
     return redirect(url_for('admin_backup'))
 
+
+@app.route('/admin/backup/upload', methods=['POST'])
+def admin_backup_upload():
+    """导入外部备份文件（v12.7.10 跨版本迁移恢复用）：
+    换新版本后，旧版备份在旧目录/本地，新版 backups/ 是空的——
+    上传旧版备份 .db 到 backups/ → 即可在恢复列表一键恢复到新版。
+    校验：文件名符合备份规范（business_备份_*.db / <插件id>_备份_*.db）、
+    大小 ≤ 512MB、且是有效 SQLite 库。"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('admin_backup'))
+    import re
+    f = request.files.get('backup_file')
+    if not f or not getattr(f, 'filename', None):
+        flash('请先选择要导入的备份文件', 'error')
+        return redirect(url_for('admin_backup'))
+    fname = (f.filename or '').strip()
+    if (not fname.endswith('.db') or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+        flash('文件名不符合备份规范（应为 business_备份_时间.db 或 插件库_备份_时间.db），已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    pre = fname.split('_备份_')[0]
+    if pre != 'business' and not re.fullmatch(r'[a-z0-9_]{2,64}', pre):
+        flash('备份前缀无法识别（只支持 business 或插件库名），已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    MAX = 512 * 1024 * 1024  # 512MB 上限
+    data = f.read(MAX + 1)
+    if len(data) > MAX:
+        flash('备份文件超过 512MB 上限，已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    if len(data) < 16 or data[:16] != b'SQLite format 3\x00':
+        flash('文件不是有效的 SQLite 数据库备份，已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    try:
+        bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+        os.makedirs(bdir, exist_ok=True)
+        with open(os.path.join(bdir, fname), 'wb') as out:
+            out.write(data)
+        flash(f'✅ 已导入备份文件：{fname}。现在可在下方列表选择它进行「恢复」。', 'success')
+    except Exception as e:
+        flash(f'导入失败：{e}', 'error')
+    return redirect(url_for('admin_backup'))
+
 # ============================================================
 # 插件中心：浏览与订阅业务插件
 # ============================================================
