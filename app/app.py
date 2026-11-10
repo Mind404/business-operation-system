@@ -8,6 +8,9 @@ import sys
 # 便携版兼容：确保脚本所在目录（app\）在模块搜索路径中。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlite3
+import json
+import re
+import secrets
 import random
 import io
 import gzip
@@ -191,6 +194,141 @@ def _limit_body_size():
         return jsonify({'ok': False, 'msg': '请求体过大（超过 64MB 上限）'}), 413
 
 
+# ============================================================
+# v12.7.10.10 单账号单设备登录（挤下线）
+#   一个账号在库里只保留一个有效令牌；新设备登录只覆盖令牌，
+#   旧设备的令牌立即不匹配，下一次请求就被登出并提示"已在另一处登录"。
+# ============================================================
+def _bind_login_session(user_id):
+    """登录成功时绑定本次会话令牌，覆盖该账号的旧令牌（= 把旧设备挤下线）。"""
+    token = secrets.token_hex(16)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '')[:64]
+    ua = (request.headers.get('User-Agent') or '')[:120]
+    try:
+        db = get_db()
+        db.execute(
+            'INSERT INTO user_sessions (user_id, token, ip, user_agent, login_at, last_seen) '
+            'VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+            'token=excluded.token, ip=excluded.ip, user_agent=excluded.user_agent, '
+            'login_at=excluded.login_at, last_seen=excluded.last_seen',
+            (user_id, token, ip, ua, now, now))
+        db.commit()
+    except Exception as e:
+        # 令牌表异常不能让登录不可用：退化为不校验（记日志）
+        print('=== _bind_login_session error ===', e)
+    session['sess_token'] = token
+    return token
+
+
+def _clear_login_session(user_id):
+    try:
+        db = get_db()
+        db.execute('DELETE FROM user_sessions WHERE user_id=?', (user_id,))
+        db.commit()
+    except Exception:
+        pass
+
+
+def _session_is_current():
+    """当前会话令牌是否仍是该账号的有效令牌（False = 已被其他地方登录挤掉）。"""
+    uid = session.get('user_id')
+    if not uid:
+        return False
+    token = session.get('sess_token')
+    if not token:
+        # 升级前建立的老会话：认领为当前令牌，升级后不打断在线用户
+        _bind_login_session(uid)
+        return True
+    try:
+        row = get_db().execute('SELECT token FROM user_sessions WHERE user_id=?', (uid,)).fetchone()
+    except Exception:
+        return True
+    if not row:
+        _bind_login_session(uid)
+        return True
+    return row['token'] == token
+
+
+# ============================================================
+# v12.7.10.10 导航排序（平台管理员拖拽后保存，所有用户生效）
+# ============================================================
+NAV_ADMIN_ITEMS = [
+    {'id': 'admin_users',    'name': '用户管理',     'icon': '👥', 'endpoint': 'admin_users',    'nav_path': '/admin/users'},
+    {'id': 'admin_plugins',  'name': '插件管理',     'icon': '🧩', 'endpoint': 'admin_plugins',  'nav_path': '/admin/plugins'},
+    {'id': 'admin_backup',   'name': '数据备份',     'icon': '💾', 'endpoint': 'admin_backup',   'nav_path': '/admin/backup'},
+    {'id': 'admin_ai',       'name': 'AI 智能分析',  'icon': '🤖', 'endpoint': 'ai_admin.index', 'nav_path': '/admin/ai'},
+]
+_NAV_KEY_RE = re.compile(r'^[a-z0-9_-]{1,40}$')
+
+
+def _nav_order():
+    try:
+        row = get_db().execute("SELECT v FROM ui_prefs WHERE k='nav_order'").fetchone()
+        if row and row['v']:
+            data = json.loads(row['v'])
+            return [k for k in data if isinstance(k, str) and _NAV_KEY_RE.match(k)]
+    except Exception:
+        pass
+    return []
+
+
+def _apply_nav_order(items, order):
+    """按保存的顺序重排；未记录的项排在后面，保持原有相对顺序。"""
+    if not order:
+        return items
+    idx = {k: i for i, k in enumerate(order)}
+    return sorted(items, key=lambda it: idx.get(it.get('id'), len(order) + 1))
+
+
+@app.route('/plugin-shell/<pid>')
+def plugin_shell(pid):
+    """v12.7.10.10 外来插件外壳页：顶部固定"返回平台"，内容区 iframe 嵌入插件首页。
+
+    外来插件（上传安装 / 目录发现）通常不继承平台 base.html，直接进页面后没有导航，
+    用户无法回到平台；统一走这里就能保证任何外来插件都有明确的返回入口。
+    """
+    man = plugin_system.plugin_manifest(pid)
+    if not man or not plugin_system.plugin_is_external(pid):
+        flash('插件不存在或不是外部插件', 'error')
+        return redirect(url_for('index'))
+    home = plugin_system.plugin_home_url(pid)
+    return render_template('plugin_shell.html', pid=pid,
+                           plugin_name=man.get('name', pid), plugin_icon=man.get('icon', '🧩'),
+                           home_url=home)
+
+
+@app.route('/admin/nav/order', methods=['POST'])
+def admin_nav_order():
+    """保存导航项顺序（仅平台管理员）。"""
+    if session.get('user_role') != 'platform_admin':
+        return jsonify({'ok': False, 'msg': '仅平台管理员可调整导航顺序'}), 403
+    keys = (request.get_json(silent=True) or {}).get('keys') or []
+    keys = [k for k in keys if isinstance(k, str) and _NAV_KEY_RE.match(k)][:60]
+    try:
+        db = get_db()
+        db.execute("INSERT INTO ui_prefs (k, v, updated_at) VALUES ('nav_order', ?, ?) "
+                   "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                   (json.dumps(keys), datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        db.commit()
+        return jsonify({'ok': True, 'keys': keys})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': '保存失败：%s' % e})
+
+
+@app.route('/admin/nav/order/reset', methods=['POST'])
+def admin_nav_order_reset():
+    if session.get('user_role') != 'platform_admin':
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    try:
+        db = get_db()
+        db.execute("DELETE FROM ui_prefs WHERE k='nav_order'")
+        db.commit()
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': '重置失败：%s' % e})
+
+
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
@@ -199,6 +337,10 @@ def require_login():
         return None
     if 'user_id' not in session:
         return redirect(url_for('login', next=request.path))
+    # v12.7.10.10 单账号单设备：令牌不一致 = 该账号已在别处登录，本会话作废
+    if not _session_is_current():
+        session.clear()
+        return redirect(url_for('login', kicked=1))
     # 权限校验：检查当前角色是否有权限访问该模块
     endpoint = request.endpoint or ''
     # 工作台和登录相关页面所有角色都可以访问
@@ -237,12 +379,22 @@ def inject_user():
     """所有模板可访问当前用户 + 插件导航上下文"""
     ctx = {'current_user': session.get('user_name'), 'current_role': session.get('user_role')}
     try:
-        ctx.update(plugin_system.inject_nav_context())
+        nav = plugin_system.inject_nav_context()
+        # v12.7.10.10：导航按平台管理员保存的顺序渲染（所有用户生效）
+        order = _nav_order()
+        if order:
+            for key in ('nav_core', 'nav_biz'):
+                if nav.get(key):
+                    nav[key] = _apply_nav_order(nav[key], order)
+        ctx.update(nav)
+        ctx['nav_admin'] = _apply_nav_order(list(NAV_ADMIN_ITEMS), order)
+        ctx['nav_order'] = order
     except Exception as e:
         import traceback
         print('=== inject_nav_context error ===')
         traceback.print_exc()
-        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set()})
+        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set(),
+                    'nav_admin': list(NAV_ADMIN_ITEMS), 'nav_order': []})
     return ctx
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -269,6 +421,8 @@ def login():
             session['user_name'] = user['display_name'] or user['username']
             session['user_role'] = user['role']
             session['username'] = user['username']
+            # v12.7.10.10：绑定本次登录令牌，同账号在其他设备的旧会话随即失效
+            _bind_login_session(user['id'])
             _record_login_success(username)
             log_operation('系统', '登录', f'{user["username"]} 登录系统', user['username'])
             return redirect(next_url if next_url else '/')
@@ -276,12 +430,15 @@ def login():
             _record_login_fail(username)
             error = '用户名或密码错误'
             return render_template('login.html', error=error, next=next_url)
-    return render_template('login.html', next=request.args.get('next', '/'))
+    kicked_msg = '该账号已在其他设备登录，当前设备已下线。如非本人操作，请立即修改密码。' \
+        if request.args.get('kicked') else None
+    return render_template('login.html', next=request.args.get('next', '/'), error=kicked_msg)
 
 @app.route('/logout')
 def logout():
     username = session.get('username', 'unknown')
     log_operation('系统', '登出', f'{username} 退出系统', username)
+    _clear_login_session(session.get('user_id'))
     session.clear()
     return redirect(url_for('login'))
 
@@ -318,6 +475,33 @@ def admin_users():
     db = get_db()
     users = db.execute('SELECT * FROM users WHERE COALESCE(deleted,0)=0 ORDER BY id').fetchall()
     return render_template('user_manage.html', users=users, current_username=session.get('username'))
+
+@app.route('/admin/users/export')
+def admin_users_export():
+    """v12.7.10.10 批量导出人员信息（CSV，Excel 双击可开，UTF-8 BOM 防中文乱码）。"""
+    if not _require_admin():
+        flash('无权限导出人员信息', 'error')
+        return redirect(url_for('index'))
+    db = get_db()
+    rows = db.execute(
+        'SELECT username, display_name, role, is_active, department, created_at '
+        'FROM users WHERE COALESCE(deleted,0)=0 ORDER BY id').fetchall()
+    role_cn = {'platform_admin': '平台管理员', 'admin': '管理员', 'user': '普通用户'}
+    import csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['登录账号', '显示名称', '角色', '状态', '部门', '创建时间'])
+    for r in rows:
+        w.writerow([
+            r['username'], r['display_name'] or '', role_cn.get(r['role'], r['role'] or ''),
+            '启用' if r['is_active'] else '停用', r['department'] or '', r['created_at'] or '',
+        ])
+    data = ('\ufeff' + buf.getvalue()).encode('utf-8')
+    fname = '人员信息_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
+    log_operation('系统', '导出', '导出人员信息 %d 条' % len(rows), session.get('username', ''))
+    return send_file(io.BytesIO(data), mimetype='text/csv; charset=utf-8',
+                     as_attachment=True, download_name=fname)
+
 
 @app.route('/admin/users/create', methods=['POST'])
 def admin_user_create():

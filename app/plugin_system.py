@@ -199,6 +199,9 @@ def inject_nav_context():
             'id': pid, 'name': man.get('name', pid), 'icon': man.get('icon', '🧩'),
             'group': man.get('group', '业务'), 'core': 0, 'desc': man.get('description', ''),
             'endpoint': ep, 'nav_path': man.get('url_prefix', man.get('nav_path', '/' + pid)),
+            # v12.7.10.10：仅"上传安装"的插件算外来插件，导航走平台外壳页（带"返回平台"）；
+            # 平台自带的目录型插件（univer_sheet 等，install_type=builtin）仍直接进页面，避免双层导航
+            'external': (pid in _upload_plugin_ids()),
         })
     return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
             'nav_all_plugins': available, 'user_subscribed': set()}
@@ -399,6 +402,69 @@ def _invalidate_manifest_cache():
     _manifest_cache = None
 
 
+def plugin_data_sources():
+    """v12.7.10.10 外部插件数据源清单（供平台 AI 读取）。
+
+    约定：外部插件在 manifest 里用 `data_open` 声明数据开放情况，默认开放——
+        'data_open': {
+            'ai_readable': True,             # 默认 True；显式 False 表示该插件数据不对平台 AI 开放
+            'tables': ['my_items', 'my_logs'],  # 可选：允许 AI 读取的表清单，不写=按 manifest['tables']
+            'description': '一句话说明数据内容与口径',
+        }
+    平台不要求插件额外写只读接口：上传插件的数据表本来就落在 data/<插件id>.db，
+    AI 直接只读该库；声明只用于"读哪些表 / 是否开放"的边界控制。
+    """
+    out = []
+    try:
+        enabled = _enabled_ids()
+    except Exception:
+        enabled = set()
+    builtin = {p['id'] for p in PLUGINS}
+    data_dir = os.path.join(_app_dir(), 'data')
+    for pid, man in _manifest_map().items():
+        if pid in builtin:
+            continue
+        decl = man.get('data_open') or {}
+        tables = list(decl.get('tables') or man.get('tables') or [])
+        out.append({
+            'id': pid,
+            'name': man.get('name', pid),
+            'enabled': pid in enabled,
+            'ai_readable': bool(decl.get('ai_readable', True)),
+            'tables': tables,
+            'db_path': os.path.join(data_dir, pid + '.db'),
+            'note': decl.get('description', ''),
+        })
+    return out
+
+
+def plugin_manifest(pid):
+    """取插件 manifest：内置静态表优先，其次目录发现的外部插件。"""
+    for p in PLUGINS:
+        if p['id'] == pid:
+            return dict(p)
+    return dict(_manifest_map().get(pid) or {})
+
+
+def plugin_home_url(pid):
+    """插件首页 URL（用于平台外壳页 iframe 嵌入）。"""
+    man = plugin_manifest(pid)
+    ep = man.get('endpoint')
+    if ep:
+        try:
+            return url_for(ep)
+        except Exception:
+            pass
+    return man.get('url_prefix') or ('/' + pid)
+
+
+def plugin_is_external(pid):
+    """是否外来插件：仅限上传安装（install_type=upload），平台自带插件不算。"""
+    if any(p['id'] == pid for p in PLUGINS):
+        return False
+    return pid in _upload_plugin_ids()
+
+
 def _enabled_ids():
     db = get_db()
     rows = db.execute('SELECT id, enabled FROM plugin_registry').fetchall()
@@ -528,7 +594,9 @@ _LEGACY_TABLE_PREFIXES = ('wbs_', 'reqcollect_', 'test_', 'ai_', 'production_', 
 # 平台系统表（非插件业务表）
 _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'user_plugins', 'operation_logs', 'ai_providers',
-                           'ai_chat_logs', 'approval_requests'}
+                           'ai_chat_logs', 'approval_requests',
+                           # v12.7.10.10 平台自身新表（非插件建表，无需登记 plugin_tables）
+                           'user_sessions', 'ui_prefs'}
 # 平台早期无前缀遗留业务表（白名单豁免；v12.4.8 已删除 42 张 8 模块时代业务表，
 # 仅剩 users/tasks 两张核心在用：登录与工作台待办）
 _PLATFORM_LEGACY_TABLES = {'users', 'tasks'}

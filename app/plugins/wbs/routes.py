@@ -696,11 +696,22 @@ def wbs_import(pid):
             status = str(row[8]).strip()
             remark = str(row[10] or '').strip() if len(row) > 10 else ''
             raw_p = (str(row[9]).strip() if row[9] is not None else '')
-            try:
-                progress = int(float(raw_p.rstrip('%')))
-            except Exception:
-                errors.append('第 %d 行：进度「%s」无法识别为 0-100 的数字' % (row_idx, raw_p))
+            # v12.7.10.10：进度列留空是常态（Excel 里刚排的任务还没填），默认按 0 处理，不再报错
+            if not raw_p:
                 progress = 0
+            else:
+                try:
+                    progress = int(float(raw_p.rstrip('%').strip()))
+                except Exception:
+                    # 兼容 "50%" / "50 ％" / "５０" / "完成一半" 之类
+                    import re as _re
+                    m = _re.search(r'\d+', raw_p)
+                    if m:
+                        progress = int(m.group(0))
+                    else:
+                        errors.append('第 %d 行：进度「%s」无法识别为 0-100 的数字（留空则按 0 处理）'
+                                      % (row_idx, raw_p))
+                        progress = 0
         else:
             status = ''
             remark = str(row[8] or '').strip() if len(row) > 8 else ''

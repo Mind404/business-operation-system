@@ -24,7 +24,7 @@
                     {% for p in nav_core %}
                     {% set np = p.nav_path %}
                     {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
@@ -37,29 +37,35 @@
                     {% for p in nav_biz %}
                     {% set np = p.nav_path %}
                     {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
                 </div>
                 {% endif %}
 
-                {# v12.1.0 系统管理（仅平台管理员可见）：用户管理 + 插件管理 #}
+                {# 系统管理（仅平台管理员可见）：顺序可在页面上拖拽调整 #}
                 {% if current_role == 'platform_admin' %}
-                <div class="nav-group">
+                <div class="nav-group" id="navAdminGroup">
                     <div class="nav-group-title">系统管理</div>
-                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
-                        <span class="nav-icon">👥</span> 用户管理
+                    {% for p in nav_admin %}
+                    {% set np = p.nav_path %}
+                    {% set is_active = request.path.startswith(np) %}
+                    <a href="{{ url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
-                    <a href="{{ url_for('admin_plugins') }}" class="nav-item {% if request.path.startswith('/admin/plugins') %}active{% endif %}">
-                        <span class="nav-icon">🧩</span> 插件管理
-                    </a>
-                    <a href="{{ url_for('admin_backup') }}" class="nav-item {% if request.path.startswith('/admin/backup') %}active{% endif %}">
-                        <span class="nav-icon">💾</span> 数据备份
-                    </a>
-                    <a href="{{ url_for('ai_admin.index') }}" class="nav-item {% if request.path.startswith('/admin/ai') %}active{% endif %}">
-                        <span class="nav-icon">🤖</span> AI 智能分析
-                    </a>
+                    {% endfor %}
+                </div>
+                <div style="padding:6px 12px 10px;">
+                    {% if session.get('user_role') == 'platform_admin' %}
+                    <button type="button" id="navEditBtn" onclick="toggleNavEdit()"
+                            style="width:100%;padding:6px 8px;font-size:12px;color:#93a4c4;background:transparent;border:1px dashed rgba(255,255,255,.18);border-radius:6px;cursor:pointer;">
+                        ✥ 调整导航顺序
+                    </button>
+                    <div id="navEditHint" style="display:none;font-size:11px;color:#9fb0cc;line-height:1.5;margin-top:6px;">
+                        拖动左侧项目到目标位置，完成后点上方按钮保存。顺序对所有用户生效。
+                    </div>
+                    {% endif %}
                 </div>
                 {% endif %}
 
@@ -526,6 +532,57 @@
         } else {
             autoHide();
         }
+    })();
+    </script>
+    <script>
+    // v12.7.10.10 导航顺序拖拽（仅平台管理员可见该入口，后端另有角色校验）
+    (function () {
+        var editing = false;
+        function saveNavOrder() {
+            var keys = [].map.call(document.querySelectorAll('.nav-menu .nav-item'), function (a) {
+                return a.getAttribute('data-nav-key');
+            }).filter(Boolean);
+            fetch('/admin/nav/order', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({keys: keys})
+            }).then(function (r) { return r.json(); }).then(function (d) {
+                if (!d || !d.ok) alert((d && d.msg) || '导航顺序保存失败');
+            }).catch(function () { alert('导航顺序保存失败（网络异常）'); });
+        }
+        window.toggleNavEdit = function () {
+            editing = !editing;
+            document.querySelectorAll('.nav-menu .nav-item').forEach(function (a) {
+                a.draggable = editing;
+                a.style.cursor = editing ? 'grab' : '';
+                a.style.outline = editing ? '1px dashed rgba(255,255,255,.28)' : '';
+            });
+            var btn = document.getElementById('navEditBtn');
+            var hint = document.getElementById('navEditHint');
+            if (btn) btn.textContent = editing ? '✓ 完成并保存' : '✥ 调整导航顺序';
+            if (hint) hint.style.display = editing ? 'block' : 'none';
+            if (!editing) saveNavOrder();
+        };
+        var dragging = null;
+        document.addEventListener('dragstart', function (e) {
+            var a = e.target.closest && e.target.closest('.nav-item');
+            if (!a || !editing) return;
+            dragging = a; a.style.opacity = '.4';
+            try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'x'); } catch (x) {}
+        });
+        document.addEventListener('dragend', function () {
+            if (dragging) dragging.style.opacity = '';
+            dragging = null;
+        });
+        document.addEventListener('dragover', function (e) {
+            if (!dragging) return;
+            var a = e.target.closest && e.target.closest('.nav-item');
+            if (!a || a === dragging) return;
+            if (a.parentElement !== dragging.parentElement) return;  // 只允许同组内调整
+            e.preventDefault();
+            var rect = a.getBoundingClientRect();
+            var after = (e.clientY - rect.top) > rect.height / 2;
+            a.parentElement.insertBefore(dragging, after ? a.nextSibling : a);
+        });
     })();
     </script>
 </body>

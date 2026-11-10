@@ -88,6 +88,19 @@
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
 
+<!-- v12.7.10.10 折叠工具栏 -->
+<div id="wbsCollapseBar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 8px;">
+    <button type="button" id="btnCollapseDone" onclick="wbsToggleDone()"
+            style="padding:6px 12px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;">
+        ⊟ 折叠已完成
+    </button>
+    <button type="button" onclick="wbsExpandAll()"
+            style="padding:6px 12px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;">
+        ⊞ 全部展开
+    </button>
+    <span id="wbsCollapseInfo" style="font-size:12px;color:#6b7280;">全部展开</span>
+</div>
+
 <!-- WBS表格 -->
 <div id="wbsWrap" style="overflow-x:auto;">
 <table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;table-layout:fixed;">
@@ -114,7 +127,8 @@
         {% set is_phase = '.' not in (t.wbs_code or '') %}
         {% set depth = (t.wbs_code or '').split('.')|length - 1 %}
         {% set pad = depth * 18 %}
-        <tr data-tid="{{ t.id }}" class="{% if is_phase %}phase-row{% else %}task-row{% endif %}"
+        <tr data-tid="{{ t.id }}" data-code="{{ t.wbs_code or '' }}" data-status="{{ t.status or '' }}"
+            class="{% if is_phase %}phase-row{% else %}task-row{% endif %}"
             style="{% if is_phase %}background:#d6e4f5;font-weight:600;{% else %}background:#fff;{% endif %}">
             <td style="padding:7px 6px;border:1px solid #d0d7e5;text-align:center;">
                 {% if current_role in ('admin','platform_admin') %}
@@ -720,5 +734,87 @@ function setZoom(z) {
     try { localStorage.setItem('wbsZoom', z); } catch(e){}
 }
 (function(){ try { var z = parseFloat(localStorage.getItem('wbsZoom')||'1'); setZoom(z); } catch(e){} })();
+</script>
+<script>
+// v12.7.10.10 WBS 层级折叠：父任务点 ▶/▼ 收起子任务；一键折叠已完成；全部展开
+(function () {
+    var table = document.getElementById('wbsTable');
+    if (!table) return;
+    var rows = [].slice.call(table.querySelectorAll('tbody tr'));
+    var collapsed = {};      // 被收起的父任务编号集合
+    var hideDone = false;    // 是否折叠已完成
+
+    function codeOf(tr) { return (tr.getAttribute('data-code') || '').trim(); }
+    function isDone(tr) { return (tr.getAttribute('data-status') || '').indexOf('已完成') === 0; }
+    function ancestors(code) {
+        var parts = code.split('.'), out = [];
+        for (var i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('.'));
+        return out;
+    }
+    function descendants(code) {
+        if (!code) return [];
+        return rows.filter(function (r) { return codeOf(r).indexOf(code + '.') === 0; });
+    }
+    function hasChild(code) { return descendants(code).length > 0; }
+
+    // 已完成行是否可整体收起：自己已完成，且所有子孙都已完成（不把未完成子任务藏起来）
+    function canCollapseDone(tr) {
+        if (!isDone(tr)) return false;
+        var kids = descendants(codeOf(tr));
+        return kids.every(isDone);
+    }
+
+    function refresh() {
+        var hidden = 0;
+        rows.forEach(function (tr) {
+            var code = codeOf(tr);
+            var byParent = ancestors(code).some(function (a) { return collapsed[a]; });
+            var byDone = hideDone && canCollapseDone(tr);
+            var hide = byParent || byDone;
+            tr.style.display = hide ? 'none' : '';
+            if (hide) hidden++;
+            var btn = tr.querySelector('.wbs-toggle');
+            if (btn) {
+                var c = !!collapsed[code];
+                btn.textContent = c ? '▶' : '▼';
+                btn.title = c ? '展开子任务' : '收起子任务';
+            }
+        });
+        var info = document.getElementById('wbsCollapseInfo');
+        if (info) {
+            var parts = [];
+            if (hidden) parts.push('已隐藏 ' + hidden + ' 行');
+            if (Object.keys(collapsed).length) parts.push('收起 ' + Object.keys(collapsed).length + ' 个父任务');
+            if (hideDone) parts.push('已折叠完成项');
+            info.textContent = parts.length ? parts.join(' · ') : '全部展开';
+        }
+        var btnDone = document.getElementById('btnCollapseDone');
+        if (btnDone) btnDone.textContent = hideDone ? '⊞ 显示已完成' : '⊟ 折叠已完成';
+    }
+
+    // 给有子任务的父行插入折叠按钮（按钮插在 WBS 编号单元格最前，父行本身始终保留）
+    rows.forEach(function (tr) {
+        var code = codeOf(tr);
+        if (!code || !hasChild(code)) return;
+        var firstCell = tr.querySelector('td');
+        if (!firstCell || firstCell.querySelector('.wbs-toggle')) return;
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'wbs-toggle';
+        btn.textContent = '▼';
+        btn.title = '收起子任务';
+        btn.style.cssText = 'border:none;background:transparent;cursor:pointer;color:#2b579a;font-size:12px;padding:0 3px;line-height:1;';
+        btn.onclick = function (e) {
+            e.stopPropagation();
+            if (collapsed[code]) delete collapsed[code]; else collapsed[code] = true;
+            refresh();
+        };
+        firstCell.insertBefore(btn, firstCell.firstChild);
+    });
+
+    window.wbsToggleDone = function () { hideDone = !hideDone; refresh(); };
+    window.wbsExpandAll = function () { collapsed = {}; hideDone = false; refresh(); };
+    refresh();
+})();
 </script>
 {% endblock %}

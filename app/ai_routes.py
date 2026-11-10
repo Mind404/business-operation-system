@@ -226,7 +226,10 @@ def delete_conversation(cid):
 # 数据库上下文采集（含插件表）：只读、白名单表名、按问题相关性、仅注入有数据表
 # ============================================================
 _SAFE_TABLE = re.compile(r'^[A-Za-z0-9_]+$')
-_EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers')
+# v12.7.10.10：平台系统表一律不进 AI 上下文（账号密码哈希、登录令牌、审计日志等不得外发）
+_EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers',
+                   'users', 'operation_logs', 'plugin_registry', 'user_plugins',
+                   'user_sessions', 'ui_prefs')
 
 
 def _table_words(question):
@@ -523,11 +526,23 @@ def _collect_db_context(question, max_chars=8000):
     import os as _os
     data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
     plug_parts, plug_files = [], []
+    # v12.7.10.10 插件数据开放：按 manifest 的 data_open 声明决定是否读、读哪些表
+    try:
+        import plugin_system as _ps
+        _src = {x['id']: x for x in _ps.plugin_data_sources()}
+    except Exception:
+        _src = {}
     if _os.path.isdir(data_dir):
         for fn in sorted(_os.listdir(data_dir)):
             if not fn.endswith('.db'):
                 continue
             pid = fn[:-3]
+            src = _src.get(pid) or {}
+            if src and src.get('ai_readable') is False:
+                plug_parts.append('插件「%s」在 manifest 中声明数据不对平台 AI 开放（data_open.ai_readable=false），已跳过。'
+                                  % src.get('name', pid))
+                continue
+            allow_tables = set(src.get('tables') or [])
             try:
                 cdb = sqlite3.connect(_os.path.join(data_dir, fn), timeout=3.0)
                 cdb.row_factory = sqlite3.Row
@@ -538,6 +553,8 @@ def _collect_db_context(question, max_chars=8000):
                 for t in tabs:
                     if t in _EXCLUDE_TABLES or not _SAFE_TABLE.match(t):
                         continue
+                    if allow_tables and t not in allow_tables:
+                        continue
                     try:
                         cols = [c[1] for c in cdb.execute('PRAGMA table_info(%s)' % t).fetchall()]
                         cnt = cdb.execute('SELECT COUNT(*) AS c FROM %s' % t).fetchone()['c']
@@ -546,7 +563,8 @@ def _collect_db_context(question, max_chars=8000):
                     except Exception:
                         pass
                 if ptabs:
-                    lines = ['插件「%s」独立库数据（%d 张有数据表）：' % (pid, len(ptabs))]
+                    label = src.get('name') or pid
+                    lines = ['外部插件「%s」独立库数据（插件声明 AI 可读，%d 张有数据表）：' % (label, len(ptabs))]
                     for t, cnt, cols in ptabs:
                         lines.append(_sample_part(cdb, t, cnt, cols, 1))
                     plug_parts.append('\n'.join(lines))

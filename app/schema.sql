@@ -99,3 +99,20 @@ CREATE TABLE IF NOT EXISTS wbs_tasks (
 );
 
 -- 外部技术需求插件表
+
+-- v12.7.10.10 单账号单设备登录（挤下线）：一个账号只保留一个有效登录令牌
+CREATE TABLE IF NOT EXISTS user_sessions (
+    user_id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL,
+    ip TEXT,
+    user_agent TEXT,
+    login_at TEXT,
+    last_seen TEXT
+);
+
+-- v12.7.10.10 平台级界面偏好（导航拖拽顺序等），键值存储
+CREATE TABLE IF NOT EXISTS ui_prefs (
+    k TEXT PRIMARY KEY,
+    v TEXT,
+    updated_at TEXT
+);
