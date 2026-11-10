@@ -1838,6 +1838,16 @@ def perform_backup(label='启动'):
                 os.remove(pz)
     except Exception as e:
         print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
+    # v12.7.10.15：清掉备份目录里被顺带打开的 -wal/-shm（0 字节残留，易被误当成"空备份"）
+    try:
+        for f in os.listdir(bdir):
+            if f.endswith(('-wal', '-shm')) and '_备份_' in f:
+                try:
+                    os.remove(os.path.join(bdir, f))
+                except Exception:
+                    pass
+    except Exception:
+        pass
     # 只保留最近 7 份（business_ / 各 <插件id>_ / pluginpack_ 前缀各自保留 7 份）
     groups = {}
     for f in os.listdir(bdir):
