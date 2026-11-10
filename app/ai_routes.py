@@ -227,10 +227,34 @@ def delete_conversation(cid):
 # ============================================================
 _SAFE_TABLE = re.compile(r'^[A-Za-z0-9_]+$')
 # v12.7.10.10：平台系统表一律不进 AI 上下文（账号密码哈希、登录令牌、审计日志等不得外发）
-_EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers',
-                   'users', 'operation_logs', 'plugin_registry', 'user_plugins',
-                   'user_sessions', 'ui_prefs')
+_EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers', 'ai_conversations',
+                   'ai_messages', 'users', 'operation_logs', 'plugin_registry', 'user_plugins',
+                   'user_sessions', 'ui_prefs', 'tasks', 'approval_requests')
 
+
+_SEL_STOP = {'合同', '台账', '需求', '任务', '项目', '金额', '客户', '负责人', '状态', '阻塞', '部门',
+             '优先级', '汇总', '统计', '明细', '列表', '所有', '每个', '分别', '情况', '数据', '记录',
+             '当前', '目前', '平台', '系统', '一共', '总共', '多少', '哪些', '怎么', '如何', '是否',
+             '有没有', '分别是', '还有', '哪些人', '谁负责', '看一下', '分析', '查看', '查询', '现在'}
+
+
+def _selective_words(question):
+    """行级检索专用关键词：只保留有区分度的词（编号、专有名词、≥4 字中文片段），
+    避免"合同/任务/需求"这类泛词把整表前几行都命中（v12.7.14）。"""
+    out = []
+    for w in re.findall(r'[A-Za-z][A-Za-z0-9_\-]{2,}', question):
+        out.append(w)
+    for seg in re.findall(r'[\u4e00-\u9fa5]{2,10}', question):
+        for i in range(len(seg)):
+            for j in range(i + 4, min(i + 9, len(seg) + 1)):
+                frag = seg[i:j]
+                if frag not in _SEL_STOP:
+                    out.append(frag)
+    seen, res = set(), []
+    for w in sorted(out, key=lambda x: -len(x)):
+        if w not in seen:
+            seen.add(w); res.append(w)
+    return res[:8]
 
 def _table_words(question):
     """从问题中提取关键词（中英文单词/短语片段），返回按长度优先去重排序的列表，
@@ -265,13 +289,11 @@ def _safe_sample_cols(cols):
     return [c for c in cols if c not in _SENSITIVE_COL]
 
 
-def _univer_summary(db, max_chars=6000):
-    """需求统计管理专用提取：把每张表的 Univer Workbook 快照 JSON 解析为
-    「坐标=值」可读文本注入 AI（不走通用 LIMIT 2；v12.5.39 改进）：
-    - 读取全部未删除表格（deleted=0，排除回收站）
-    - 遍历【所有工作表】（不只第一个 sheet），每 sheet 独立成段并标注 sheet 名
-    - 超长内容按字符预算截断并显式标注「…已截断」，AI 不会误以为数据完整
-    v12.7.8：取值统一走 _cell_text（富文本 body.dataStream 不再丢失）"""
+def _univer_summary(db, max_chars=9000, words=None):
+    """需求统计管理提取（v12.7.14 重构）：
+    大表（几百~几千行）不再把单元格全文拼接后被截断，而是输出
+    「表头 + 确定性列画像（合计/均值/分布）+ 3 行样例」，让 AI 能回答
+    汇总统计类问题；每张表仍标注真实行数，避免误判为数据不完整。"""
     import json as _json
     try:
         from plugins.univer_sheet.routes import _cell_text
@@ -300,8 +322,6 @@ def _univer_summary(db, max_chars=6000):
                     elif isinstance(seg, dict):
                         b = seg.get('body')
                         if isinstance(b, dict) and b.get('dataStream'):
-                            # 段内 dataStream 原样保留（含段尾 \r\n），
-                            # 拼接后统一去尾部，段间换行不丢失（v12.7.9）
                             parts.append(b['dataStream'])
                         else:
                             parts.append(seg.get('t') or str(seg.get('v') or ''))
@@ -317,7 +337,8 @@ def _univer_summary(db, max_chars=6000):
     if not rooms:
         return ''
     total = len(rooms)
-    per = max(300, max_chars // total)
+    words = words or []
+    per = max(900, max_chars // total)
     parts = []
     for r in rooms:
         sheet_txts = []
@@ -333,12 +354,11 @@ def _univer_summary(db, max_chars=6000):
             for _sk, _s in sheets.items():
                 if not isinstance(_s, dict):
                     continue
-                srows = []
-                maxrow = maxcol = -1
                 cell_data = _s.get('cellData')
                 if not isinstance(cell_data, dict):
-                    # 畸形/空 cellData：跳过该 sheet，不抛异常（v12.7.9）
-                    cell_data = {}
+                    sheet_txts.append('〔工作表：%s〕（空白表，无数据）' % ((_s or {}).get('name') or _sk))
+                    continue
+                grid, maxrow, maxcol = {}, -1, -1
                 for rk, row_map in cell_data.items():
                     if not isinstance(row_map, dict):
                         continue
@@ -354,26 +374,33 @@ def _univer_summary(db, max_chars=6000):
                         v = _cell_text(cell)
                         if v is None or (isinstance(v, str) and not v.strip()):
                             continue
-                        col_letter = ''
-                        n = cc + 1
-                        while n:
-                            n, rem = divmod(n - 1, 26)
-                            col_letter = chr(65 + rem) + col_letter
-                        srows.append('%s%d=%s' % (col_letter, rr + 1, v))
+                        grid.setdefault(rr, {})[cc] = str(v)
                         if rr > maxrow:
                             maxrow = rr
                         if cc > maxcol:
                             maxcol = cc
                 sname = (_s or {}).get('name') or _sk
-                if not srows:
+                if maxrow < 0:
                     sheet_txts.append('〔工作表：%s〕（空白表，无数据）' % sname)
-                else:
-                    stxt = '〔工作表：%s，%dx%d〕%s' % (
-                        sname,
-                        maxrow + 1 if maxrow >= 0 else 0,
-                        maxcol + 1 if maxcol >= 0 else 0,
-                        '，'.join(srows))
-                    sheet_txts.append(stxt)
+                    continue
+                names = []
+                for c in range(maxcol + 1):
+                    h = grid.get(0, {}).get(c, '')
+                    names.append(h[:20] if h else '列%d' % (c + 1))
+                rows = []
+                for rr in range(1, min(maxrow, 3000) + 1):
+                    rd = {}
+                    for c in range(maxcol + 1):
+                        rd[names[c]] = grid.get(rr, {}).get(c, '')
+                    if any(str(v).strip() for v in rd.values()):
+                        rows.append(rd)
+                prof = _profile_text(names, rows, total=maxrow, budget=1100)
+                extra = '\n'.join(x for x in (_kw_rows(names, rows, words),
+                                              _extreme_rows(names, rows)) if x)
+                sample = _json.dumps(rows[:3], ensure_ascii=False, default=str)[:480]
+                stxt = ('〔工作表：%s，共 %d 行 x %d 列〕表头: %s\n%s\n%s\n样例行(前3行): %s' % (
+                    sname, maxrow, maxcol + 1, ' | '.join(names), prof, extra, sample))
+                sheet_txts.append(stxt)
         head = '表「%s」（房间#%s，v%s，%s更新·%s，工作表%d 个）' % (
             r['name'] or '(未命名)', r['id'], r['version'],
             (r['updated_at'] or '')[:16], r['updated_by'] or '?',
@@ -386,6 +413,7 @@ def _univer_summary(db, max_chars=6000):
                 txt = txt[:per] + '\n…（本表内容超长，已截断，请告知用户数据可能不完整）'
         parts.append(txt)
     return '【需求统计管理】共 %d 张（按新建先后倒序，以下为各表内容）：\n\n%s' % (total, '\n\n'.join(parts))
+
 
 
 def _search_wbs_rows(db, words, max_rows_proj=6, max_rows_task=12):
@@ -444,7 +472,7 @@ def _row_line(row, max_chars=320):
     return t[:max_chars]
 
 
-def _collect_db_context(question, max_chars=8000):
+def _collect_db_context(question, max_chars=14000):
     """只注入【有数据】的表；按问题关键词做相关性排序（相关表优先完整注入），
     空表与无关表直接跳过 —— 让小模型聚焦真实业务数据，避免被无关空表干扰发散。
     特殊表：univer_rooms（需求统计管理，每行=整本 Workbook 快照 JSON）走专用解析，全量转文本注入。
@@ -484,10 +512,11 @@ def _collect_db_context(question, max_chars=8000):
 
     # 动态预算：问题指向需求收集时给足，否则给需求收集少一些、把空间让给 WBS 行数据
     req_words = ('需求', '收集', '子表', '表', '采集', '清单')
-    req_budget = 7600 if any(w in question for w in req_words) else 4200
+    req_budget = 11000 if any(w in question for w in req_words) else 6500
 
     # 预先做 WBS 行级搜索（在预算内优先于样例）
-    proj_txt, task_txt = _search_wbs_rows(db, words)
+    sel = _selective_words(question)
+    proj_txt, task_txt = _search_wbs_rows(db, (sel or words), max_rows_task=15)
 
     parts = []
     used = 0
@@ -495,22 +524,22 @@ def _collect_db_context(question, max_chars=8000):
     related = sum(1 for x in scored if x[3] > 0)
     for idx, (t, cnt, cols, score) in enumerate(scored):
         if t == 'univer_rooms':
-            part = _univer_summary(db)
+            part = _univer_summary(db, max_chars=req_budget, words=sel)
             tag = '相关'
         elif t == 'wbs_projects':
             if proj_txt:
                 part = proj_txt
             else:
-                part = _sample_part(db, t, cnt, cols, score)
+                part = _sample_part(db, t, cnt, cols, score, sel)
             tag = '相关' if (proj_txt or score > 0) else ''
         elif t == 'wbs_tasks':
             if task_txt:
                 part = task_txt
             else:
-                part = _sample_part(db, t, cnt, cols, score)
+                part = _sample_part(db, t, cnt, cols, score, words)
             tag = '相关' if (task_txt or score > 0) else ''
         else:
-            part = _sample_part(db, t, cnt, cols, score)
+            part = _sample_part(db, t, cnt, cols, score, words)
             tag = '相关' if score > 0 else ''
         if used + len(part) > max_chars:
             # 至少保证最相关块能装入
@@ -565,8 +594,18 @@ def _collect_db_context(question, max_chars=8000):
                 continue
             lines = ['外部插件「%s」开放数据（OpenAPI v1 接口，%d 张有数据表）：' % (name_p, len(usable))]
             for d, t, cnt in usable:
-                got = _ps.plugin_openapi_rows(_pid, t, limit=2, offset=0)
-                rows = (got or {}).get('rows') or []
+                _rows_all, _off = [], 0
+                while _off < 3000:
+                    _g = _ps.plugin_openapi_rows(_pid, t, limit=1000, offset=_off) or {}
+                    _rs = _g.get('rows') or []
+                    if not _rs:
+                        break
+                    _rows_all.extend(_rs)
+                    _off += 1000
+                    if len(_rs) < 1000:
+                        break
+                got = {'rows': _rows_all}
+                rows = _rows_all
                 cols = (got or {}).get('fields') or d.get('fields') or []
                 if cols and isinstance(cols[0], dict):
                     cols = [c.get('name') for c in cols]
@@ -577,9 +616,12 @@ def _collect_db_context(question, max_chars=8000):
                         safe_rows.append({k: v for k, v in r.items() if k not in _SENSITIVE_COL})
                     else:
                         safe_rows.append(r)
-                lines.append('【表 %s·相关】（%d 行）列: %s\n样例数据: %s' % (
-                    t, cnt, ', '.join(cols),
-                    __import__('json').dumps(safe_rows, ensure_ascii=False, default=str)[:900]))
+                prof = _profile_text(cols, safe_rows, total=cnt, budget=1000)
+                extra = '\n'.join(x for x in (_kw_rows(cols, safe_rows, sel),
+                                              _extreme_rows(cols, safe_rows)) if x)
+                lines.append('【表 %s·相关】（%d 行）列: %s\n%s\n%s\n样例数据: %s' % (
+                    t, cnt, ', '.join(cols), prof, extra,
+                    __import__('json').dumps(safe_rows[:2], ensure_ascii=False, default=str)[:480]))
             plug_parts.append('\n'.join(lines))
             plug_files.append(_pid)
     # 兼容兜底：没有开放接口的老插件，直读 data/<插件id>.db（AI 上下文显式标注"直读兜底"）
@@ -633,19 +675,163 @@ def _collect_db_context(question, max_chars=8000):
     return head + (('\n\n' + extra) if extra else '') + (('\n\n' + body) if body else '')
 
 
-def _sample_part(db, t, cnt, cols, score):
-    """普通表样例注入（每表前 2 行，过滤敏感列）"""
+def _profile_text(fields, rows, total=None, budget=760):
+    """v12.7.14 确定性列画像：把【几百~几千行】压成可分析的统计文本。
+    数值列给 合计/均值/最大/最小；低基数列给 top 分布；其余列给取值个数。
+    rows 是已取到的样本行（建议 200~300 行），total 是表内真实行数。"""
+    if not rows:
+        return ''
+    n = len(rows)
+    out = []
+    for f in fields:
+        vals = [r.get(f) for r in rows if isinstance(r, dict)]
+        nonnull = [v for v in vals if v is not None and str(v).strip() != '']
+        if not nonnull:
+            continue
+        nums = []
+        for v in nonnull:
+            try:
+                nums.append(float(str(v).replace(',', '')))
+            except Exception:
+                pass
+        if len(nums) >= max(6, int(len(nonnull) * 0.8)):
+            sm = sum(nums)
+            if str(f).lower() == 'id' or str(f).lower().endswith('_id'):
+                out.append('%s: 最大%.0f / 最小%.0f（主键/关联ID，不求合计）' % (f, max(nums), min(nums)))
+            else:
+                out.append('%s: 合计%.2f / 均值%.2f / 最大%.2f / 最小%.2f' % (f, sm, sm / len(nums), max(nums), min(nums)))
+            continue
+        uniq = {}
+        for v in nonnull:
+            k = str(v).strip()[:26]
+            uniq[k] = uniq.get(k, 0) + 1
+        if len(uniq) <= 30 and len(nonnull) >= 8:
+            top = sorted(uniq.items(), key=lambda x: -x[1])[:6]
+            out.append('%s: %s' % (f, '，'.join('%s=%d' % (k, c) for k, c in top)))
+        else:
+            out.append('%s: %d 种取值（非空 %d）' % (f, len(uniq), len(nonnull)))
+    head = '【确定性统计·基于 %d 行%s】' % (n, ('/全表 %d 行' % total) if total else '')
+    return head + '；'.join(out)[:budget]
+
+def _extreme_rows(fields, rows, budget=700):
+    """v12.7.14 极值行：给第一个可用数值列的 最大3行 + 最小1行（带编号/名称等关键列），
+    让 AI 能回答“金额最大的 5 份合同”“工时最高的需求”这类明细排名问题。"""
+    numf = None
+    for f in fields:
+        vals = [r.get(f) for r in rows if isinstance(r, dict)]
+        ok = 0
+        for v in vals:
+            try:
+                float(str(v).replace(',', '')); ok += 1
+            except Exception:
+                pass
+        if vals and ok >= max(4, int(len(vals) * 0.8)) and not str(f).lower().endswith('_id') and str(f).lower() != 'id':
+            numf = f
+            break
+    if not numf:
+        return ''
+    def key(r):
+        try:
+            return float(str(r.get(numf)).replace(',', ''))
+        except Exception:
+            return -1e18
+    keep = [f for f in fields if f not in _SENSITIVE_COL][:7]
+    if numf not in keep:
+        keep.append(numf)
+    lines = []
+    for label, rs in (('最大', sorted(rows, key=key, reverse=True)[:5]), ('最小', sorted(rows, key=key)[:1])):
+        for r in rs:
+            lines.append('%s：%s' % (label, __import__('json').dumps(
+                {k: r.get(k) for k in keep}, ensure_ascii=False, default=str)))
+    return ('【%s 极值行】' % numf) + '\n'.join(lines)[:budget]
+
+
+def _kw_rows(fields, rows, words, limit=8, budget=900):
+    """v12.7.14 明细检索：按问题关键词在行数据里找命中行（编号/客户/名称/负责人等）。"""
+    if not words:
+        return ''
+    hit = []
+    for r in rows:
+        blob = ' '.join(str(r.get(f, '')) for f in fields if f not in _SENSITIVE_COL)
+        if any(w and w in blob for w in words):
+            hit.append(r)
+        if len(hit) >= limit:
+            break
+    if not hit:
+        return ''
+    keep = [f for f in fields if f not in _SENSITIVE_COL][:8]
+    return ('【关键词命中 %d 行】' % len(hit)) + '\n'.join(
+        __import__('json').dumps({k: r.get(k) for k in keep}, ensure_ascii=False, default=str)
+        for r in hit)[:budget]
+
+def _sql_profile(db, t, cols, cnt, budget=900):
+    """v12.7.14 全表精确画像：用 SQL GROUP BY / SUM 直接算【整张表】，
+    不抽样，几百~几千行都能给出与真实数据一致的合计与分布。"""
+    out = []
+    types = {}
     try:
-        sample_rows = db.execute('SELECT * FROM %s LIMIT 2' % t).fetchall()
+        types = {r[1]: (r[2] or '').upper() for r in db.execute('PRAGMA table_info(%s)' % t).fetchall()}
+    except Exception:
+        pass
+    for c in cols:
+        if c in _SENSITIVE_COL:
+            continue
+        try:
+            ty = types.get(c, '')
+            if any(k in ty for k in ('INT', 'REAL', 'NUM', 'DEC')):
+                r = db.execute('SELECT SUM(%s), AVG(%s), MAX(%s), MIN(%s), COUNT(%s) FROM %s'
+                               % (c, c, c, c, c, t)).fetchone()
+                if r and r[4]:
+                    if str(c).lower() == 'id' or str(c).lower().endswith('_id'):
+                        out.append('%s: 最大%s / 最小%s（主键/关联ID，不求合计）' % (c, r[2], r[3]))
+                    else:
+                        out.append('%s: 合计%.2f / 均值%.2f / 最大%.2f / 最小%.2f' % (
+                            c, r[0] or 0, r[1] or 0, r[2] or 0, r[3] or 0))
+                continue
+            nd = db.execute('SELECT COUNT(DISTINCT %s) FROM %s' % (c, t)).fetchone()[0]
+            if nd and nd <= 40:
+                rs = db.execute('SELECT %s, COUNT(*) n FROM %s GROUP BY %s ORDER BY n DESC LIMIT 8'
+                                % (c, t, c)).fetchall()
+                txt = '，'.join('%s=%d' % ((x[0] if x[0] not in (None, '') else '（空）'), x[1]) for x in rs)
+                out.append('%s: %s' % (c, txt))
+            else:
+                out.append('%s: %d 种取值' % (c, nd or 0))
+        except Exception as e:
+            out.append('%s: 统计失败(%s)' % (c, str(e)[:40]))
+    return ('【全表精确统计·%d 行】' % cnt) + '；'.join(out)[:budget]
+
+def _sample_part(db, t, cnt, cols, score, words=None):
+    """普通表：确定性列画像 + 2 行样例（v12.7.14：取样 200 行做统计，不再只有 2 行）"""
+    try:
+        lim = 200 if cnt <= 200 else 200
+        sample_rows = db.execute('SELECT * FROM %s LIMIT %d' % (t, lim)).fetchall()
         sample = [dict(x) for x in sample_rows]
-        tag = '相关' if score > 0 else ''
         cols2 = _safe_sample_cols(cols)
         for srow in sample:
             for k in list(srow):
                 if k in _SENSITIVE_COL:
                     srow.pop(k, None)
-        return '【表 %s·%s】（%d 行）列: %s\n样例数据: %s' % (
-            t, tag, cnt, ', '.join(cols2), __import__('json').dumps(sample, ensure_ascii=False, default=str)[:900])
+        prof = _sql_profile(db, t, cols, cnt)
+        kw = ''
+        _words = words or []
+        if _words:
+            conds, params = [], []
+            for w in _words[:6]:
+                for c in cols2[:10]:
+                    conds.append('%s LIKE ?' % c)
+                    params.append('%%%s%%' % w)
+            if conds:
+                try:
+                    hits = db.execute('SELECT * FROM %s WHERE %s LIMIT 8' % (t, ' OR '.join(conds)), params).fetchall()
+                    hd = [{k: v for k, v in dict(x).items() if k not in _SENSITIVE_COL} for x in hits]
+                    if hd:
+                        kw = '【关键词命中 %d 行】' % len(hd) + __import__('json').dumps(hd, ensure_ascii=False, default=str)[:900]
+                except Exception:
+                    kw = ''
+        brief = __import__('json').dumps(sample[:2], ensure_ascii=False, default=str)[:480]
+        tag = '相关' if score > 0 else ''
+        return '【表 %s·%s】（%d 行）列: %s\n%s\n%s\n样例数据: %s' % (
+            t, tag, cnt, ', '.join(cols2), prof, kw, brief)
     except Exception as e:
         return '【表 %s】读取失败: %s' % (t, e)
 

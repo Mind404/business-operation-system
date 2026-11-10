@@ -372,8 +372,15 @@ def toggle_plugin(user_id, plugin_id):
 # v12.1.0 插件管理（平台管理员）：目录发现 / 启停 / 上传安装 / 卸载
 # ============================================================
 def _registry_rows():
-    db = get_db()
-    return {r['id']: r for r in db.execute('SELECT * FROM plugin_registry').fetchall()}
+    # 同上：登记表在主库，不受插件库路由影响
+    try:
+        con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+        con.row_factory = sqlite3.Row
+        rows = con.execute('SELECT * FROM plugin_registry').fetchall()
+        con.close()
+    except Exception:
+        return {}
+    return {r['id']: r for r in rows}
 
 
 _manifest_cache = None
@@ -568,8 +575,15 @@ def plugin_is_external(pid):
 
 
 def _enabled_ids():
-    db = get_db()
-    rows = db.execute('SELECT id, enabled FROM plugin_registry').fetchall()
+    # v12.7.10.14：上传插件请求内 get_db() 会被路由到插件独立库，
+    # 系统表 plugin_registry 必须走主库独立短连接，否则 no such table。
+    try:
+        con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+        con.row_factory = sqlite3.Row
+        rows = con.execute('SELECT id, enabled FROM plugin_registry').fetchall()
+        con.close()
+    except Exception:
+        return set()
     return {r['id'] for r in rows if r['enabled']}
 
 

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合同台账</title>
+<style>
+body{font-family:-apple-system,"Microsoft YaHei",sans-serif;margin:0;background:#f5f6f8;color:#1f2329}
+.wrap{max-width:1200px;margin:0 auto;padding:16px}
+h2{margin:0 0 4px;font-size:20px}.sub{color:#8a919a;font-size:12px;margin-bottom:14px}
+.card{background:#fff;border-radius:10px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.kpi{flex:1;min-width:110px;background:#f7f8fa;border-radius:8px;padding:10px}
+.kpi b{display:block;font-size:18px;margin-top:4px}
+form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select{padding:7px 10px;border:1px solid #dcdfe3;border-radius:6px;font-size:13px}
+button{padding:8px 14px;border:0;border-radius:6px;background:#3370ff;color:#fff;font-size:13px;cursor:pointer}
+a.btn{display:inline-block;padding:8px 12px;border-radius:6px;background:#eef1f6;color:#1f2329;text-decoration:none;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:7px 8px;border-bottom:1px solid #eef0f3;text-align:left;white-space:nowrap}
+th{background:#fafbfc;color:#5c6373;font-weight:600}
+td.note{white-space:normal;color:#8a919a;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.pager{margin-top:12px;display:flex;gap:8px;align-items:center;font-size:13px}
+.pager a{padding:5px 10px;border:1px solid #dcdfe3;border-radius:6px;text-decoration:none;color:#1f2329}
+</style></head><body><div class="wrap">
+  <h2>📑 合同台账</h2>
+  <div class="sub">共 {{ allcnt }} 份合同 · 当前筛选 {{ total }} 条 · 每页 50 条</div>
+  <div class="card"><div class="row">
+    {% for s in stat %}<div class="kpi">{{ s['status'] or '（空）' }}<b>{{ s['n'] }}</b><span class="sub">¥{{ '%.0f' % s['amt'] }}</span></div>{% endfor %}
+  </div></div>
+  <div class="card"><form method="get" action="/contract_ledger/">
+    <input name="q" value="{{ q }}" placeholder="合同号 / 客户 / 产品线 / 负责人" style="min-width:260px">
+    <select name="status"><option value="">全部状态</option>
+      {% for s in STATUS %}<option value="{{ s }}" {% if s==status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+    <a class="btn" href="/contract_ledger/export">⬇ 导出 CSV</a>
+    <a class="btn" href="/">← 返回平台</a>
+  </form>
+  <form method="post" action="/contract_ledger/import" enctype="multipart/form-data" style="margin-top:10px">
+    <input type="file" name="file" accept=".csv" required><button type="submit">导入 CSV</button>
+  </form></div>
+  <div class="card"><table>
+    <thead><tr><th>合同号</th><th>客户</th><th>区域</th><th>产品线</th><th>金额</th><th>签约</th><th>交付</th><th>状态</th><th>负责人</th><th>备注</th></tr></thead>
+    <tbody>{% for r in rows %}<tr>
+      <td>{{ r['contract_no'] }}</td><td>{{ r['customer'] }}</td><td>{{ r['region'] }}</td><td>{{ r['product_line'] }}</td>
+      <td>{{ '%.0f' % r['amount'] }}</td><td>{{ r['sign_date'] }}</td><td>{{ r['delivery_date'] }}</td>
+      <td>{{ r['status'] }}</td><td>{{ r['owner'] }}</td><td class="note">{{ r['note'] }}</td></tr>{% endfor %}
+    </tbody></table>
+    <div class="pager">
+      <span>第 {{ page }} / {{ pages }} 页</span>
+      {% if page > 1 %}<a href="/contract_ledger/?q={{ q }}&status={{ status }}&page={{ page-1 }}">上一页</a>{% endif %}
+      {% if page < pages %}<a href="/contract_ledger/?q={{ q }}&status={{ status }}&page={{ page+1 }}">下一页</a>{% endif %}
+    </div>
+  </div>
+</div></body></html>
