@@ -11,7 +11,7 @@
 
     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:18px;line-height:1.8;">
         <b>备份说明：</b><br>
-        · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code> 下各插件库）；<br>
+        · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code> 下各插件库）＋ <b>插件包本体快照</b>（<code>pluginpack_备份_*.zip</code>，含上传安装插件自己的代码，恢复后插件不会"消失"）；<br>
         · 自动备份：系统每次启动时自动执行一次；<b>保留策略：每种备份各保留最近 7 份</b>，更旧的自动清理；<br>
         · 恢复提示：恢复会把选中的备份文件覆盖到对应数据库（恢复前系统会自动把当前数据另存一份保护备份），覆盖后<b>请重启系统生效</b>；<br>
         · 若系统运行中恢复提示「文件被占用」，请先「停止系统.bat」再回到本页重试，或手动用备份文件替换。<br>
@@ -22,13 +22,13 @@
         <form method="post" action="{{ url_for('admin_backup_upload') }}" enctype="multipart/form-data"
               style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
             <b style="font-size:14px;color:#854d0e;">📥 导入备份文件（升级/换版本后恢复旧数据用）</b>
-            <input type="file" name="backup_file" accept=".db" required
+            <input type="file" name="backup_file" accept=".db,.zip" required
                    style="border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:13px;background:#fff;">
             <button type="submit" style="background:#d97706;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;">导入</button>
         </form>
         <div style="font-size:12px;color:#92400e;margin-top:6px;">
-            支持上传旧版备份文件（<code>business_备份_*.db</code> 或 <code>&lt;插件id&gt;_备份_*.db</code>，≤512MB）。
-            导入后出现在下方列表，点「恢复」即把旧数据恢复到本版本；恢复前自动保护当前数据。
+            支持上传旧版备份文件（<code>business_备份_*.db</code>、<code>&lt;插件id&gt;_备份_*.db</code>，以及插件包快照 <code>pluginpack_备份_*.zip</code>，≤512MB）。
+            导入后出现在下方列表，点「恢复」即把旧数据/插件还原到本版本；恢复前自动保护当前数据。
         </div>
     </div>
 
@@ -48,15 +48,19 @@
             <tr style="border-bottom:1px solid #f3f4f6;">
                 <td style="padding:10px 14px;font-family:monospace;font-size:13px;word-break:break-all;">{{ f.name }}</td>
                 <td style="padding:10px 14px;">
-                    <span style="background:{{ '#dbeafe;color:#1d4ed8' if f.kind == '主库' else '#f3e8ff;color:#7e22ce' }};padding:2px 8px;border-radius:99px;font-size:12px;">{{ f.kind }}</span>
+                    <span style="background:{{ '#dbeafe;color:#1d4ed8' if f.kind == '主库' else ('#dcfce7;color:#166534' if '插件包' in f.kind else '#f3e8ff;color:#7e22ce') }};padding:2px 8px;border-radius:99px;font-size:12px;">{{ f.kind }}</span>
                 </td>
                 <td style="padding:10px 14px;color:#6b7280;">{{ '%.1f'|format(f.size / 1024) }} KB</td>
                 <td style="padding:10px 14px;color:#6b7280;">{{ f.mtime }}</td>
                 <td style="padding:10px 14px;">
                     <a href="{{ url_for('admin_backup_download', fname=f.name) }}" style="color:#2563eb;text-decoration:none;margin-right:12px;">⬇ 下载</a>
-                    <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;" onsubmit="return confirm('确定用「{{ f.name }}」恢复{{ f.kind }}吗？\\n\\n⚠ 将覆盖当前{{ f.kind }}数据（恢复前会自动保存保护备份），且需重启系统后生效。')">
+                    <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;" onsubmit="return confirm('确定用「{{ f.name }}」{{ '还原插件包' if '插件包' in f.kind else ('恢复' + f.kind) }}吗？\\n\\n⚠ 恢复到当前系统（恢复前会自动保存保护备份），且需重启系统后生效。')">
                         <input type="hidden" name="backup_file" value="{{ f.name }}">
-                        <button type="submit" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;text-decoration:underline;">↺ 恢复</button>
+                        <button type="submit" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;text-decoration:underline;">{{ '↺ 还原' if '插件包' in f.kind else '↺ 恢复' }}</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin_backup_delete') }}" style="display:inline;margin:0 0 0 12px;" onsubmit="return confirm('确定删除备份「{{ f.name }}」吗？\\n\\n仅删除 backups/ 里的这份副本，正在使用的数据不受影响；删除后不可恢复。')">
+                        <input type="hidden" name="backup_file" value="{{ f.name }}">
+                        <button type="submit" style="background:none;border:none;color:#6b7280;font-size:13px;cursor:pointer;text-decoration:underline;">🗑 删除</button>
                     </form>
                 </td>
             </tr>

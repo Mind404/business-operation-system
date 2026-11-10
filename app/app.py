@@ -1009,13 +1009,16 @@ def _backup_list():
         return []
     out = []
     for f in os.listdir(bdir):
-        if not f.endswith('.db') or '_备份_' not in f:
+        if '_备份_' not in f or not (f.endswith('.db') or f.endswith('.zip')):
             continue
         fp = os.path.join(bdir, f)
         try:
             st = os.stat(fp)
             pre = f.split('_备份_')[0]
-            kind = '主库' if pre == 'business' else f'插件库({pre})'
+            if f.endswith('.zip'):
+                kind = '插件包(含插件本体)'
+            else:
+                kind = '主库' if pre == 'business' else f'插件库({pre})'
             out.append({'name': f, 'size': st.st_size,
                         'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime)),
                         'kind': kind})
@@ -1023,6 +1026,32 @@ def _backup_list():
             pass
     out.sort(key=lambda x: x['name'], reverse=True)
     return out
+
+
+def _extract_plugin_pack(zip_path):
+    """v12.7.10.11 还原插件包快照：只允许写入 plugins/ 下的文件（拒绝绝对路径与 .. 穿越）。
+    返回 (写入文件数, 涉及插件 id 列表)。"""
+    import zipfile
+    app_root = os.path.dirname(os.path.abspath(__file__))
+    n = 0
+    pids = []
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            name = info.filename.replace('\\', '/')
+            parts = name.split('/')
+            if not name.startswith('plugins/') or '..' in parts:
+                continue
+            path = os.path.join(app_root, *parts)
+            if info.is_dir():
+                os.makedirs(path, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with z.open(info) as src, open(path, 'wb') as dst:
+                dst.write(src.read())
+            n += 1
+            if len(parts) >= 3 and parts[1] and parts[1] not in pids:
+                pids.append(parts[1])
+    return n, pids
 
 
 @app.route('/admin/backup')
@@ -1054,8 +1083,9 @@ def admin_backup_download(fname):
         flash('无权限', 'error')
         return redirect(url_for('index'))
     import re
-    if (not fname.endswith('.db') or '_备份_' not in fname
-            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('非法的备份文件名', 'error')
         return redirect(url_for('admin_backup'))
     bdir = _backup_dir()
@@ -1074,8 +1104,9 @@ def admin_backup_restore():
         return redirect(url_for('index'))
     fname = (request.form.get('backup_file') or '').strip()
     import re
-    if (not fname.endswith('.db') or '_备份_' not in fname
-            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('请选择有效的备份文件', 'error')
         return redirect(url_for('admin_backup'))
     bdir = _backup_dir()
@@ -1083,6 +1114,29 @@ def admin_backup_restore():
     if not os.path.exists(src):
         flash('备份文件不存在，无法恢复', 'error')
         return redirect(url_for('admin_backup'))
+
+    # v12.7.10.11：插件包快照（zip）单独还原 —— 把 plugins/<id> 目录写回去
+    if fname.endswith('.zip'):
+        try:
+            ok, _msg, _ = perform_backup('恢复前保护')
+        except Exception:
+            ok = False
+        if not ok:
+            flash('还原中止：现场保护备份失败。请先停止系统，再手动把该 zip 解压到 app/plugins/ 后启动。', 'error')
+            return redirect(url_for('admin_backup'))
+        try:
+            n, pids = _extract_plugin_pack(src)
+            if not n:
+                flash('该压缩包里没有可还原的插件文件（正确结构应为 plugins/<插件id>/…）', 'error')
+            else:
+                plugin_system.invalidate_openapi_cache()
+                log_operation('数据备份', '还原插件包', f'{fname}（{", ".join(pids)}）', session.get('username'))
+                flash(f'✅ 已还原插件包：{", ".join(pids) or "-"}（共 {n} 个文件）。'
+                      f'请重启系统（停止.bat → 启动.bat）后插件才会出现在导航里。', 'success')
+        except Exception as e:
+            flash(f'还原插件包失败：{e}', 'error')
+        return redirect(url_for('admin_backup'))
+
     # 确定目标库
     pre = fname.split('_备份_')[0]
     if pre == 'business':
@@ -1115,13 +1169,54 @@ def admin_backup_restore():
                 os.remove(target + suffix)
             except Exception:
                 pass
-        flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。'
+        # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
+        pack_msg = ''
+        if pre == 'business':
+            ts2 = fname.split('_备份_')[1].rsplit('.', 1)[0]
+            pack = os.path.join(bdir, f'pluginpack_备份_{ts2}.zip')
+            if os.path.exists(pack):
+                try:
+                    n2, pids2 = _extract_plugin_pack(pack)
+                    if n2:
+                        plugin_system.invalidate_openapi_cache()
+                        pack_msg = f' 同批次的 {len(pids2)} 个插件包也已还原（{", ".join(pids2)}）。'
+                except Exception as e:
+                    pack_msg = f' 但插件包还原失败：{e}，可单独对 pluginpack_备份_{ts2}.zip 点还原。'
+        log_operation('数据备份', '恢复', f'{kind} ← {fname}', session.get('username'))
+        flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。{pack_msg}'
               f'请重启系统（停止.bat → 启动.bat）后完全生效。', 'success')
     except OSError as e:
         flash(f'恢复{kind}失败（{e}）：可能系统正在占用数据库文件。'
               f'请先停止系统，再点恢复；或手动把 backups/{fname} 复制替换 business.db（插件库对应 data/{pre}.db）后重启。', 'error')
     except Exception as e:
         flash(f'恢复失败：{e}（不影响现有数据，现场保护备份已生成）', 'error')
+    return redirect(url_for('admin_backup'))
+
+
+@app.route('/admin/backup/delete', methods=['POST'])
+def admin_backup_delete():
+    """v12.7.10.11 删除单个备份文件（只删 backups/ 里的副本，不动正在使用的数据）"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('admin_backup'))
+    import re
+    fname = (request.form.get('backup_file') or '').strip()
+    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
+        flash('请选择要删除的备份文件', 'error')
+        return redirect(url_for('admin_backup'))
+    fp = os.path.join(_backup_dir(), fname)
+    if not os.path.exists(fp):
+        flash('备份文件不存在（可能已被清理）', 'error')
+        return redirect(url_for('admin_backup'))
+    try:
+        size = os.path.getsize(fp)
+        os.remove(fp)
+        log_operation('数据备份', '删除备份', f'{fname}（{size} 字节）', session.get('username'))
+        flash(f'🗑 已删除备份：{fname}（{size / 1024:.1f} KB）。仅删除备份副本，正在使用的数据不受影响。', 'success')
+    except Exception as e:
+        flash(f'删除失败：{e}', 'error')
     return redirect(url_for('admin_backup'))
 
 
@@ -1141,13 +1236,13 @@ def admin_backup_upload():
         flash('请先选择要导入的备份文件', 'error')
         return redirect(url_for('admin_backup'))
     fname = (f.filename or '').strip()
-    if (not fname.endswith('.db') or '_备份_' not in fname
+    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
             or '/' in fname or '\\' in fname
-            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
-        flash('文件名不符合备份规范（应为 business_备份_时间.db 或 插件库_备份_时间.db），已拒绝导入', 'error')
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
+        flash('文件名不符合备份规范（应为 xxx_备份_时间.db 或 xxx_备份_时间.zip），已拒绝导入', 'error')
         return redirect(url_for('admin_backup'))
     pre = fname.split('_备份_')[0]
-    if pre != 'business' and not re.fullmatch(r'[a-z0-9_]{2,64}', pre):
+    if fname.endswith('.db') and pre != 'business' and not re.fullmatch(r'[a-z0-9_]{2,64}', pre):
         flash('备份前缀无法识别（只支持 business 或插件库名），已拒绝导入', 'error')
         return redirect(url_for('admin_backup'))
     MAX = 512 * 1024 * 1024  # 512MB 上限
@@ -1155,7 +1250,19 @@ def admin_backup_upload():
     if len(data) > MAX:
         flash('备份文件超过 512MB 上限，已拒绝导入', 'error')
         return redirect(url_for('admin_backup'))
-    if len(data) < 16 or data[:16] != b'SQLite format 3\x00':
+    if fname.endswith('.zip'):
+        # v12.7.10.11 插件包快照：必须是 zip，且至少含一个 plugins/ 条目
+        try:
+            import zipfile, io
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                names = [n.replace('\\', '/') for n in z.namelist()]
+            if not any(n.startswith('plugins/') for n in names):
+                flash('压缩包里没有 plugins/ 目录结构，不是插件包备份，已拒绝导入', 'error')
+                return redirect(url_for('admin_backup'))
+        except Exception:
+            flash('文件不是有效的 zip 压缩包，已拒绝导入', 'error')
+            return redirect(url_for('admin_backup'))
+    elif len(data) < 16 or data[:16] != b'SQLite format 3\x00':
         flash('文件不是有效的 SQLite 数据库备份，已拒绝导入', 'error')
         return redirect(url_for('admin_backup'))
     try:
@@ -1679,10 +1786,53 @@ def perform_backup(label='启动'):
                     made.append(os.path.basename(pdst))
                 except Exception:
                     pass
-    # 只保留最近 7 份（business_ 与各 <插件id>_ 前缀各自保留 7 份），自动清理更旧的
+    # v12.7.10.11：插件包本体也一并快照（只备份库、不备份插件目录时，
+    # 恢复后会出现"数据在、插件没了"——插件未安装，独立库成孤儿）
+    try:
+        import zipfile
+        app_root = os.path.dirname(os.path.abspath(__file__))
+        try:
+            pack_ids = sorted(plugin_system._upload_plugin_ids())
+        except Exception:
+            pack_ids = []
+        if not pack_ids:
+            # v12.7.10.11 启动早期（init_db/插件加载之前）registry 还读不到：
+            # 用 data/<插件id>.db 反推外来插件目录（内置插件不建独立库，因此不会被误打包）
+            try:
+                if os.path.isdir(data_dir):
+                    pack_ids = sorted(
+                        f[:-3] for f in os.listdir(data_dir)
+                        if f.endswith('.db')
+                        and os.path.isdir(os.path.join(app_root, 'plugins', f[:-3])))
+            except Exception:
+                pack_ids = []
+        if pack_ids:
+            pz = os.path.join(bdir, f'pluginpack_备份_{ts}.zip')
+            n_pack = 0
+            with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
+                for pid in pack_ids:
+                    pdir = os.path.join(app_root, 'plugins', pid)
+                    if not os.path.isdir(pdir):
+                        continue
+                    for root, _dirs, files in os.walk(pdir):
+                        if '__pycache__' in root:
+                            continue
+                        for fn in files:
+                            if fn.endswith(('.pyc', '.pyo')):
+                                continue
+                            fp = os.path.join(root, fn)
+                            z.write(fp, os.path.relpath(fp, app_root).replace(os.sep, '/'))
+                            n_pack += 1
+            if n_pack:
+                made.append(os.path.basename(pz))
+            else:
+                os.remove(pz)
+    except Exception as e:
+        print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
+    # 只保留最近 7 份（business_ / 各 <插件id>_ / pluginpack_ 前缀各自保留 7 份）
     groups = {}
     for f in os.listdir(bdir):
-        if not f.endswith('.db') or '_备份_' not in f:
+        if '_备份_' not in f or not (f.endswith('.db') or f.endswith('.zip')):
             continue
         pre = f.split('_备份_')[0]
         groups.setdefault(pre, []).append(f)
@@ -1693,9 +1843,16 @@ def perform_backup(label='启动'):
             except Exception:
                 pass
     msg = f'已备份主库 → backups/{os.path.basename(dst)}'
-    if len(made) > 1:
-        msg += f'，另含 {len(made) - 1} 份插件库备份'
-    msg += f'（各前缀保留最近 7 份）'
+    n_pack = sum(1 for x in made if x.endswith('.zip'))
+    n_db = len(made) - n_pack - 1
+    detail = []
+    if n_db > 0:
+        detail.append(f'{n_db} 份插件库')
+    if n_pack > 0:
+        detail.append(f'{n_pack} 份插件包快照（含插件本体）')
+    if detail:
+        msg += '，另含 ' + '、'.join(detail)
+    msg += '（各前缀保留最近 7 份）'
     return True, msg, made
 
 
