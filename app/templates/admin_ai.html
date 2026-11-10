@@ -676,6 +676,20 @@ function handleSSEEvent(evt) {
             if (ops) ops.remove();
             updateStreamContent(mdRender(streamCollect));
             if (obj.msg_id) bindMsgActions(streamAiWrap, obj.msg_id);
+        } else if (obj.err) {
+            // v12.7.10.13：调用失败（服务未启动/超时/认证失败等）→ 展示具体诊断，
+            // 不再统一显示"已中止生成"让用户误以为是自己点了中止
+            const ops2 = streamAiWrap ? streamAiWrap.querySelector('.msg-ops') : null;
+            if (ops2) ops2.remove();
+            if (streamAiWrap) {
+                const c2 = streamAiWrap.querySelector('.content');
+                if (c2) c2.innerHTML = mdRender(streamCollect || obj.err);
+                (c2 || streamAiWrap).insertAdjacentHTML('beforeend',
+                    '<div class="msg-aborted">⛔ AI 调用失败：' + esc(obj.err) + '</div>');
+                if (obj.msg_id) bindMsgActions(streamAiWrap, obj.msg_id);
+            } else {
+                addMsg('ai', '<span class="err">AI 调用失败：' + esc(obj.err) + '</span>');
+            }
         } else {
             markAborted();
         }

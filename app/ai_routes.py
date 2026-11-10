@@ -916,6 +916,22 @@ def chat():
         _refresh_conv_stats(db, cid)
         db.commit()
 
+    # v12.7.10.13：连通性预检（1 秒端口探测）。服务没起时立即返回中文诊断，
+    # 不再先把全部库表上下文拼一遍再抛原始异常（用户当时只看到"已中止生成"）
+    _api_url = prov['api_url']
+    _diag = _llm_preflight(_api_url)
+    if _diag:
+        _mid = _save_ai_message(current_app.config['DATABASE'], cid, _diag, pid, model, question,
+                                aborted=True, err=_diag)
+        _body = ('event: meta\ndata: %s\n\n'
+                 'data: %s\n\n'
+                 'event: end\ndata: %s\n\n') % (
+            json.dumps({'conv_id': cid, 'user_msg_id': user_msg_id}, ensure_ascii=False),
+            json.dumps({'delta': _diag}, ensure_ascii=False),
+            json.dumps({'ok': False, 'answer': _diag, 'msg_id': _mid, 'err': _diag}, ensure_ascii=False))
+        return Response(_body, mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
     # —— 以下闭包变量全部在请求上下文内准备；generator 运行时上下文已弹出，只能读闭包 ——
     db_path = current_app.config['DATABASE']
     context = _collect_db_context(question)
@@ -969,7 +985,10 @@ def chat():
             # 客户端断开（点击中止）：保留已生成部分
             pass
         except Exception as e:
-            err_msg = str(e) or e.__class__.__name__
+            err_msg = _diagnose_llm_error(e, api_url)
+            if not collected:
+                collected = err_msg
+                yield 'data: %s\n\n' % json.dumps({'delta': err_msg}, ensure_ascii=False)
         finally:
             try:
                 assistant_id = _save_ai_message(db_path, cid, collected, pid, model, question,
@@ -979,7 +998,7 @@ def chat():
                     _compact_conversation(db_path, cid, pid, model, api_url, api_key)
             except Exception:
                 pass
-        yield 'event: end\ndata: %s\n\n' % json.dumps({'ok': done, 'answer': collected, 'msg_id': assistant_id})
+        yield 'event: end\ndata: %s\n\n' % json.dumps({'ok': done, 'answer': collected, 'msg_id': assistant_id, 'err': err_msg}, ensure_ascii=False)
 
     return Response(gen(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -1098,6 +1117,64 @@ def _chat_request(api_url, api_key, model, messages, timeout=120):
         return '【调用失败】HTTP %d：%s' % (e.code, e.read().decode('utf-8', errors='replace')[:400])
     except Exception as e:
         return '【调用失败】%s' % e
+
+
+def _diagnose_llm_error(err, target=''):
+    """把底层网络/HTTP 异常翻译成中文可操作诊断（v12.7.10.13）。
+
+    幂等：已经是本函数生成的中文诊断时原样返回，避免外层再套"调用失败："。
+    """
+    s = str(err or '')
+    if not s:
+        return 'AI 服务调用失败（未知原因）。'
+    if s.startswith('AI 服务'):
+        return s
+    low = s.lower()
+    if '10061' in s or 'actively refused' in low or 'connection refused' in low:
+        return ('AI 服务未启动或地址/端口写错（%s）：本机没有服务在该端口监听。'
+                '请先启动 LM Studio / Ollama 的本地服务，并确认 API 地址（通常形如 http://127.0.0.1:1234/v1）。' % target)
+    if '10060' in s or 'timed out' in low or 'timeout' in low:
+        return ('AI 服务连接超时（%s）：模型可能正在加载或显存不足，请稍后重试。' % target)
+    if '10054' in s or 'reset' in low:
+        return ('AI 服务连接被重置（%s）：服务进程可能崩溃或显存不足（OOM），请重启模型服务。' % target)
+    m = re.search(r'HTTP Error (\d{3})', s)
+    if m:
+        code = m.group(1)
+        if code == '401':
+            return 'AI 服务认证失败（401）：请检查 API Key 是否填写正确。'
+        if code == '404':
+            return 'AI 服务地址或模型名不存在（404）：请检查 API 地址是否以 /v1 结尾、模型名是否与服务端一致。'
+        if code == '429':
+            return 'AI 服务限流（429）：请求过于频繁，请稍后重试。'
+        if code.startswith('5'):
+            return 'AI 服务内部错误（%s）：服务端异常，请查看模型服务日志。' % code
+    if 'getaddrinfo' in low or 'name or service not known' in low:
+        return 'AI 服务域名解析失败（%s）：请检查地址中的主机名，或改用 127.0.0.1。' % target
+    if 'ssl' in low or 'certificate' in low:
+        return 'AI 服务 SSL/证书错误（%s）：请检查 https 地址与证书是否匹配，或改用 http。' % target
+    return 'AI 服务调用失败（%s）：%s' % (target, s[:200])
+
+
+def _llm_preflight(api_url):
+    """1 秒端口探测（v12.7.10.13）：能连上返回 None，连不上返回中文诊断。
+
+    目的：服务没启动时 0 秒级给出原因，而不是先把全部库表上下文拼完才抛原始异常。
+    """
+    try:
+        from urllib.parse import urlparse
+        import socket
+        raw = api_url if '://' in (api_url or '') else 'http://' + (api_url or '127.0.0.1')
+        u = urlparse(raw)
+        host = u.hostname or '127.0.0.1'
+        port = u.port or (443 if u.scheme == 'https' else 80)
+        target = '%s:%s' % (host, port)
+    except Exception:
+        return None
+    try:
+        socket.create_connection((host, port), timeout=1.0).close()
+        return None
+    except Exception as e:
+        return _diagnose_llm_error(e, target)
 
 
 def _stream_chat(api_url, api_key, model, messages, timeout=180):
