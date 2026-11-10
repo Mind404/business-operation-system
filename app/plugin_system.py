@@ -180,7 +180,7 @@ def inject_nav_context():
     """注入模板导航：核心常驻 + 业务插件（仅启用可见）+ 系统管理入口由 base.html 按角色渲染"""
     user_id = session.get('user_id')
     if not user_id:
-        return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
+        return {'nav_core': [], 'nav_biz': [], 'nav_ext': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
     registered = set(current_app.view_functions.keys())
     enabled_ids = _enabled_ids()
     available = [p for p in PLUGINS if p['endpoint'] in registered and p['id'] in enabled_ids]
@@ -203,7 +203,10 @@ def inject_nav_context():
             # 平台自带的目录型插件（univer_sheet 等，install_type=builtin）仍直接进页面，避免双层导航
             'external': (pid in _upload_plugin_ids()),
         })
-    return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
+    # v12.7.10.15：外来插件（上传安装）单独成组，不再和平台内置功能混在同一分区
+    nav_biz = [p for p in biz_plugins if not p.get('external')]
+    nav_ext = [p for p in biz_plugins if p.get('external')]
+    return {'nav_core': core_plugins, 'nav_biz': nav_biz, 'nav_ext': nav_ext,
             'nav_all_plugins': available, 'user_subscribed': set()}
 
 

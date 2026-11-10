@@ -4,6 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}业务高效运转系统{% endblock %}</title>
+    <style>
+        /* v12.7.10.15：先落底色与骨架，样式表到达前不再露白；进入动画很轻（120ms） */
+        html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
+        .app-layout { display: flex; min-height: 100vh; }
+        .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
+        @keyframes pageIn { from { opacity: .88 } to { opacity: 1 } }
+        body { animation: pageIn .12s ease-out; }
+        @media (prefers-reduced-motion: reduce) { body { animation: none } }
+        .nav-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px;
+                   background: #fef3c7; color: #92400e; }
+    </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block styles %}{% endblock %}
 </head>
@@ -39,6 +50,20 @@
                     {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
                     <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                {# v12.7.10.15 外部插件（上传安装）：独立分区，明确标注来源 #}
+                {% if nav_ext %}
+                <div class="nav-group" id="navExtGroup">
+                    <div class="nav-group-title">外部插件</div>
+                    {% for p in nav_ext %}
+                    {% set np = p.nav_path %}
+                    {% set is_active = (np != '/' and request.path.startswith(np)) or request.path.startswith('/plugin-shell/' ~ p.id) %}
+                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}<span class="nav-tag">外来</span>
                     </a>
                     {% endfor %}
                 </div>
@@ -583,6 +608,26 @@
             var after = (e.clientY - rect.top) > rect.height / 2;
             a.parentElement.insertBefore(dragging, after ? a.nextSibling : a);
         });
+    })();
+    </script>
+    <script>
+    /* v12.7.10.15：鼠标停在导航项上 120ms 后预取目标页面，点击时省掉一次网络等待 */
+    (function () {
+        var timer = null, done = {};
+        document.addEventListener('mouseover', function (e) {
+            var a = e.target && e.target.closest ? e.target.closest('a.nav-item') : null;
+            if (!a || !a.href || done[a.href]) return;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                done[a.href] = 1;
+                try {
+                    var l = document.createElement('link');
+                    l.rel = 'prefetch'; l.as = 'document'; l.href = a.href;
+                    document.head.appendChild(l);
+                } catch (err) { }
+            }, 120);
+        }, true);
+        document.addEventListener('mouseout', function () { clearTimeout(timer); }, true);
     })();
     </script>
 </body>

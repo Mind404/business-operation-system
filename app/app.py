@@ -383,7 +383,7 @@ def inject_user():
         # v12.7.10.10：导航按平台管理员保存的顺序渲染（所有用户生效）
         order = _nav_order()
         if order:
-            for key in ('nav_core', 'nav_biz'):
+            for key in ('nav_core', 'nav_biz', 'nav_ext'):
                 if nav.get(key):
                     nav[key] = _apply_nav_order(nav[key], order)
         ctx.update(nav)
@@ -393,7 +393,7 @@ def inject_user():
         import traceback
         print('=== inject_nav_context error ===')
         traceback.print_exc()
-        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set(),
+        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_ext': [], 'nav_all_plugins': [], 'user_subscribed': set(),
                     'nav_admin': list(NAV_ADMIN_ITEMS), 'nav_order': []})
     return ctx
 
@@ -1014,6 +1014,8 @@ def _backup_list():
         fp = os.path.join(bdir, f)
         try:
             st = os.stat(fp)
+            if st.st_size <= 0:
+                continue
             pre = f.split('_备份_')[0]
             if f.endswith('.zip'):
                 kind = '插件包(含插件本体)'
@@ -1780,9 +1782,15 @@ def perform_backup(label='启动'):
     if os.path.isdir(data_dir):
         for f in sorted(os.listdir(data_dir)):
             if f.endswith('.db'):
+                src_db = os.path.join(data_dir, f)
+                try:
+                    if os.path.getsize(src_db) <= 0:
+                        continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
+                except OSError:
+                    continue
                 pdst = os.path.join(bdir, f.replace('.db', f'_备份_{ts}.db'))
                 try:
-                    shutil.copy2(os.path.join(data_dir, f), pdst)
+                    shutil.copy2(src_db, pdst)
                     made.append(os.path.basename(pdst))
                 except Exception:
                     pass
@@ -1803,6 +1811,7 @@ def perform_backup(label='启动'):
                     pack_ids = sorted(
                         f[:-3] for f in os.listdir(data_dir)
                         if f.endswith('.db')
+                        and os.path.getsize(os.path.join(data_dir, f)) > 0   # 空库不参与反推
                         and os.path.isdir(os.path.join(app_root, 'plugins', f[:-3])))
             except Exception:
                 pack_ids = []
