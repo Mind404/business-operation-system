@@ -1134,7 +1134,10 @@ def wbs_export(pid):
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注']
+    # v12.7.10.12：补上页面有、导出缺的两列「进展」「产出物」。
+    # 注意：导入是按列位置解析的（第9列必须是状态关键字），因此新列只能追加在最后，
+    # 导入端读到多出来的列会忽略，导出文件原样导回不会错列。
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注','进展','产出物']
     header_fill = PatternFill('solid', fgColor='2B579A')
     thin = Side(style='thin', color='D0D7E5')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -1142,26 +1145,68 @@ def wbs_export(pid):
         c = ws.cell(row=1, column=i, value=h)
         c.fill = header_fill; c.font = Font(color='FFFFFF', bold=True, size=11)
         c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True); c.border = border
-    widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20]
+    widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20, 42, 24]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     r = 2
     for t in tasks:
         is_phase = '.' not in (t['wbs_code'] or '')
+        notes_txt = _notes_export_text(t['notes'])
         vals = [t['wbs_code'], _xlsx_safe(t['name']), _xlsx_safe(t['work_content']), _xlsx_safe(t['owner'] or ''), _xlsx_safe(t['collaborators'] or ''),
                 t['plan_start'] or '', t['plan_end'] or '', _xlsx_safe(t['deliverable'] or ''),
-                t['status'] or '未开始', t['progress'] or 0, _xlsx_safe(t['remark'] or '')]
+                t['status'] or '未开始', t['progress'] or 0, _xlsx_safe(t['remark'] or ''),
+                _xlsx_safe(notes_txt), _xlsx_safe(_attach_export_text(t['attachment_path']))]
         for c, v in enumerate(vals, 1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.border = border
             cell.alignment = Alignment(vertical='center', wrap_text=True)
             if is_phase:
                 cell.fill = PatternFill('solid', fgColor='D6E4F5')
+        # 进展是多行流水：按行数把行高撑开，避免 Excel 里只看到第一行
+        n_lines = notes_txt.count('\n') + 1 if notes_txt else 1
+        if n_lines > 1:
+            ws.row_dimensions[r].height = min(15.0 * n_lines + 3, 160)
         r += 1
     from io import BytesIO
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     fname = f'WBS_{p["name"]}.xlsx'.replace('/', '_')
     return _send_bytes(buf.getvalue(), fname)
+
+
+def _notes_export_text(raw):
+    """v12.7.10.12 把 wbs_tasks.notes（JSON 流水）合并成多行文本：时间 登记人：内容"""
+    if not raw:
+        return ''
+    try:
+        notes = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return ''
+    if not isinstance(notes, list):
+        return ''
+    lines = []
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        d = str(n.get('date') or '').strip()
+        a = str(n.get('author') or '').strip()
+        c = str(n.get('content') or '').replace('\r', '').strip()
+        head = ' '.join(x for x in (d, a) if x)
+        lines.append(f'{head}：{c}' if head else c)
+    return '\n'.join(lines)
+
+
+def _attach_export_text(raw):
+    """v12.7.10.12 attachment_path（分号分隔，可能带目录）→ 只取文件名，用「、」连接"""
+    if not raw:
+        return ''
+    out = []
+    for x in str(raw).split(';'):
+        x = x.strip()
+        if not x:
+            continue
+        base = os.path.basename(x.replace('\\', '/'))
+        out.append(base or x)
+    return '、'.join(out)
 
 
 def _xlsx_safe(v):
