@@ -828,12 +828,12 @@ def admin_plugins():
     integrity_warnings, integrity_infos = plugin_system.check_plugin_tables_integrity()
     # v12.1.2 待重启生效提示：上传安装的插件在重启系统前，蓝图未注册（Flask 限制），导航/入口暂不出现
     registered = set(current_app.view_functions.keys())
-    pending = [p for p in plugins if p.get('install_type') == 'upload'
+    pending = [p for p in plugins if p.get('install_type') in ('upload', 'dir')
                and p.get('endpoint') not in registered]
     # v12.7.10.10 上传插件的数据开放接口状态（供管理页显示是否达标）
     open_status = {}
     for _p in plugins:
-        if _p.get('install_type') == 'upload':
+        if _p.get('install_type') in ('upload', 'dir'):
             try:
                 open_status[_p['id']] = plugin_system.plugin_openapi_status(_p['id'])
             except Exception:

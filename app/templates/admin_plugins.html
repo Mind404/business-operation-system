@@ -87,7 +87,9 @@
                     </td>
                     <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
                         {% if p.install_type == 'upload' %}
-                        <span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:12px;">上传安装</span>
+                        <span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:12px;">上传安装（外部）</span>
+                        {% elif p.install_type == 'dir' %}
+                        <span style="background:#ffedd5;color:#9a3412;padding:2px 8px;border-radius:4px;font-size:12px;">目录接入（外部）</span>
                         {% else %}
                         <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:4px;font-size:12px;">平台内置</span>
                         {% endif %}

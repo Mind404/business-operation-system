@@ -152,12 +152,33 @@ def init_plugin_tables():
             continue
         db.execute('''INSERT INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint, tables, enabled, install_type)
-            VALUES (?,?,?,?,?,?,?,?,1,'builtin')
+            VALUES (?,?,?,?,?,?,?,?,1,'dir')
             ON CONFLICT(id) DO NOTHING''',
             (man.get('id', pid), man.get('name', pid), man.get('icon', '🧩'),
              man.get('group', '业务'), 1 if man.get('core') else 0,
              man.get('description', ''), man.get('endpoint', ''),
              json.dumps(man.get('tables', []), ensure_ascii=False)))
+    # v12.7.10.15：历史误登记纠正——目录里的外部插件曾被写成 builtin，页面显示成"平台内置"。
+    # 只纠正"目录里确实存在、且业务表没落在主库"的行，避免库切换后读不到历史数据。
+    try:
+        import os as _os
+        static_ids2 = {p['id'] for p in PLUGINS}
+        _mmp = _manifest_map()
+        _data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
+        for r in db.execute("SELECT id FROM plugin_registry WHERE install_type='builtin'").fetchall():
+            pid = r['id']
+            if pid in static_ids2 or pid not in _mmp:
+                continue
+            pdb = _os.path.join(_data_dir, pid + '.db')
+            has_own = _os.path.isfile(pdb) and _os.path.getsize(pdb) > 0
+            n_tab = db.execute('SELECT COUNT(*) c FROM plugin_tables WHERE plugin_id=?', (pid,)).fetchone()
+            n_tab = n_tab['c'] if n_tab else 0
+            if has_own or n_tab == 0:
+                db.execute("UPDATE plugin_registry SET install_type='dir' WHERE id=?", (pid,))
+                print(f'[插件类型纠正] {pid}: builtin -> dir（目录接入，按外部插件处理）')
+    except Exception as e:
+        print(f'[插件类型纠正] 跳过: {e}')
+
     # v10.5.0：清理已下线的注册与订阅记录（静态表+目录中都不存在的插件，如已卸载/删除的插件包）
     static_ids = [p['id'] for p in PLUGINS]
     manifest_ids = list(_manifest_map().keys())
@@ -647,8 +668,8 @@ def uninstall_plugin(plugin_id):
         return False, '插件未登记'
     if row['core']:
         return False, '核心插件不可卸载'
-    if row['install_type'] != 'upload':
-        return False, '内置插件不可卸载（仅管理页上传安装的插件可卸载）'
+    if row['install_type'] not in ('upload', 'dir'):
+        return False, '平台内置功能不可卸载；仅"上传安装 / 目录接入"的外部插件可卸载'
     db = get_db()
     db.execute('UPDATE plugin_registry SET enabled=0 WHERE id=?', (plugin_id,))
     db.execute('DELETE FROM user_plugins WHERE plugin_id=?', (plugin_id,))
