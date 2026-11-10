@@ -3,7 +3,8 @@
 from .routes import blueprint
 
 manifest = {
-    'id': 'wbs',
+'source': 'builtin',  # 平台自带
+        'id': 'wbs',
     'name': '计划管理',
     'icon': '📊',
     'group': '业务插件',

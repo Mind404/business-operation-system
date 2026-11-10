@@ -93,6 +93,9 @@
                         {% else %}
                         <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:4px;font-size:12px;">平台内置</span>
                         {% endif %}
+                        {% if not p.source_declared and p.install_type != 'builtin' %}
+                        <div style="color:#b45309;font-size:11px;margin-top:3px;">未在 manifest 声明来源</div>
+                        {% endif %}
                     </td>
                     <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
                         {% if p.enabled %}

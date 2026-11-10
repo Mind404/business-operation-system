@@ -3,7 +3,8 @@
 from .routes import blueprint
 
 manifest = {
-    'id': 'univer_sheet', 'bundled': True,  # 平台自带，不属于外部插件
+'source': 'builtin',  # 平台自带
+        'id': 'univer_sheet', 'bundled': True,  # 平台自带，不属于外部插件
     'name': '需求统计管理',
     'icon': '📊',
     'group': '业务插件',

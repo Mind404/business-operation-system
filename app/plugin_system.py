@@ -67,6 +67,20 @@ _upload_ids_cache = None
 # 目录发现的插件默认按外部插件(dir)登记，命中这里的仍记为 builtin。
 BUNDLED_DIR_PLUGINS = {'univer_sheet'}
 
+
+def _manifest_install_type(pid, man):
+    """v12.7.10.16：插件来源以 manifest 声明为准。
+    source='builtin' → 平台内置；source='external' → 外部插件（目录接入）；
+    未声明时按老规则兜底（bundled 标记 / 自带白名单 → 内置，其余 → 外部）。"""
+    src = str((man or {}).get('source') or '').strip().lower()
+    if src == 'builtin':
+        return 'builtin'
+    if src == 'external':
+        return 'dir'
+    if (man or {}).get('bundled') or pid in BUNDLED_DIR_PLUGINS:
+        return 'builtin'
+    return 'dir'
+
 def _upload_plugin_ids():
     """当前 install_type='upload' 的插件 id 集合（独立短连接查主库，避免递归 get_db）"""
     global _upload_ids_cache
@@ -162,7 +176,7 @@ def init_plugin_tables():
              man.get('group', '业务'), 1 if man.get('core') else 0,
              man.get('description', ''), man.get('endpoint', ''),
              json.dumps(man.get('tables', []), ensure_ascii=False),
-             'builtin' if (man.get('bundled') or pid in BUNDLED_DIR_PLUGINS) else 'dir'))
+             _manifest_install_type(pid, man)))
     # v12.7.10.15：历史误登记纠正——目录里的外部插件曾被写成 builtin，页面显示成"平台内置"。
     # 只纠正"目录里确实存在、且业务表没落在主库"的行，避免库切换后读不到历史数据。
     try:
@@ -641,6 +655,12 @@ def get_plugins_admin():
         item['registered'] = bool(row)
         item['install_type'] = row['install_type'] if row and row['install_type'] else 'builtin'
         item['enabled'] = bool(row['enabled']) if row else True
+        # v12.7.10.16：是否在 manifest 里显式声明了来源（未声明的外部插件会在管理页提示补声明）
+        try:
+            _man = _manifest_map().get(pid) or {}
+            item['source_declared'] = bool(str(_man.get('source') or '').strip())
+        except Exception:
+            item['source_declared'] = False
         # v12.4.5 表登记：该插件在 plugin_tables 中的 逻辑名→实际名 映射
         item['table_map'] = []
         try:

@@ -19,7 +19,15 @@
   .shell-bar .spacer{flex:1;}
   .shell-bar .opt{font-size:12px;color:#c3cee4;text-decoration:none;padding:4px 8px;border-radius:5px;}
   .shell-bar .opt:hover{background:rgba(255,255,255,.12);color:#fff;}
-  iframe{display:block;width:100%;height:calc(100vh - 46px);border:0;background:#fff;}
+  iframe{display:block;width:100%;height:calc(100vh - 46px);border:0;background:#eef2f7;opacity:0;transition:opacity .16s ease-out;}
+  /* 与平台主页面同一套跨页过渡，避免从导航跳进来时白一下 */
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root) { animation: vtOut .09s ease-out both; }
+  ::view-transition-new(root) { animation: vtIn .12s ease-out both; }
+  @keyframes vtOut { from { opacity:1 } to { opacity:.30 } }
+  @keyframes vtIn { from { opacity:.30 } to { opacity:1 } }
+  .shell-tip{position:fixed;left:0;right:0;top:46px;bottom:0;display:flex;align-items:center;justify-content:center;
+             color:#64748b;font-size:13px;background:#eef2f7;z-index:9;}
 </style>
 </head>
 <body>
@@ -30,6 +38,20 @@
     <a class="opt" href="{{ home_url }}" target="_self">刷新</a>
     <a class="opt" href="{{ home_url }}" target="_blank" rel="noopener">新窗口打开</a>
   </div>
-  <iframe src="{{ home_url }}" title="{{ plugin_name }}"></iframe>
+  <div class="shell-tip" id="shellTip">正在打开 {{ plugin_name }}…</div>
+  <iframe id="shellFrame" src="{{ home_url }}" title="{{ plugin_name }}"></iframe>
+  <script>
+  /* 插件内容就绪后再淡入，加载过程看到的是同底色而不是白块 */
+  (function () {
+    var f = document.getElementById('shellFrame'), t = document.getElementById('shellTip'), shown = false;
+    function show() {
+      if (shown) return; shown = true;
+      f.style.opacity = '1';
+      if (t) t.style.display = 'none';
+    }
+    f.addEventListener('load', function () { setTimeout(show, 40); });
+    setTimeout(show, 2500);   /* 兜底：慢插件也不至于一直空白 */
+  })();
+  </script>
 </body>
 </html>

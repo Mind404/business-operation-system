@@ -5,16 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}业务高效运转系统{% endblock %}</title>
     <style>
-        /* v12.7.10.15：先落底色与骨架，样式表到达前不再露白；进入动画很轻（120ms） */
+        /* v12.7.10.16：先落底色与骨架，样式表到达前不再露白 */
         html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
         .app-layout { display: flex; min-height: 100vh; }
         .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
-        @keyframes pageIn { from { opacity: .88 } to { opacity: 1 } }
-        body { animation: pageIn .12s ease-out; }
-        @media (prefers-reduced-motion: reduce) { body { animation: none } }
         .nav-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px;
                    background: #fef3c7; color: #92400e; }
+        /* 跨页切换：用浏览器原生 View Transition 做旧页→新页交叉淡化，
+           替换掉原先"整页重画"时那一帧白底 */
+        @view-transition { navigation: auto; }
+        ::view-transition-old(root) { animation: vtOut .09s ease-out both; }
+        ::view-transition-new(root) { animation: vtIn .12s ease-out both; }
+        @keyframes vtOut { from { opacity: 1 } to { opacity: .30 } }
+        @keyframes vtIn { from { opacity: .30 } to { opacity: 1 } }
+        /* 不支持 View Transition 的浏览器（老内核）退回轻淡入 */
+        @supports not (view-transition-name: root) {
+            @keyframes pageIn { from { opacity: .9 } to { opacity: 1 } }
+            body { animation: pageIn .10s ease-out; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            ::view-transition-old(root), ::view-transition-new(root) { animation: none }
+            body { animation: none }
+        }
     </style>
+    <!-- v12.7.10.16：鼠标悬停/按下导航时，浏览器预渲染目标页，点击后直接切换（省掉整页等待） -->
+    <script type="speculationrules">
+    {"prerender":[{"where":{"href_matches":["/","/wbs/*","/univer/*","/contract_ledger/*","/plugin-shell/*","/profile"]},"eagerness":"moderate"}]}
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block styles %}{% endblock %}
 </head>
@@ -611,23 +628,16 @@
     })();
     </script>
     <script>
-    /* v12.7.10.15：鼠标停在导航项上 120ms 后预取目标页面，点击时省掉一次网络等待 */
+    /* v12.7.10.16：Pointerdown 时对目标页做一次预热（供不支持 prerender 的浏览器兜底） */
     (function () {
-        var timer = null, done = {};
-        document.addEventListener('mouseover', function (e) {
+        if (!window.fetch) return;
+        var done = {};
+        document.addEventListener('pointerdown', function (e) {
             var a = e.target && e.target.closest ? e.target.closest('a.nav-item') : null;
             if (!a || !a.href || done[a.href]) return;
-            clearTimeout(timer);
-            timer = setTimeout(function () {
-                done[a.href] = 1;
-                try {
-                    var l = document.createElement('link');
-                    l.rel = 'prefetch'; l.as = 'document'; l.href = a.href;
-                    document.head.appendChild(l);
-                } catch (err) { }
-            }, 120);
+            done[a.href] = 1;
+            try { fetch(a.href, { credentials: 'same-origin', priority: 'low' }); } catch (err) { }
         }, true);
-        document.addEventListener('mouseout', function () { clearTimeout(timer); }, true);
     })();
     </script>
 </body>
