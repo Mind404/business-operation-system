@@ -402,17 +402,112 @@ def _invalidate_manifest_cache():
     _manifest_cache = None
 
 
-def plugin_data_sources():
-    """v12.7.10.10 外部插件数据源清单（供平台 AI 读取）。
+# ============================================================
+# v12.7.10.10 插件数据开放接口（OpenAPI v1）
+# 约定：插件必须自带两个只读接口（路径固定，挂在插件自己的 url_prefix 下）：
+#   GET <url_prefix>/__openapi/datasets        -> 声明可开放的数据集（表逻辑名/字段/行数/主键）
+#   GET <url_prefix>/__openapi/rows?table=&limit=&offset= -> 分页返回该数据集的行
+# 平台侧：进程内直接调用视图函数（不发 HTTP、不经过登录中间件），插件无需对外开放端口。
+# ============================================================
+OPENAPI_VERSION = 1
+_OPENAPI_SUFFIX_DATASETS = '/__openapi/datasets'
+_OPENAPI_SUFFIX_ROWS = '/__openapi/rows'
+_OPENAPI_MAX_ROWS = 1000          # 单次调用行数硬上限（防止插件一次吐出整库）
+_openapi_status_cache = {}
 
-    约定：外部插件在 manifest 里用 `data_open` 声明数据开放情况，默认开放——
-        'data_open': {
-            'ai_readable': True,             # 默认 True；显式 False 表示该插件数据不对平台 AI 开放
-            'tables': ['my_items', 'my_logs'],  # 可选：允许 AI 读取的表清单，不写=按 manifest['tables']
-            'description': '一句话说明数据内容与口径',
-        }
-    平台不要求插件额外写只读接口：上传插件的数据表本来就落在 data/<插件id>.db，
-    AI 直接只读该库；声明只用于"读哪些表 / 是否开放"的边界控制。
+
+def invalidate_openapi_cache():
+    """插件安装/卸载/启停后调用，重新探测开放接口。"""
+    global _openapi_status_cache
+    _openapi_status_cache = {}
+
+
+def _plugin_url_prefix(pid):
+    man = _manifest_map().get(pid) or {}
+    up = man.get('url_prefix')
+    if isinstance(up, (list, tuple)):
+        up = up[0] if up else ''
+    return str(up or '').rstrip('/')
+
+
+def _openapi_endpoint(pid, suffix):
+    """在当前 app 的 url_map 里找该插件开放接口的视图。返回 (view_func, rule) 或 (None, None)。"""
+    try:
+        app = current_app._get_current_object()
+    except Exception:
+        return None, None
+    prefix = _plugin_url_prefix(pid)
+    if not prefix:
+        return None, None
+    for rule in app.url_map.iter_rules():
+        if rule.rule.endswith(suffix) and rule.rule.startswith(prefix):
+            return app.view_functions.get(rule.endpoint), rule.rule
+    return None, None
+
+
+def _openapi_call(pid, suffix, query=None):
+    """进程内直接调用插件开放接口视图（不发起 HTTP，不触发登录校验）。"""
+    view, rule = _openapi_endpoint(pid, suffix)
+    if not view:
+        return None
+    try:
+        app = current_app._get_current_object()
+        with app.test_request_context(rule, query_string=query or {}):
+            rv = view()
+        if isinstance(rv, tuple):
+            rv = rv[0]
+        if hasattr(rv, 'get_json'):
+            return rv.get_json(silent=True)
+        if isinstance(rv, (dict, list)):
+            return rv
+        if isinstance(rv, str):
+            return json.loads(rv)
+        return None
+    except Exception as e:
+        print('[插件开放接口] 调用失败 %s%s: %s' % (pid, suffix, e))
+        return None
+
+
+def plugin_openapi_status(pid):
+    """探测插件开放接口是否可用，并取回数据集声明。结果按进程缓存。"""
+    if pid in _openapi_status_cache:
+        return _openapi_status_cache[pid]
+    has_rows = _openapi_endpoint(pid, _OPENAPI_SUFFIX_ROWS)[0] is not None
+    ds = _openapi_call(pid, _OPENAPI_SUFFIX_DATASETS, {})
+    if not has_rows:
+        st = {'supported': False, 'reason': '未实现 %s（数据开放接口缺失）' % _OPENAPI_SUFFIX_ROWS, 'tables': []}
+    elif not isinstance(ds, dict) or not isinstance(ds.get('tables'), list):
+        st = {'supported': False, 'reason': '未实现 %s 或返回格式不符' % _OPENAPI_SUFFIX_DATASETS, 'tables': []}
+    else:
+        st = {'supported': True, 'version': ds.get('openapi'), 'tables': ds['tables'],
+              'plugin': ds.get('plugin', pid)}
+    _openapi_status_cache[pid] = st
+    return st
+
+
+def plugin_openapi_rows(pid, table, limit=200, offset=0):
+    """按开放接口分页取数。返回 {'rows': [...], 'total': int|None, 'fields': [...]}，失败返回 None。"""
+    try:
+        limit = max(1, min(int(limit), _OPENAPI_MAX_ROWS))
+        offset = max(0, int(offset))
+    except Exception:
+        limit, offset = 200, 0
+    r = _openapi_call(pid, _OPENAPI_SUFFIX_ROWS,
+                      {'table': table, 'limit': str(limit), 'offset': str(offset)})
+    if not isinstance(r, dict):
+        return None
+    return {'rows': r.get('rows') or [], 'total': r.get('total'), 'fields': r.get('fields') or []}
+
+
+def plugin_data_sources():
+    """外部插件数据源清单（供平台 AI 读取）。
+
+    数据开放是**开发时的硬要求**：插件必须实现 OpenAPI v1 两个只读接口（见《插件开发规范》§13）。
+    平台优先走开放接口（access='openapi'）；老插件/未实现接口的，回退直读 data/<插件id>.db
+    （access='db'，AI 上下文会显式标注"直读兜底"，不假装接口已开放）。
+
+    manifest 的 `data_open` 仍用于边界声明（可选）：
+        'data_open': {'ai_readable': True, 'tables': [...], 'description': '...'}
     """
     out = []
     try:
@@ -426,6 +521,11 @@ def plugin_data_sources():
             continue
         decl = man.get('data_open') or {}
         tables = list(decl.get('tables') or man.get('tables') or [])
+        st = plugin_openapi_status(pid)
+        if st.get('supported'):
+            api_tables = [t.get('name') for t in st.get('tables') or [] if isinstance(t, dict) and t.get('name')]
+            if api_tables:
+                tables = api_tables
         out.append({
             'id': pid,
             'name': man.get('name', pid),
@@ -434,6 +534,8 @@ def plugin_data_sources():
             'tables': tables,
             'db_path': os.path.join(data_dir, pid + '.db'),
             'note': decl.get('description', ''),
+            'access': 'openapi' if st.get('supported') else 'db',
+            'openapi': st,
         })
     return out
 
@@ -545,6 +647,7 @@ def uninstall_plugin(plugin_id):
         _manifest_prefix_cache.pop(k, None)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
     _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
+    invalidate_openapi_cache()  # v12.7.10.10：新装的插件要重新探测数据开放接口
     return True, f'插件 {plugin_id} 已卸载（业务数据表保留）。重启系统后彻底移除。'
 
 
@@ -577,6 +680,7 @@ def register_uploaded_plugin(plugin_id, manifest, blueprint=None):
             _manifest_prefix_cache.setdefault(str(pfx), plugin_id)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
     _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
+    invalidate_openapi_cache()  # v12.7.10.10：新装插件的开放接口需重新探测
     return True
 
 

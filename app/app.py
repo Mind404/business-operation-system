@@ -770,13 +770,17 @@ def admin_user_rename(uid):
             db.execute('UPDATE wbs_projects SET owner=?, participants=? WHERE id=?',
                        (no, np_, p['id']))
     # 同步需求收集子表：创建人/更新人/参与人员
-    for b in db.execute('SELECT id, created_by, updated_by, editors FROM reqcollect_books').fetchall():
-        nc = _swap_name_in_list(b['created_by'], old, new_name)
-        nu = _swap_name_in_list(b['updated_by'], old, new_name)
-        ne = _swap_name_in_list(b['editors'], old, new_name)
-        if nc != b['created_by'] or nu != b['updated_by'] or ne != b['editors']:
-            db.execute('UPDATE reqcollect_books SET created_by=?, updated_by=?, editors=? WHERE id=?',
-                       (nc, nu, ne, b['id']))
+    # v12.7.10.10 修复：本版本基线未安装需求收集插件时该表不存在，不能因此让改名整体 500
+    try:
+        for b in db.execute('SELECT id, created_by, updated_by, editors FROM reqcollect_books').fetchall():
+            nc = _swap_name_in_list(b['created_by'], old, new_name)
+            nu = _swap_name_in_list(b['updated_by'], old, new_name)
+            ne = _swap_name_in_list(b['editors'], old, new_name)
+            if nc != b['created_by'] or nu != b['updated_by'] or ne != b['editors']:
+                db.execute('UPDATE reqcollect_books SET created_by=?, updated_by=?, editors=? WHERE id=?',
+                           (nc, nu, ne, b['id']))
+    except Exception as e:
+        print('[用户改名] 跳过需求收集子表同步:', e)
     db.commit()
     # 若改的是当前登录账号，同步会话登录名（user_name 一并刷新）
     if old == session.get('username'):
@@ -826,9 +830,18 @@ def admin_plugins():
     registered = set(current_app.view_functions.keys())
     pending = [p for p in plugins if p.get('install_type') == 'upload'
                and p.get('endpoint') not in registered]
+    # v12.7.10.10 上传插件的数据开放接口状态（供管理页显示是否达标）
+    open_status = {}
+    for _p in plugins:
+        if _p.get('install_type') == 'upload':
+            try:
+                open_status[_p['id']] = plugin_system.plugin_openapi_status(_p['id'])
+            except Exception:
+                pass
     return render_template('admin_plugins.html', plugins=plugins,
                            role_permissions=ROLE_PERMISSIONS, pending_restart=pending,
-                           integrity_warnings=integrity_warnings, integrity_infos=integrity_infos)
+                           integrity_warnings=integrity_warnings, integrity_infos=integrity_infos,
+                           open_status=open_status)
 
 @app.route('/admin/db-cleanup')
 def admin_db_cleanup():
@@ -965,8 +978,17 @@ def _load_uploaded_plugin(plugin_id, target):
         if man.get('id') != plugin_id:
             return False, f'manifest.id（{man.get("id")}）与目录名（{plugin_id}）不一致'
         plugin_system.register_uploaded_plugin(plugin_id, man, mod.blueprint)
+        # v12.7.10.10 数据开放接口检查：不阻断安装，但必须让管理员当场看到是否达标
+        try:
+            _st = plugin_system.plugin_openapi_status(plugin_id)
+            if _st.get('supported'):
+                _open_msg = '数据开放接口已实现（平台 AI 可读取其全部数据集）'
+            else:
+                _open_msg = '数据开放接口未实现（%s），平台 AI 将直读独立库兜底；请按《插件开发规范》§13 补齐' % _st.get('reason', '原因未知')
+        except Exception as _e:
+            _open_msg = '数据开放接口检查失败：%s' % _e
         log_operation('插件管理', '安装', f'上传安装插件 {plugin_id}（{man.get("name", plugin_id)}）', session.get('username'))
-        return True, f'{man.get("name", plugin_id)} 已启用'
+        return True, f'{man.get("name", plugin_id)} 已启用；{_open_msg}'
     except Exception as e:
         return False, f'加载失败：{e}'
 

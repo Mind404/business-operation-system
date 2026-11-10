@@ -73,6 +73,16 @@
                             {% if p.core %}<span style="background:#f3f4f6;color:#6b7280;padding:1px 6px;border-radius:4px;font-size:11px;margin-left:4px;">常驻</span>{% endif %}
                         </div>
                         <div style="color:#6b7280;font-size:12px;margin-top:2px;">{{ p.id }} · {{ p.desc }}</div>
+                        {% if open_status and open_status.get(p.id) %}
+                        {% set st = open_status.get(p.id) %}
+                        <div style="font-size:11px;margin-top:3px;">
+                            {% if st.supported %}
+                            <span style="background:#dcfce7;color:#166534;padding:1px 6px;border-radius:4px;">数据开放接口：已实现（AI 可读 {{ st.tables|length }} 个数据集）</span>
+                            {% else %}
+                            <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;">数据开放接口：未实现（AI 直读兜底，请按规范 §13 补齐）</span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
                         {% if p.endpoint %}<div style="color:#9ca3af;font-size:11px;margin-top:2px;">入口：{{ p.endpoint }}</div>{% endif %}
                     </td>
                     <td style="padding:10px;border-bottom:1px solid #f3f4f6;">
@@ -133,7 +143,7 @@
     </div>
 
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;font-size:13px;color:#92400e;margin-top:18px;">
-        <b>说明：</b>① 停用 = 隐藏导航并拦截访问，业务数据表不受影响，可随时启用；② 卸载 = 仅针对上传安装的插件，删除插件包目录、保留业务数据表；③ 内置插件（WBS 等）不可卸载；④ 新插件放入 <code style="background:#fef3c7;padding:1px 6px;border-radius:4px;">plugins/</code> 目录后，重启系统即自动注册，也可直接在管理页上传 zip 安装；⑤ 上传安装与卸载后均需重启系统完全生效（Flask 框架限制，重启即好）。
+        <b>说明：</b>① 停用 = 隐藏导航并拦截访问，业务数据表不受影响，可随时启用；② 卸载 = 仅针对上传安装的插件，删除插件包目录、保留业务数据表；③ 内置插件（WBS 等）不可卸载；④ 新插件放入 <code style="background:#fef3c7;padding:1px 6px;border-radius:4px;">plugins/</code> 目录后，重启系统即自动注册，也可直接在管理页上传 zip 安装；<b>插件必须实现《插件开发规范》§13 的数据开放接口</b>（/__openapi/datasets 与 /__openapi/rows），否则平台 AI 只能直读其独立库兜底；⑤ 上传安装与卸载后均需重启系统完全生效（Flask 框架限制，重启即好）。
     </div>
 </div>
 {% endblock %}

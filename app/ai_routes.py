@@ -532,12 +532,65 @@ def _collect_db_context(question, max_chars=8000):
         _src = {x['id']: x for x in _ps.plugin_data_sources()}
     except Exception:
         _src = {}
+    # v12.7.10.10 数据开放优先：插件实现了 OpenAPI v1 接口，就走接口取数（ai_routes 不再直连插件库）
+    if _src:
+        for _pid, src in _src.items():
+            if src.get('access') != 'openapi':
+                continue
+            name_p = src.get('name') or _pid
+            if src.get('ai_readable') is False:
+                plug_parts.append('插件「%s」声明数据不对平台 AI 开放（data_open.ai_readable=false），已跳过。' % name_p)
+                continue
+            allow_tables = set(src.get('tables') or [])
+            usable = []
+            for d in (src.get('openapi') or {}).get('tables') or []:
+                if not isinstance(d, dict):
+                    continue
+                t = d.get('name')
+                if not t or not isinstance(t, str):
+                    continue
+                if allow_tables and t not in allow_tables:
+                    continue
+                if t in _EXCLUDE_TABLES or not _SAFE_TABLE.match(t):
+                    continue
+                try:
+                    cnt = int(d.get('rows') or 0)
+                except Exception:
+                    cnt = 0
+                if cnt > 0:
+                    usable.append((d, t, cnt))
+            if not usable:
+                plug_parts.append('插件「%s」开放接口已接通，但当前没有数据表有数据。' % name_p)
+                plug_files.append(_pid)
+                continue
+            lines = ['外部插件「%s」开放数据（OpenAPI v1 接口，%d 张有数据表）：' % (name_p, len(usable))]
+            for d, t, cnt in usable:
+                got = _ps.plugin_openapi_rows(_pid, t, limit=2, offset=0)
+                rows = (got or {}).get('rows') or []
+                cols = (got or {}).get('fields') or d.get('fields') or []
+                if cols and isinstance(cols[0], dict):
+                    cols = [c.get('name') for c in cols]
+                cols = _safe_sample_cols([c for c in cols if c])
+                safe_rows = []
+                for r in rows:
+                    if isinstance(r, dict):
+                        safe_rows.append({k: v for k, v in r.items() if k not in _SENSITIVE_COL})
+                    else:
+                        safe_rows.append(r)
+                lines.append('【表 %s·相关】（%d 行）列: %s\n样例数据: %s' % (
+                    t, cnt, ', '.join(cols),
+                    __import__('json').dumps(safe_rows, ensure_ascii=False, default=str)[:900]))
+            plug_parts.append('\n'.join(lines))
+            plug_files.append(_pid)
+    # 兼容兜底：没有开放接口的老插件，直读 data/<插件id>.db（AI 上下文显式标注"直读兜底"）
     if _os.path.isdir(data_dir):
         for fn in sorted(_os.listdir(data_dir)):
             if not fn.endswith('.db'):
                 continue
             pid = fn[:-3]
             src = _src.get(pid) or {}
+            if src.get('access') == 'openapi':
+                continue
             if src and src.get('ai_readable') is False:
                 plug_parts.append('插件「%s」在 manifest 中声明数据不对平台 AI 开放（data_open.ai_readable=false），已跳过。'
                                   % src.get('name', pid))
@@ -564,7 +617,8 @@ def _collect_db_context(question, max_chars=8000):
                         pass
                 if ptabs:
                     label = src.get('name') or pid
-                    lines = ['外部插件「%s」独立库数据（插件声明 AI 可读，%d 张有数据表）：' % (label, len(ptabs))]
+                    head_note = '（该插件未实现数据开放接口，平台直读其独立库，属兼容兜底）' if _src else ''
+                    lines = ['外部插件「%s」独立库数据%s（%d 张有数据表）：' % (label, head_note, len(ptabs))]
                     for t, cnt, cols in ptabs:
                         lines.append(_sample_part(cdb, t, cnt, cols, 1))
                     plug_parts.append('\n'.join(lines))
