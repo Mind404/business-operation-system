@@ -1185,6 +1185,23 @@ def admin_backup_restore():
                 except Exception as e:
                     pack_msg = f' 但插件包还原失败：{e}，可单独对 pluginpack_备份_{ts2}.zip 点还原。'
         log_operation('数据备份', '恢复', f'{kind} ← {fname}', session.get('username'))
+        # v12.7.10.16：主库恢复会把会话表一起还原，当前登录态必然失效。
+        # 与其静默跳到登录页让人以为"恢复没成功"，不如明确提示并按备份里的账号重新登录。
+        if pre == 'business':
+            _tok = session.get('sess_token')
+            _still = False
+            try:
+                _c = sqlite3.connect(src)
+                if _tok and _c.execute('SELECT 1 FROM user_sessions WHERE token=?', (_tok,)).fetchone():
+                    _still = True
+                _c.close()
+            except Exception:
+                _still = False
+            if not _still:
+                session.clear()
+                flash('主库已恢复（数据已覆盖成功）。登录信息也随主库一起还原了，请重新登录——'
+                      '账号用备份里的（例如 admin / admin123），登录后再恢复插件库和插件包。', 'warning')
+                return redirect(url_for('login'))
         flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。{pack_msg}'
               f'请重启系统（停止.bat → 启动.bat）后完全生效。', 'success')
     except OSError as e:

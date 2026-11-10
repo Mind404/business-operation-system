@@ -74,6 +74,18 @@
         <div class="error-box">{{ error }}</div>
         {% endif %}
 
+        {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% if msgs %}
+        <div style="margin:0 0 14px;">
+          {% for cat, m in msgs %}
+          <div style="padding:10px 12px;border-radius:6px;font-size:13px;line-height:1.6;margin-bottom:6px;
+                      background:{{ '#fffbeb' if cat == 'warning' else '#fef2f2' if cat == 'error' else '#ecfdf5' }};
+                      color:{{ '#92400e' if cat == 'warning' else '#991b1b' if cat == 'error' else '#065f46' }};
+                      border:1px solid {{ '#fcd34d' if cat == 'warning' else '#fca5a5' if cat == 'error' else '#a7f3d0' }};">{{ m }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
         <form method="post" action="{{ url_for('login') }}">
             <input type="hidden" name="next" value="{{ next }}">
             <div class="form-group">
