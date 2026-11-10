@@ -63,6 +63,10 @@ def _app_dir():
 
 _upload_ids_cache = None
 
+# v12.7.10.15：平台自带的目录型插件（随安装包发布，不是外部插件）。
+# 目录发现的插件默认按外部插件(dir)登记，命中这里的仍记为 builtin。
+BUNDLED_DIR_PLUGINS = {'univer_sheet'}
+
 def _upload_plugin_ids():
     """当前 install_type='upload' 的插件 id 集合（独立短连接查主库，避免递归 get_db）"""
     global _upload_ids_cache
@@ -70,7 +74,7 @@ def _upload_plugin_ids():
         try:
             con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
             _upload_ids_cache = {r[0] for r in con.execute(
-                "SELECT id FROM plugin_registry WHERE install_type='upload'").fetchall()}
+                "SELECT id FROM plugin_registry WHERE install_type IN ('upload','dir')").fetchall()}
             con.close()
         except Exception:
             _upload_ids_cache = set()
@@ -152,12 +156,13 @@ def init_plugin_tables():
             continue
         db.execute('''INSERT INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint, tables, enabled, install_type)
-            VALUES (?,?,?,?,?,?,?,?,1,'dir')
+            VALUES (?,?,?,?,?,?,?,?,1,?)
             ON CONFLICT(id) DO NOTHING''',
             (man.get('id', pid), man.get('name', pid), man.get('icon', '🧩'),
              man.get('group', '业务'), 1 if man.get('core') else 0,
              man.get('description', ''), man.get('endpoint', ''),
-             json.dumps(man.get('tables', []), ensure_ascii=False)))
+             json.dumps(man.get('tables', []), ensure_ascii=False),
+             'builtin' if (man.get('bundled') or pid in BUNDLED_DIR_PLUGINS) else 'dir'))
     # v12.7.10.15：历史误登记纠正——目录里的外部插件曾被写成 builtin，页面显示成"平台内置"。
     # 只纠正"目录里确实存在、且业务表没落在主库"的行，避免库切换后读不到历史数据。
     try:
@@ -167,7 +172,7 @@ def init_plugin_tables():
         _data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
         for r in db.execute("SELECT id FROM plugin_registry WHERE install_type='builtin'").fetchall():
             pid = r['id']
-            if pid in static_ids2 or pid not in _mmp:
+            if pid in static_ids2 or pid in BUNDLED_DIR_PLUGINS or pid not in _mmp:
                 continue
             pdb = _os.path.join(_data_dir, pid + '.db')
             has_own = _os.path.isfile(pdb) and _os.path.getsize(pdb) > 0
