@@ -23,6 +23,9 @@
    原因：恢复老备份会把库结构一起退回旧版本，缺 `ui_prefs` 时拖导航报 `no such table`，
    且"要求重新登录"的分支会先 return，补表逻辑必须放在覆盖完成处才不会跳过。
    复测：运行中删表不重启直接保存 → 成功；恢复缺表的旧备份 → 表数 18→19、导航保存正常。
+   进一步：`CREATE TABLE IF NOT EXISTS` 补不了"表里新增的列"，故恢复后同时调用 `run_migrations()`。
+   复测老备份（缺 user_sessions/ui_prefs 两表、users 缺 deleted/department 两列）：
+   恢复后表 17→19、users 7→9 列，9 个页面全 200，`no such table/column` 0 条。
 4. `app/config.py` 新增 `APP_VERSION = "13.0.0"`；`/healthz` 返回 `version` 字段
 
 ## v12.7.10.32（2026-11-11）

@@ -1726,16 +1726,24 @@ def _ensure_schema_tables(db_path=None):
     用户点功能看到的是 "no such table"，必须重启才能好。这里恢复成功即补建。"""
     path = db_path or app.config['DATABASE']
     schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+    ok = False
     try:
         c = sqlite3.connect(path, timeout=30)
         with open(schema_path, 'r', encoding='utf-8') as f:
             c.executescript(f.read())
         c.commit()
         c.close()
-        return True
+        ok = True
     except Exception as e:
         print(f'[表结构补建] 失败：{e}')
-        return False
+    # v13.0.0：补表只能补"整张表"，补不了"表里新增的列"（CREATE TABLE IF NOT EXISTS 遇到已存在的表直接跳过）。
+    # 老备份恢复回来后 users 可能缺 deleted/department 等列，必须再跑一遍增量迁移才能补齐。
+    try:
+        from db_migrations import run_migrations
+        run_migrations()
+    except Exception as e:
+        print(f'[表结构补建] 增量迁移跳过：{e}')
+    return ok
 
 
 def _ensure_ui_prefs(db):
