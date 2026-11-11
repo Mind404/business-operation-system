@@ -9,8 +9,6 @@
         html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
         .app-layout { display: flex; min-height: 100vh; }
         .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
-        .nav-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px;
-                   background: #fef3c7; color: #92400e; }
         /* 跨页切换：用浏览器原生 View Transition 做旧页→新页交叉淡化，
            替换掉原先"整页重画"时那一帧白底 */
         @view-transition { navigation: auto; }
@@ -51,7 +49,7 @@
                 <div class="nav-group">
                     {% for p in nav_core %}
                     {% set np = p.nav_path %}
-                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and (request.path.startswith(np) or request.path.startswith('/plugin-shell/' ~ p.id))) %}
                     <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
@@ -72,21 +70,7 @@
                 </div>
                 {% endif %}
 
-                {# v12.7.10.15 外部插件（上传安装）：独立分区，明确标注来源 #}
-                {% if nav_ext %}
-                <div class="nav-group" id="navExtGroup">
-                    <div class="nav-group-title">外部插件</div>
-                    {% for p in nav_ext %}
-                    {% set np = p.nav_path %}
-                    {% set is_active = (np != '/' and request.path.startswith(np)) or request.path.startswith('/plugin-shell/' ~ p.id) %}
-                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
-                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}<span class="nav-tag">外来</span>
-                    </a>
-                    {% endfor %}
-                </div>
-                {% endif %}
-
-                {# 系统管理（仅平台管理员可见）：顺序可在页面上拖拽调整 #}
+                {# v12.7.10.17：不再展示「外部插件」分区，来源只体现在插件管理页 #}                {# 系统管理（仅平台管理员可见）：顺序可在页面上拖拽调整 #}
                 {% if current_role == 'platform_admin' %}
                 <div class="nav-group" id="navAdminGroup">
                     <div class="nav-group-title">系统管理</div>

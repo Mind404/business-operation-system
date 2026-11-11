@@ -243,9 +243,10 @@ def inject_nav_context():
             # 平台自带的目录型插件（univer_sheet 等，install_type=builtin）仍直接进页面，避免双层导航
             'external': (pid in _upload_plugin_ids()),
         })
-    # v12.7.10.15：外来插件（上传安装）单独成组，不再和平台内置功能混在同一分区
-    nav_biz = [p for p in biz_plugins if not p.get('external')]
-    nav_ext = [p for p in biz_plugins if p.get('external')]
+    # v12.7.10.17：导航不再按来源分區，全部业务插件同一组显示（用户不需要感知插件来源）
+    # nav_ext 保留键位只为兼容旧模板/旧上下文，恒为空
+    nav_biz = biz_plugins
+    nav_ext = []
     return {'nav_core': core_plugins, 'nav_biz': nav_biz, 'nav_ext': nav_ext,
             'nav_all_plugins': available, 'user_subscribed': set()}
 
