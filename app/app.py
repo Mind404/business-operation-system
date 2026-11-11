@@ -375,6 +375,21 @@ def _handle_405(e):
             '<p><a href="/">← 返回工作台</a></p></div></html>'), 405
 
 
+@app.errorhandler(404)
+def _handle_404(e):
+    """v12.7.10.24：地址不存在时给中文说明页，避免非技术用户看到英文 404（插件被卸载/改名后最常见）"""
+    from flask import jsonify as _j
+    if request.path.startswith('/api/') or request.path.endswith('/__openapi/rows'):
+        return _j({'ok': False, 'msg': '接口不存在'}), 404
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+            '<title>页面不存在</title>'
+            '<div style="font:15px/1.8 system-ui;padding:40px;max-width:640px;margin:0 auto">'
+            '<h2 style="margin:0 0 12px">这个页面不存在</h2>'
+            '<p style="color:#555">地址可能已经变更；如果它原来属于某个插件，也可能是该插件已被停用或卸载。</p>'
+            '<p style="color:#555">可以从下面回到工作台，再从导航里重新选择功能。</p>'
+            '<p><a href="/">← 返回工作台</a></p></div></html>'), 404
+
+
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
@@ -724,7 +739,11 @@ def admin_user_update(uid):
     display_name = request.form.get('display_name', '').strip() or user['username']
     role = request.form.get('role', user['role'])
     department = request.form.get('department', '').strip()
-    is_active = 1 if request.form.get('is_active') == '1' else 0
+    # v12.7.10.24：表单若不带启用状态字段（如只改部门/角色），保持原状态，避免误停用
+    if 'is_active' in request.form:
+        is_active = 1 if request.form.get('is_active') == '1' else 0
+    else:
+        is_active = user['is_active']
     if role not in ('platform_admin', 'admin', 'user'):
         role = user['role']
     # 不允许停用最后一个平台管理员

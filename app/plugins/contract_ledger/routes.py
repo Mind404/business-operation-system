@@ -73,7 +73,16 @@ def import_csv():
     if not f:
         flash('请选择要导入的 CSV 文件', 'error')
         return redirect(url_for('contract_ledger.index'))
-    raw = f.read().decode('utf-8-sig', errors='replace')
+    # v12.7.10.24：Windows Excel「另存为 CSV」默认是 ANSI(GBK)，原来只按 UTF-8 解码，
+    # 中文客户名/产品线会整列变乱码入库。现在先试 UTF-8（含 BOM），失败再按 GBK 解。
+    _raw_bytes = f.read()
+    try:
+        raw = _raw_bytes.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        try:
+            raw = _raw_bytes.decode('gbk')
+        except UnicodeDecodeError:
+            raw = _raw_bytes.decode('utf-8', errors='replace')
     rd = csv.DictReader(io.StringIO(raw))
     header = [h.strip() for h in (rd.fieldnames or []) if h]
     missing = [k for k in ('contract_no', 'customer', 'amount', 'status') if k not in header]
@@ -82,8 +91,15 @@ def import_csv():
         return redirect(url_for('contract_ledger.index'))
     n = 0
     skipped = 0
+    updated = 0
     c = _db()
     try:
+        # v12.7.10.24：按合同号去重 —— 同一份 CSV 重复导入时更新已有记录，不再累加重复合同
+        _exist = {}
+        for _row in c.execute('SELECT contract_no, id FROM contract_items').fetchall():
+            if _row[0] and _row[0] not in _exist:
+                _exist[_row[0]] = _row[1]
+        _upd_sql = 'UPDATE contract_items SET ' + ','.join('%s=?' % k for k in COLS) + ' WHERE id=?'
         for r in rd:
             if not (r.get('contract_no') or '').strip():
                 skipped += 1
@@ -94,16 +110,25 @@ def import_csv():
             except ValueError:
                 skipped += 1
                 continue
-            c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
-                ','.join(COLS), ','.join('?' * len(COLS))),
-                [(_amt if k == 'amount' else (r.get(k) or '').strip()) for k in COLS] + [])
-            n += 1
+            _cn = (r.get('contract_no') or '').strip()
+            _vals = [(_amt if k == 'amount' else (r.get(k) or '').strip()) for k in COLS]
+            if _cn in _exist:
+                c.execute(_upd_sql, _vals + [_exist[_cn]])
+                updated += 1
+            else:
+                c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
+                    ','.join(COLS), ','.join('?' * len(COLS))), _vals + [])
+                _exist[_cn] = None
+                n += 1
         c.commit()
     finally:
         c.close()
-    msg = '已导入 %d 条合同，当前共 %d 条' % (n, _count())
+    msg = '已导入 %d 条合同' % n
+    if updated:
+        msg += '（另有 %d 条合同号已存在，已更新）' % updated
+    msg += '，当前共 %d 条' % _count()
     if skipped:
-        msg += '；跳过 %d 条（合同号为空）' % skipped
+        msg += '；跳过 %d 条（合同号为空或金额非法）' % skipped
     flash(msg, 'success')
     return redirect(url_for('contract_ledger.index'))
 
