@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os, sqlite3, csv, io
-from flask import Blueprint, render_template, request, jsonify, Response
+from flask import Blueprint, render_template, request, jsonify, Response, flash, redirect, url_for
 
 blueprint = Blueprint('contract_ledger', __name__, template_folder='templates')
 APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,23 +62,44 @@ def index():
 
 @blueprint.route('/contract_ledger/import', methods=['POST'])
 def import_csv():
+    """导入合同 CSV。
+    v12.7.10.18 修复两个缺陷：
+    1) 表头不匹配时原来会把整行当成空值插入一条脏记录（contract_no 为空），且返回 ok；
+       现在先校验必需表头，不匹配直接拒绝、不写库。
+    2) 原来导入成功后返回一串 JSON，用户点完按钮看到的是原始 JSON；
+       现在统一 flash 提示并跳回列表页。
+    """
     f = request.files.get('file')
     if not f:
-        return jsonify({'ok': False, 'msg': '未选择文件'})
+        flash('请选择要导入的 CSV 文件', 'error')
+        return redirect(url_for('contract_ledger.index'))
     raw = f.read().decode('utf-8-sig', errors='replace')
     rd = csv.DictReader(io.StringIO(raw))
+    header = [h.strip() for h in (rd.fieldnames or []) if h]
+    missing = [k for k in ('contract_no', 'customer', 'amount', 'status') if k not in header]
+    if missing:
+        flash('导入失败：表头不完整，缺少「%s」。请先点「导出 CSV」拿到标准表头，填好后再导入。' % '、'.join(missing), 'error')
+        return redirect(url_for('contract_ledger.index'))
     n = 0
+    skipped = 0
     c = _db()
     try:
         for r in rd:
+            if not (r.get('contract_no') or '').strip():
+                skipped += 1
+                continue
             c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
                 ','.join(COLS), ','.join('?' * len(COLS))),
-                [r.get(k, '') for k in COLS] + [])
+                [(r.get(k) or '').strip() if k != 'amount' else (r.get(k) or 0) for k in COLS] + [])
             n += 1
         c.commit()
     finally:
         c.close()
-    return jsonify({'ok': True, 'imported': n, 'total': _count()})
+    msg = '已导入 %d 条合同，当前共 %d 条' % (n, _count())
+    if skipped:
+        msg += '；跳过 %d 条（合同号为空）' % skipped
+    flash(msg, 'success')
+    return redirect(url_for('contract_ledger.index'))
 
 
 @blueprint.route('/contract_ledger/export')

@@ -19,6 +19,10 @@ td.note{white-space:normal;color:#8a919a;max-width:220px;overflow:hidden;text-ov
 .pager{margin-top:12px;display:flex;gap:8px;align-items:center;font-size:13px}
 .pager a{padding:5px 10px;border:1px solid #dcdfe3;border-radius:6px;text-decoration:none;color:#1f2329}
 </style></head><body><div class="wrap">
+{% with msgs = get_flashed_messages(with_categories=true) %}{% if msgs %}
+<div class="card" style="padding:10px 14px">
+{% for cat, msg in msgs %}<div style="padding:8px 12px;border-radius:6px;margin-bottom:6px;font-size:13px;background:{{ '#e9f7ec' if cat=='success' else '#fff6e6' }};color:{{ '#1a7f37' if cat=='success' else '#8a5300' }};border:1px solid {{ '#bfe3c8' if cat=='success' else '#f3d9a6' }}">{{ msg }}</div>{% endfor %}
+</div>{% endif %}{% endwith %}
   <h2>📑 合同台账</h2>
   <div class="sub">共 {{ allcnt }} 份合同 · 当前筛选 {{ total }} 条 · 每页 50 条</div>
   <div class="card"><div class="row">

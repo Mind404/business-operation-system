@@ -649,7 +649,12 @@ def wbs_import(pid):
         flash('请选择文件', 'error')
         return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     import openpyxl
-    wb = openpyxl.load_workbook(f, data_only=True)
+    # v12.7.10.18 修复：上传 CSV / 改了后缀的文本 / 损坏文件时，openpyxl 会抛 BadZipFile 直接 500
+    try:
+        wb = openpyxl.load_workbook(f, data_only=True)
+    except Exception:
+        flash('文件打不开：请上传 Excel（.xlsx）格式的 WBS 导入模板（CSV 请先用 Excel 另存为 .xlsx）', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     ws = wb.active
     db = get_db()
     is_admin = session.get('user_role') in ('admin', 'platform_admin')

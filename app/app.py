@@ -341,6 +341,21 @@ def require_login():
     if not _session_is_current():
         session.clear()
         return redirect(url_for('login', kicked=1))
+    # v12.7.10.18 安全修复：账号被停用/删除后，已登录的会话必须立即失效（原来只校验令牌）
+    try:
+        _u = get_db().execute("SELECT is_active, COALESCE(deleted,0) AS d FROM users WHERE id=?",
+                              (session.get('user_id'),)).fetchone()
+    except Exception:
+        _u = 'skip'
+    if _u != 'skip':
+        if _u is None:
+            session.clear()
+            flash('登录信息已失效（账号不存在），请重新登录', 'error')
+            return redirect(url_for('login'))
+        if not _u['is_active'] or _u['d']:
+            session.clear()
+            flash('该账号已被停用，请联系平台管理员', 'error')
+            return redirect(url_for('login', disabled=1))
     # 权限校验：检查当前角色是否有权限访问该模块
     endpoint = request.endpoint or ''
     # 工作台和登录相关页面所有角色都可以访问
