@@ -88,9 +88,15 @@ def import_csv():
             if not (r.get('contract_no') or '').strip():
                 skipped += 1
                 continue
+            _amt = (r.get('amount') or '').replace(',', '').strip()
+            try:
+                _amt = float(_amt) if _amt else 0.0
+            except ValueError:
+                skipped += 1
+                continue
             c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
                 ','.join(COLS), ','.join('?' * len(COLS))),
-                [(r.get(k) or '').strip() if k != 'amount' else (r.get(k) or 0) for k in COLS] + [])
+                [(_amt if k == 'amount' else (r.get(k) or '').strip()) for k in COLS] + [])
             n += 1
         c.commit()
     finally:

@@ -44,7 +44,7 @@ td.note{white-space:normal;color:#8a919a;max-width:220px;overflow:hidden;text-ov
     <thead><tr><th>合同号</th><th>客户</th><th>区域</th><th>产品线</th><th>金额</th><th>签约</th><th>交付</th><th>状态</th><th>负责人</th><th>备注</th></tr></thead>
     <tbody>{% for r in rows %}<tr>
       <td>{{ r['contract_no'] }}</td><td>{{ r['customer'] }}</td><td>{{ r['region'] }}</td><td>{{ r['product_line'] }}</td>
-      <td>{{ '%.0f' % r['amount'] }}</td><td>{{ r['sign_date'] }}</td><td>{{ r['delivery_date'] }}</td>
+      <td>{{ '%.0f' % (r['amount']|float) }}</td><td>{{ r['sign_date'] }}</td><td>{{ r['delivery_date'] }}</td>
       <td>{{ r['status'] }}</td><td>{{ r['owner'] }}</td><td class="note">{{ r['note'] }}</td></tr>{% endfor %}
     </tbody></table>
     <div class="pager">

@@ -1052,11 +1052,34 @@ def _extract_plugin_pack(zip_path):
     app_root = os.path.dirname(os.path.abspath(__file__))
     n = 0
     pids = []
+    skipped = []
+    # v12.7.10.18：平台自带的插件（WBS / 云文档表格）代码随版本走，不能被旧备份回退，
+    # 否则用旧备份恢复插件包会把新版本修好的代码覆盖回旧版（实测会重现旧缺陷）。
+    _protected = set()
+    try:
+        _protected = {p['id'] for p in plugin_system.PLUGINS} | set(getattr(plugin_system, 'BUNDLED_DIR_PLUGINS', set()))
+    except Exception:
+        _protected = {'wbs', 'univer_sheet'}
+    # v12.7.10.18：恢复插件包只补回“缺失的插件”，不覆盖已存在的插件目录。
+    # 原因：插件包备份会把发布时的插件代码一起打包，升级后再恢复旧备份会把平台对插件的修复覆盖回旧版
+    # （实测：合同插件的表头校验被回退，脏数据再次写进库并导致列表页 500）。
+    _existing = []
+    try:
+        for _d in os.listdir(os.path.join(app_root, 'plugins')):
+            if os.path.isfile(os.path.join(app_root, 'plugins', _d, '__init__.py')):
+                _existing.append(_d)
+    except Exception:
+        pass
+
     with zipfile.ZipFile(zip_path) as z:
         for info in z.infolist():
             name = info.filename.replace('\\', '/')
             parts = name.split('/')
             if not name.startswith('plugins/') or '..' in parts:
+                continue
+            if len(parts) >= 2 and (parts[1] in _protected or parts[1] in _existing):
+                if parts[1] not in skipped:
+                    skipped.append(parts[1])
                 continue
             path = os.path.join(app_root, *parts)
             if info.is_dir():
@@ -1068,7 +1091,7 @@ def _extract_plugin_pack(zip_path):
             n += 1
             if len(parts) >= 3 and parts[1] and parts[1] not in pids:
                 pids.append(parts[1])
-    return n, pids
+    return n, pids, skipped
 
 
 @app.route('/admin/backup')
@@ -1142,13 +1165,19 @@ def admin_backup_restore():
             flash('还原中止：现场保护备份失败。请先停止系统，再手动把该 zip 解压到 app/plugins/ 后启动。', 'error')
             return redirect(url_for('admin_backup'))
         try:
-            n, pids = _extract_plugin_pack(src)
-            if not n:
+            n, pids, skipped_pids = _extract_plugin_pack(src)
+            if not n and skipped_pids:
+                flash(f'该插件包里只有已安装的插件（{", ".join(skipped_pids)}），本次没有新增内容——它们现在的版本比备份旧版更新，不做覆盖。如需回退，请先在插件管理里卸载，再还原这个备份。', 'warning')
+            elif not n:
                 flash('该压缩包里没有可还原的插件文件（正确结构应为 plugins/<插件id>/…）', 'error')
             else:
                 plugin_system.invalidate_openapi_cache()
                 log_operation('数据备份', '还原插件包', f'{fname}（{", ".join(pids)}）', session.get('username'))
-                flash(f'✅ 已还原插件包：{", ".join(pids) or "-"}（共 {n} 个文件）。'
+                _skip_tip = ''
+                if skipped_pids:
+                    _skip_tip = (f'；已跳过 {", ".join(skipped_pids)}'
+                                 f'（这些插件当前已存在，为避免用旧备份覆盖新版本代码，本次不改动它们；如需用备份覆盖，请先在插件管理里卸载该插件再还原）')
+                flash(f'✅ 已还原插件包：{", ".join(pids) or "-"}（共 {n} 个文件）{_skip_tip}。'
                       f'请重启系统（停止.bat → 启动.bat）后插件才会出现在导航里。', 'success')
         except Exception as e:
             flash(f'还原插件包失败：{e}', 'error')
@@ -1193,7 +1222,7 @@ def admin_backup_restore():
             pack = os.path.join(bdir, f'pluginpack_备份_{ts2}.zip')
             if os.path.exists(pack):
                 try:
-                    n2, pids2 = _extract_plugin_pack(pack)
+                    n2, pids2, _ = _extract_plugin_pack(pack)
                     if n2:
                         plugin_system.invalidate_openapi_cache()
                         pack_msg = f' 同批次的 {len(pids2)} 个插件包也已还原（{", ".join(pids2)}）。'
@@ -1887,10 +1916,24 @@ def perform_backup(label='启动'):
             continue
         pre = f.split('_备份_')[0]
         groups.setdefault(pre, []).append(f)
+    # v12.7.10.18：原来按文件名排序删除最前面的 -> 用户刚导入的旧备份（时间戳更早）会被当成"最旧"删掉，
+    # 结果是点恢复时提示"备份文件不存在"，文件也没了。改为按修改时间排序保留最近 7 份，
+    # 且 2 小时内动过的文件（刚导入/刚上传/正要恢复的那个）一律不删。
     for pre, fl in groups.items():
-        for f in sorted(fl)[:-7]:
+        items = []
+        for f in fl:
+            fp = os.path.join(bdir, f)
             try:
-                os.remove(os.path.join(bdir, f))
+                items.append((os.path.getmtime(fp), f))
+            except Exception:
+                items.append((0, f))
+        items.sort(reverse=True)
+        for _mt, f in items[7:]:
+            fp = os.path.join(bdir, f)
+            try:
+                if time.time() - _mt < 86400:
+                    continue
+                os.remove(fp)
             except Exception:
                 pass
     msg = f'已备份主库 → backups/{os.path.basename(dst)}'
