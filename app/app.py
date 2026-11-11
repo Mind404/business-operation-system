@@ -1023,19 +1023,25 @@ def _backup_list():
     if not os.path.isdir(bdir):
         return []
     out = []
+    import re as _re
     for f in os.listdir(bdir):
-        if '_备份_' not in f or not (f.endswith('.db') or f.endswith('.zip')):
+        if not (f.endswith('.db') or f.endswith('.zip')):
+            continue
+        if '_备份_' not in f and '_保护_' not in f:
             continue
         fp = os.path.join(bdir, f)
         try:
             st = os.stat(fp)
             if st.st_size <= 0:
                 continue
-            pre = f.split('_备份_')[0]
+            pre = _re.split(r'_备份_|_保护_', f)[0]
+            _is_prot = '_保护_' in f
             if f.endswith('.zip'):
                 kind = '插件包(含插件本体)'
             else:
                 kind = '主库' if pre == 'business' else f'插件库({pre})'
+            if _is_prot:
+                kind += '〔恢复前自动保护〕'
             out.append({'name': f, 'size': st.st_size,
                         'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime)),
                         'kind': kind})
@@ -1133,7 +1139,8 @@ def admin_backup_download(fname):
         flash('无权限', 'error')
         return redirect(url_for('index'))
     import re
-    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+    if (not fname.endswith(('.db', '.zip'))
+            or ('_备份_' not in fname and '_保护_' not in fname)
             or '/' in fname or '\\' in fname
             or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('非法的备份文件名', 'error')
@@ -1154,7 +1161,8 @@ def admin_backup_restore():
         return redirect(url_for('index'))
     fname = (request.form.get('backup_file') or '').strip()
     import re
-    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+    if (not fname.endswith(('.db', '.zip'))
+            or '_备份_' not in fname
             or '/' in fname or '\\' in fname
             or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('请选择有效的备份文件', 'error')
@@ -1286,7 +1294,8 @@ def admin_backup_delete():
         return redirect(url_for('admin_backup'))
     import re
     fname = (request.form.get('backup_file') or '').strip()
-    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+    if (not fname.endswith(('.db', '.zip'))
+            or ('_备份_' not in fname and '_保护_' not in fname)
             or '/' in fname or '\\' in fname
             or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('请选择要删除的备份文件', 'error')
@@ -1321,7 +1330,8 @@ def admin_backup_upload():
         flash('请先选择要导入的备份文件', 'error')
         return redirect(url_for('admin_backup'))
     fname = (f.filename or '').strip()
-    if (not fname.endswith(('.db', '.zip')) or '_备份_' not in fname
+    if (not fname.endswith(('.db', '.zip'))
+            or '_备份_' not in fname
             or '/' in fname or '\\' in fname
             or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('文件名不符合备份规范（应为 xxx_备份_时间.db 或 xxx_备份_时间.zip），已拒绝导入', 'error')
@@ -1856,8 +1866,11 @@ def perform_backup(label='启动'):
     bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
     os.makedirs(bdir, exist_ok=True)
     ts = time.strftime('%Y%m%d_%H%M%S')
+    # v12.7.10.19：恢复前自动保护现场的那一份，单独用“保护”命名并在列表里标注，
+    # 避免用户把它误看成“同一个备份又被复制了一套”（恢复失败时它还是空库，更容易误会）。
+    tag = '保护' if label == '恢复前保护' else '备份'
     made = []
-    dst = os.path.join(bdir, f'business_备份_{ts}.db')
+    dst = os.path.join(bdir, f'business_{tag}_{ts}.db')
     shutil.copy2(src, dst)
     made.append(os.path.basename(dst))
     # v12.7.0 数据隔离（方案B）：上传插件的独立库一并备份
@@ -1871,7 +1884,7 @@ def perform_backup(label='启动'):
                         continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
                 except OSError:
                     continue
-                pdst = os.path.join(bdir, f.replace('.db', f'_备份_{ts}.db'))
+                pdst = os.path.join(bdir, f.replace('.db', f'_{tag}_{ts}.db'))
                 try:
                     shutil.copy2(src_db, pdst)
                     made.append(os.path.basename(pdst))
@@ -1899,7 +1912,7 @@ def perform_backup(label='启动'):
             except Exception:
                 pack_ids = []
         if pack_ids:
-            pz = os.path.join(bdir, f'pluginpack_备份_{ts}.zip')
+            pz = os.path.join(bdir, f'pluginpack_{tag}_{ts}.zip')
             n_pack = 0
             with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
                 for pid in pack_ids:
@@ -1924,7 +1937,7 @@ def perform_backup(label='启动'):
     # v12.7.10.15：清掉备份目录里被顺带打开的 -wal/-shm（0 字节残留，易被误当成"空备份"）
     try:
         for f in os.listdir(bdir):
-            if f.endswith(('-wal', '-shm')) and '_备份_' in f:
+            if f.endswith(('-wal', '-shm')) and ('_备份_' in f or '_保护_' in f):
                 try:
                     os.remove(os.path.join(bdir, f))
                 except Exception:
@@ -1933,10 +1946,13 @@ def perform_backup(label='启动'):
         pass
     # 只保留最近 7 份（business_ / 各 <插件id>_ / pluginpack_ 前缀各自保留 7 份）
     groups = {}
+    import re as _re
     for f in os.listdir(bdir):
-        if '_备份_' not in f or not (f.endswith('.db') or f.endswith('.zip')):
+        if not (f.endswith('.db') or f.endswith('.zip')):
             continue
-        pre = f.split('_备份_')[0]
+        if '_备份_' not in f and '_保护_' not in f:
+            continue
+        pre = _re.split(r'_备份_|_保护_', f)[0]
         groups.setdefault(pre, []).append(f)
     # v12.7.10.18：原来按文件名排序删除最前面的 -> 用户刚导入的旧备份（时间戳更早）会被当成"最旧"删掉，
     # 结果是点恢复时提示"备份文件不存在"，文件也没了。改为按修改时间排序保留最近 7 份，
