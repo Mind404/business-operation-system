@@ -289,6 +289,48 @@ def _safe_sample_cols(cols):
     return [c for c in cols if c not in _SENSITIVE_COL]
 
 
+_UNIVER_STATS = {}   # v12.7.10.32：记录云表格规模，供概览口径使用（工作簿数/有内容数/合计行数）
+
+
+def _univer_scale(db):
+    """v12.7.10.32：按库内真实快照统计云表格规模（工作簿数 / 有内容数 / 数据行数 / 工作表数）。
+    与"本次是否展开"无关，保证概览口径永远真实；独立函数避免多请求共用全局变量串值。"""
+    out = {'books': 0, 'with_data': 0, 'rows': 0, 'sheets': 0}
+    try:
+        rooms = db.execute('SELECT state FROM univer_rooms WHERE deleted = 0').fetchall()
+    except Exception:
+        return out
+    out['books'] = len(rooms)
+    for r in rooms:
+        try:
+            snap = __import__('json').loads(r['state']) if r['state'] else None
+        except Exception:
+            snap = None
+        rows, sh = 0, 0
+        sheets = (snap or {}).get('sheets')
+        if isinstance(sheets, dict):
+            for _sk, sd in sheets.items():
+                cd = (sd or {}).get('cellData') if isinstance(sd, dict) else None
+                if not isinstance(cd, dict):
+                    continue
+                mr = -1
+                for rk, rm in cd.items():
+                    try:
+                        rr = int(rk)
+                    except Exception:
+                        continue
+                    if isinstance(rm, dict) and rm:
+                        mr = max(mr, rr)
+                if mr >= 0:
+                    rows += mr
+                    sh += 1
+        if rows > 0:
+            out['with_data'] += 1
+            out['rows'] += rows
+            out['sheets'] += sh
+    return out
+
+
 def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
     """需求统计管理提取（v12.7.14 重构）：
     大表（几百~几千行）不再把单元格全文拼接后被截断，而是输出
@@ -337,6 +379,7 @@ def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
     if not rooms:
         return ''
     total = len(rooms)
+    _U_WITH, _U_ROWS, _U_SHEETS = 0, 0, 0
     words = words or []
     # v12.7.10.30：不限制模式（max_chars=None）下每张表固定 1400，统计块不被压缩；
     # 总长交给"分块编译"消化，不再靠压缩房间内容来省篇幅。
@@ -350,11 +393,37 @@ def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
         # v12.7.10.30：expand_names 给定时，未被问题命中的房间只输出一行（行数+未展开说明），
         # 数据仍在（行数准确），真正问到哪张表时才完整展开统计
         if expand_names is not None and _rname not in expand_names:
+            # v12.7.10.32：即使不展开，也解析出该表规模，保证概览里的"云表格合计行数"真实
+            try:
+                _snap0 = _json.loads(r['state']) if r['state'] else None
+                _r0, _s0 = 0, 0
+                for _sk0, _s0d in ((_snap0 or {}).get('sheets') or {}).items():
+                    _cd0 = (_s0d or {}).get('cellData') if isinstance(_s0d, dict) else None
+                    if not isinstance(_cd0, dict):
+                        continue
+                    _mr0 = -1
+                    for _rk0, _rm0 in _cd0.items():
+                        try:
+                            _rr0 = int(_rk0)
+                        except Exception:
+                            continue
+                        if isinstance(_rm0, dict) and _rm0:
+                            _mr0 = max(_mr0, _rr0)
+                    if _mr0 >= 0:
+                        _r0 += _mr0
+                        _s0 += 1
+                if _r0 > 0:
+                    _U_WITH += 1
+                    _U_ROWS += _r0
+                    _U_SHEETS += _s0
+            except Exception:
+                pass
             parts.append((_rname, '表「%s」（房间#%s，v%s，%s更新·%s）本次未展开统计（表名未出现在问题中）；'
                                  '如需分析该表请点名提问，平台会完整统计。'
                           % (_rname, r['id'], r['version'], (r['updated_at'] or '')[:16], r['updated_by'] or '?')))
             continue
         sheet_txts = []
+        _has_row = False
         snap = None
         try:
             snap = _json.loads(r['state']) if r['state'] else None
@@ -427,6 +496,9 @@ def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
                     stxt += '\n' + extra
                 stxt += '\n样例行(前3行): ' + sample
                 sheet_txts.append(stxt)
+                _has_row = True
+                _U_ROWS += maxrow
+                _U_SHEETS += 1
         head = '表「%s」（房间#%s，v%s，%s更新·%s，工作表%d 个）' % (
             r['name'] or '(未命名)', r['id'], r['version'],
             (r['updated_at'] or '')[:16], r['updated_by'] or '?',
@@ -438,7 +510,11 @@ def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
             if len(txt) > per:
                 # v12.7.10.28：只截样例/极值明细，统计块在头部一定保留，避免模型误判"统计也不完整"
                 txt = txt[:per] + '\n…（本表样例/极值明细因篇幅截断；上方确定性统计按整表计算，可直接引用）'
+        if _has_row:
+            _U_WITH += 1
         parts.append((r['name'] or '(未命名)', txt))
+    global _UNIVER_STATS
+    _UNIVER_STATS = {'books': total, 'with_data': _U_WITH, 'rows': _U_ROWS, 'sheets': _U_SHEETS}
     # v12.7.10.29：总长超预算时按新→旧顺序保留，并明确列出本次未展开的表名，
     # 避免整块需求统计被上层降级成一行概览、所有表的统计全部丢失
     kept, _u, _rest = [], 0, []
@@ -655,13 +731,27 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
             continue
         parts.append(part)
         used += len(part)
-    head = '数据库概要：共 %d 张业务表，其中 %d 张有数据（%d 张与你的问题相关）。只列出有数据的表，空表未读取。' % (
-        len(tables), total_active, related)
-    # v12.7.10.29：先把"有哪些表、各多少行"完整告诉模型，避免表多时预算耗尽、后面的表连存在都不知道
-    _all = '、'.join('%s(%d行)' % (x[0], x[1]) for x in scored[:12])
-    if len(scored) > 12:
-        _all += '、…等共 %d 张' % len(scored)
-    head += ' 全部有数据表：%s。' % _all
+    # v12.7.10.32：概览改为"按业务模块汇总"，不再把系统的房间登记行数当成数据量。
+    # 原写法"共 5 张业务表…univer_rooms(6行)…总行数 1024"会让模型误判需求统计没有数据。
+    _sys_tables = {'univer_rooms', 'plugin_tables', 'wbs_recycle', 'schema_version', 'ui_prefs'}
+    _cnt_map = {x[0]: x[1] for x in active}
+    _mods = []
+    _u = _univer_scale(db)
+    if _u.get('books'):
+        _mods.append('需求统计管理（云表格）：%d 个工作簿，其中 %d 个有内容，合计 %d 行数据、%d 个工作表'
+                     % (_u.get('books', 0), _u.get('with_data', 0), _u.get('rows', 0), _u.get('sheets', 0)))
+    if _cnt_map.get('wbs_tasks') or _cnt_map.get('wbs_projects'):
+        _mods.append('计划管理（WBS）：%d 个项目、%d 条任务'
+                     % (_cnt_map.get('wbs_projects', 0), _cnt_map.get('wbs_tasks', 0)))
+    head = '业务数据总览（本次实际读取到的数据）：' + ('；'.join(_mods) if _mods else '暂无业务数据') + '。'
+    _other = [x for x in scored if x[0] not in _sys_tables]
+    _other_l = [x for x in _other if x[0] not in ('wbs_projects', 'wbs_tasks')]
+    if _other_l:
+        head += ' 其他业务表：%s。' % '、'.join('%s(%d行)' % (x[0], x[1]) for x in _other_l[:8])
+    head += (' 说明：univer_rooms 等系统表的行数只是"工作簿/插件/回收站的登记记录"，'
+             '不代表业务数据量；回答"数据量/总量"时必须按上面的模块口径分别说明（云表格行数 + 任务条数），'
+             '不得用系统表的行数代替。系统表（插件登记、回收站、用户、日志等）不参与业务分析，已略去。'
+             ' 外部插件数据见各插件区块。')
     # v12.7.0 数据隔离（方案B）：上传插件的数据表在独立库 app/data/<插件id>.db，跨库只读注入
     import os as _os
     data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
@@ -776,6 +866,11 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                 if _total_n > len(safe_rows):
                     _trunc = ('⚠ 该表共 %d 行，本次实际读取 %d 行（插件接口分页未取完）；'
                               '超出部分未纳入，全表合计请勿直接引用\n' % (_total_n, len(safe_rows)))
+                if _total_n <= 0 or not safe_rows:
+                    lines.append('【表 %s】当前没有数据（0 行）：插件接口连通但该表为空，'
+                                 '或是插件独立库未随本次备份/同步带过来；本次不参与分析，'
+                                 '需要时请在插件页面确认数据是否存在。' % t)
+                    continue
                 lines.append('【表 %s·%s】（%d 行）列: %s\n%s%s\n%s\n样例数据: %s' % (
                     t, '相关' if _hit else '概要', _total_n, ', '.join(cols), _trunc, prof,
                     (extra + '\n') if extra else '', sample_txt))
@@ -831,13 +926,13 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
     # v12.7.10.30：插件数据不再截断（原先 9000 字符上限会丢掉后面插件的明细）
     extra = '\n\n'.join(plug_parts) if plug_parts else ''
     if plug_files:
-        head += '另有 %d 个上传插件的独立库数据已读取（%s）。' % (len(plug_files), '、'.join(plug_files))
+        head += '另有 %d 个外部插件的数据块（%s），是否有数据以各插件区块的标注为准。' % (len(plug_files), '、'.join(plug_files))
     body = '\n\n'.join(parts) if parts else ''
     if skipped:
         # v12.7.10.29：明确告知覆盖度，不让模型把"没展开"当成"没数据"
         body += ('\n\n【以下表有数据，但本次篇幅不足以展开明细】%s —— 需要时请指明表名（或缩小范围）单独提问，'
                  '平台会完整统计该表。' % '、'.join('%s（%d 行·%s）' % (t, cnt, how) for t, cnt, how in skipped))
-    return head + (('\n\n' + extra) if extra else '') + (('\n\n' + body) if body else '')
+    return head + (('\n\n' + body) if body else '') + (('\n\n' + extra) if extra else '')
 
 
 def _profile_text(fields, rows, total=None, budget=760):
@@ -1703,10 +1798,15 @@ def _stream_chat(api_url, api_key, model, messages, timeout=180):
         headers['Authorization'] = 'Bearer ' + api_key
     req = urllib.request.Request(url, data=body, headers=headers)
     try:
+        _seen_content = False
+        _buf = []
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw in resp:
                 line = raw.decode('utf-8', errors='replace').strip()
-                if not line or not line.startswith('data:'):
+                if not line:
+                    continue
+                _buf.append(line)
+                if not line.startswith('data:'):
                     continue
                 payload = line[len('data:'):].strip()
                 if not payload or payload == '[DONE]':
@@ -1719,9 +1819,29 @@ def _stream_chat(api_url, api_key, model, messages, timeout=180):
                     delta = choices[0].get('delta') or {}
                     content = delta.get('content')
                     if content:
+                        _seen_content = True
                         yield content
                 except Exception:
                     continue
+        # v12.7.10.32：兼容"不支持流式"的 OpenAI 兼容服务（一次性返回整体 JSON）。
+        # 原实现只认 SSE 的 data: 行，遇到非流式响应会静默得到空答案，用户只看到"没有返回内容"。
+        if not _seen_content:
+            txt = '\n'.join(_buf).strip()
+            try:
+                obj = json.loads(txt)
+            except Exception:
+                obj = None
+            if isinstance(obj, dict):
+                ch = (obj.get('choices') or [{}])[0] or {}
+                c = ((ch.get('message') or {}).get('content')
+                     or (ch.get('delta') or {}).get('content')
+                     or (obj.get('response') if isinstance(obj.get('response'), str) else ''))
+                if c:
+                    yield c
+                    return
+            yield ('【调用失败】模型返回内容为空或格式无法识别'
+                   '（既不是流式 data: 分片，也没有 message.content）；'
+                   '请确认模型服务支持 OpenAI 兼容接口，并检查模型是否正常加载。')
     except urllib.error.HTTPError as e:
         yield '【调用失败】HTTP %d：%s' % (e.code, e.read().decode('utf-8', errors='replace')[:400])
     except Exception:
