@@ -601,17 +601,19 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                 _qn = (question or '').lower()
                 _hit_names = set()
                 for _n in _names:
-                    if any(_n[_i:_i + 2].lower() in _qn for _i in range(max(1, len(_n) - 1))):
+                    # v12.7.10.31：改用 4 字窗口，避免"需求/模块"这类 2 字泛词把一堆表误判成"命中"
+                    if len(_n) >= 4 and any(_n[_i:_i + 4].lower() in _qn for _i in range(len(_n) - 3)):
                         _hit_names.add(_n)
                 _generic = any(w in (question or '') for w in ('总览', '所有', '全部', '各表', '各模块', '整体', '全局'))  # v12.7.10.30：'一共/多少条'只问数量，不再当总览
                 _req_like = any(w in (question or '') for w in ('需求', '收集', '子表', '清单', '采集', '表格'))
-                _other_rel = any(x[0] != 'univer_rooms' and x[3] > 0 for x in scored)
+                _explicit_other = any(w in (question or '') for w in
+                                      ('合同', '物料', '库存', '项目', '任务', '逾期', 'WBS', 'wbs', '供应商', '客户'))
                 if _hit_names and not _generic:
                     _expand = _hit_names
-                elif _generic or _req_like:
-                    _expand = None            # 问的就是需求/总览 → 全部展开
+                elif _explicit_other and not _req_like:
+                    _expand = set()           # v12.7.10.31：问的明确是别的模块（合同/物料/项目…）→ 需求表只列行数
                 else:
-                    _expand = set()           # 没点名需求表 → 只列行数，避免无关模块挤进上下文
+                    _expand = None            # 其余（含"分析一下数据"这类模糊提问）→ 全部展开，绝不为省篇幅漏表
             except Exception:
                 _expand = None
             part = _univer_summary(db, max_chars=None, words=sel, expand_names=_expand)
@@ -630,7 +632,10 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
             tag = '相关' if (task_txt or score > 0) else ''
         else:
             _generic_q = any(w in (question or '') for w in ('全部', '所有', '各表', '总览', '一共', '整体', '汇总', '多少条'))
-            if max_chars is None and score <= 0 and not _generic_q:
+            _any_hit = any(x[3] > 0 for x in scored)
+            # v12.7.10.31：只有"问题确实命中了某些表"时，才把没命中的表压成概览；
+            # 一个问题都没命中（如"分析一下数据"）说明是模糊提问，此时全部展开，避免只剩个别模块。
+            if max_chars is None and score <= 0 and _any_hit and not _generic_q:
                 # v12.7.10.30：与本问题无关的表只给一行概览（行数+核心合计），不丢数据、也不占篇幅
                 part = _brief_line(db, t, cnt, cols)
                 tag = ''
@@ -698,8 +703,9 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                     cnt = int(d.get('rows') or 0)
                 except Exception:
                     cnt = 0
-                if cnt > 0:
-                    usable.append((d, t, cnt))
+                # v12.7.10.31：插件没在 datasets 里报 rows（或报 0）时，不能就此判定"无数据"而跳过；
+                # 先标记为未知(-1)，实际读取后以读到的行数/接口返回的 total 为准。
+                usable.append((d, t, cnt if cnt > 0 else -1))
             if not usable:
                 plug_parts.append('插件「%s」开放接口已接通，但当前没有数据表有数据。' % name_p)
                 plug_files.append(_pid)
@@ -720,15 +726,25 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                         if _c and any(_c[_i:_i + 2].lower() in _q for _i in range(max(1, len(_c) - 1))):
                             _hit = True
                             break
-                _rows_all, _off = [], 0
+                _rows_all, _off, _total = [], 0, None
                 while _off < 200000:   # v12.7.10.30：取消插件单表 3000 行限制，分页读全表
                     _g = _ps.plugin_openapi_rows(_pid, t, limit=1000, offset=_off) or {}
                     _rs = _g.get('rows') or []
+                    if _total is None and _g.get('total') is not None:
+                        try:
+                            _total = int(_g.get('total'))
+                        except Exception:
+                            _total = None
                     if not _rs:
                         break
                     _rows_all.extend(_rs)
-                    _off += 1000
-                    if len(_rs) < 1000:
+                    # v12.7.10.31：按"实际返回条数"推进游标。原先固定 +1000，遇到插件
+                    # 每页上限小于 1000（如只给 100 行）时会每次跳过 900 行，造成静默丢数据。
+                    _off += len(_rs)
+                    if _total is not None:
+                        if _off >= _total:
+                            break
+                    elif len(_rs) < 1000:
                         break
                 got = {'rows': _rows_all}
                 rows = _rows_all
@@ -742,7 +758,8 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                         safe_rows.append({k: v for k, v in r.items() if k not in _SENSITIVE_COL})
                     else:
                         safe_rows.append(r)
-                prof = _profile_text(cols, safe_rows, total=cnt,
+                _total_n = cnt if cnt > 0 else (int(_total) if _total else len(safe_rows))
+                prof = _profile_text(cols, safe_rows, total=_total_n,
                                      budget=1000 if _hit else 420)
                 if _hit:
                     extra = '\n'.join(x for x in (_kw_rows(cols, safe_rows, sel),
@@ -756,11 +773,11 @@ def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不�
                 # v12.7.10.27：单表最多读 3000 行；超过时必须显式标注覆盖范围，
                 # 否则 >3000 行的表会被静默当全量统计，模型据此报出的合计/分布是错的。
                 _trunc = ''
-                if cnt > len(safe_rows):
-                    _trunc = ('⚠ 该表共 %d 行，平台单次最多读取 3000 行，本次统计仅覆盖前 %d 行；'
-                              '超出部分未纳入，全表合计请勿直接引用\n' % (cnt, len(safe_rows)))
+                if _total_n > len(safe_rows):
+                    _trunc = ('⚠ 该表共 %d 行，本次实际读取 %d 行（插件接口分页未取完）；'
+                              '超出部分未纳入，全表合计请勿直接引用\n' % (_total_n, len(safe_rows)))
                 lines.append('【表 %s·%s】（%d 行）列: %s\n%s%s\n%s\n样例数据: %s' % (
-                    t, '相关' if _hit else '概要', cnt, ', '.join(cols), _trunc, prof,
+                    t, '相关' if _hit else '概要', _total_n, ', '.join(cols), _trunc, prof,
                     (extra + '\n') if extra else '', sample_txt))
             plug_parts.append('\n'.join(lines))
             plug_files.append(_pid)
@@ -1030,7 +1047,7 @@ def _sample_part(db, t, cnt, cols, score, words=None):
         return '【表 %s】读取失败: %s' % (t, e)
 
 
-def _overdue_report():
+def _overdue_report(brief=False):
     """系统侧确定性预判 WBS 任务超期/到期情况（不依赖小模型推理）：
     规则——计划结束时间 plan_end 早于今天且状态不是“已完成/已取消”= 已逾期（“未开始”也算）；
     plan_end=今天且未完成 = 今日到期；plan_end 在 1~7 天内且未完成 = 7 日内到期。
@@ -1080,6 +1097,11 @@ def _overdue_report():
             parts.append('【今日到期 %d 个】：\n%s' % (len(due_today), _fmt(due_today)))
         if due_week:
             parts.append('【7 日内到期 %d 个】：\n%s' % (len(due_week), _fmt(due_week)))
+        if brief:
+            # v12.7.10.31：泛问时只给一行汇总，避免每次回答都被这段长明细主导
+            return ('WBS 逾期提示（系统计算）：已逾期 %d 个任务、今日到期 %d 个、7 日内到期 %d 个；'
+                    '如需具体任务明细，请在提问中指明 WBS/项目/逾期。'
+                    % (len(overdue), len(due_today), len(due_week)))
         head = 'WBS 任务超期预判（系统按规则计算，请直接引用，不要自行推断）——' \
                '已逾期 = 计划结束时间早于 %s 且状态非“已完成/已取消”（未开始也算逾期）：' % today
         return head + '\n' + '\n\n'.join(parts)
@@ -1320,7 +1342,17 @@ def chat():
     _tpl = _template_sql(question, db)
     if _tpl:
         context += '\n\n【预置统计查询结果（系统SQL精确计算）】\n标题：%s\n%s' % (_tpl[0], _tpl[1])
-    overdue = _overdue_report()
+    # v12.7.10.31：WBS 逾期报告不再无条件塞进每次提问（原先问合同/物料也会带一大段 WBS 逾期明细，
+    # 导致模型把回答重心放到 WBS）。按问题主题分级：点名 WBS → 完整明细；泛问 → 一行汇总；其余 → 不注入。
+    _qx = (question or '')
+    _wbs_strong = any(w in _qx for w in ('WBS', 'wbs', '任务', '项目', '逾期', '超期', '到期', '进度', '计划', '排期', '里程碑'))
+    _q_broad = any(w in _qx for w in ('分析', '总览', '整体', '全部', '所有', '数据', '情况', '问题', '风险'))
+    if _wbs_strong:
+        overdue = _overdue_report()
+    elif _q_broad:
+        overdue = _overdue_report(brief=True)
+    else:
+        overdue = ''
     extra = '\n\n%s' % overdue if overdue else ''
     # v12.5.19/20：注入会话历史（分层记忆）。
     # 分层 = 系统提示 + 【会话长期摘要】+ 压缩点之后的最近原文 + 当前问题。
