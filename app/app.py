@@ -341,6 +341,40 @@ def healthz():
     return _jsonify({'ok': ok, 'db': ok}), (200 if ok else 503)
 
 
+# v12.7.10.23：405 兜底 —— 停用插件的"只接受提交"路由用浏览器直接打开时，
+# Flask 在方法匹配阶段就返回 405（before_request 还没跑），用户会看到英文错误页。
+# 这里识别插件归属：插件已停用 → 中文提示并回工作台；其余情况给中文说明页。
+@app.errorhandler(405)
+def _handle_405(e):
+    pid = None
+    try:
+        pid = plugin_system._plugin_id_for_path(request.path) \
+            or plugin_system._manifest_prefix_plugin(request.path)
+    except Exception:
+        pid = None
+    pname = pid or ''
+    if pid:
+        try:
+            row = get_db().execute('SELECT name, enabled FROM plugin_registry WHERE id=?', (pid,)).fetchone()
+            if row is not None:
+                pname = row['name'] or pid
+                if not row['enabled']:
+                    flash('插件「%s」当前已停用，该操作不可用。可在「插件管理」里启用后再试。' % pname, 'warning')
+                    return redirect(url_for('index'))
+        except Exception:
+            pass
+    from flask import jsonify as _j
+    if request.path.startswith('/api/') or request.path.endswith('/__openapi/rows'):
+        return _j({'ok': False, 'msg': '该地址不支持当前请求方式'}), 405
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+            '<title>操作方式不支持</title>'
+            '<div style="font:15px/1.8 system-ui;padding:40px;max-width:640px;margin:0 auto">'
+            '<h2 style="margin:0 0 12px">这个地址不支持直接打开</h2>'
+            '<p style="color:#555">当前请求方式（GET）在该地址上不可用，通常说明它需要从页面里点按钮提交。</p>'
+            '<p style="color:#555">建议回到对应页面操作；如果刚才点的是插件入口，可能该插件已停用。</p>'
+            '<p><a href="/">← 返回工作台</a></p></div></html>'), 405
+
+
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
