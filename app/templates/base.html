@@ -8,6 +8,13 @@
         /* v12.7.10.16：先落底色与骨架，样式表到达前不再露白 */
         html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
         .app-layout { display: flex; min-height: 100vh; }
+    /* v13.0.1 去壳模式：插件被平台外壳 iframe 嵌入时不渲染侧栏与顶栏，避免双层导航 */
+    body.embed-mode .sidebar { display: none !important; }
+    body.embed-mode .page-header { display: none !important; }
+    body.embed-mode .content-body { padding: 14px 18px 22px !important; }
+    body.embed-mode .app-layout { display: block !important; }
+    body.embed-mode .readonly-banner { margin: 0 0 10px; }
+
         .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
         /* 跨页切换：用浏览器原生 View Transition 做旧页→新页交叉淡化，
            替换掉原先"整页重画"时那一帧白底 */
@@ -33,7 +40,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block styles %}{% endblock %}
 </head>
-<body>
+<body{% if request.args.get("embed") == "1" %} class="embed-mode"{% endif %}>
     <div class="app-layout">
         <!-- 侧边导航 -->
         <aside class="sidebar">
@@ -157,6 +164,21 @@
         </main>
     </div>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+    // v13.0.1：iframe 内翻页自动带 embed=1，避免翻页后回退成双层导航
+    (function () {
+      if (!document.body.classList.contains('embed-mode')) return;
+      document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a') : null;
+        if (!a) return;
+        var href = a.getAttribute('href') || '';
+        if (!href || href.charAt(0) === '#' || href.indexOf('javascript:') === 0) return;
+        if (a.target === '_blank' || a.target === '_top') return;
+        if (href.indexOf('embed=') >= 0) return;
+        a.setAttribute('href', href + (href.indexOf('?') >= 0 ? '&' : '?') + 'embed=1');
+      }, true);
+    })();
+    </script>
     <script>
     // 全局只读模式：拦截所有修改操作
     (function() {

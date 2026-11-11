@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}{{ '编辑需求 ' + d['code'] if d else '录入需求' }} · 版本规划{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('version_plan.static', filename='vp.css') }}">
-<div class="page-header">
-  <h1>{% if d %}✏️ 需求 {{ d['code'] }}{% else %}＋ 手动录入需求{% endif %}</h1>
-  <p class="page-desc">
-    {% if d %}当前状态：<b>{{ d['status'] }}</b>{% if d['filter_result'] %} · 过滤结论 {{ d['filter_result'] }}{% endif %}
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>{% if d %}✏️ 需求 {{ d['code'] }}{% else %}＋ 手动录入需求{% endif %}</h1>
+    <p>{% if d %}当前状态：<b>{{ d['status'] }}</b>{% if d['filter_result'] %} · 过滤结论 {{ d['filter_result'] }}{% endif %}
       {% if d['version_no'] %} · 已排入 <span class="vp-code">{{ d['version_no'] }}</span>{% endif %}
-    {% else %}录入后进入「待过滤」队列，等过滤会上逐条判定{% endif %}
-  </p>
+    {% else %}录入后进入「待过滤」队列，等过滤会上逐条判定{% endif %}</p>
+  </div>
 </div>
 
 <div class="vp-toolbar">

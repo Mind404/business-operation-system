@@ -8,6 +8,7 @@ import csv
 import difflib
 import io
 import json
+import os
 import re
 from datetime import date, datetime, timedelta
 
@@ -263,12 +264,34 @@ def index():
                                    'date': val, 'state': r['status']})
     milestones.sort(key=lambda x: x['date'])
     recent = db.execute(f'SELECT * FROM {_t(L_LOGS)} ORDER BY id DESC LIMIT 12').fetchall()
-    versions = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} ORDER BY id DESC LIMIT 6').fetchall()
+    # 每个版本的需求数 / 已交付数 + 当前阶段索引（0 规划 1 冻结 2 开发测试 3 发布）
+    vneed = {}
+    for r in db.execute(f'SELECT version_no, COUNT(*) c, '
+                        'SUM(CASE WHEN status="已发布" THEN 1 ELSE 0 END) d '
+                        f'FROM {_t(L_DEMANDS)} WHERE version_no<>"" GROUP BY version_no').fetchall():
+        vneed[r['version_no']] = (r['c'], r['d'] or 0)
+    stage_map = {'规划中': 0, '已冻结': 1, '开发中': 2, '测试中': 2, '已发布': 3, '已归档': 3}
+    versions = [dict(r) for r in db.execute(
+        f'SELECT * FROM {_t(L_VERSIONS)} '
+        "ORDER BY CASE status WHEN '测试中' THEN 0 WHEN '开发中' THEN 1 WHEN '已冻结' THEN 2 "
+        "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC LIMIT 6").fetchall()]
+    for v in versions:
+        c, d = vneed.get(v['version_no'], (0, 0))
+        v['needs'], v['needs_done'] = c, d
+        v['stage'] = stage_map.get(v['status'], 0)
+    month = _today()[:7]
+    month_release = db.execute(
+        f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE substr(release_date,1,7)=?',
+        (month,)).fetchone()['c']
+    week_new = db.execute(
+        f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE substr(created_at,1,10)>=?',
+        ((date.today() - timedelta(days=30)).strftime('%Y-%m-%d'),)).fetchone()['c']
     pending = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="待过滤" '
                          'ORDER BY id DESC LIMIT 8').fetchall()
     return render_template('vp_index.html', stat=stat, total=total, rate=rate, vstat=vstat,
                            overdue_branches=overdue_branches, milestones=milestones,
                            recent=recent, versions=versions, pending=pending,
+                           month_release=month_release, week_new=week_new,
                            can_manage=_can_manage(), today=_today())
 
 
@@ -604,11 +627,16 @@ def demand_export():
 def versions():
     _ensure_tables()
     db = get_db()
-    rows = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} ORDER BY id DESC').fetchall()
+    rows = [dict(r) for r in db.execute(
+        f'SELECT * FROM {_t(L_VERSIONS)} '
+        "ORDER BY CASE status WHEN '测试中' THEN 0 WHEN '开发中' THEN 1 WHEN '已冻结' THEN 2 "
+        "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC").fetchall()]
+    stage_map = {'规划中': 0, '已冻结': 1, '开发中': 2, '测试中': 2, '已发布': 3, '已归档': 3}
     counts = {}
     for r in rows:
         counts[r['version_no']] = db.execute(
             f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=?', (r['version_no'],)).fetchone()['c']
+        r['stage'] = stage_map.get(r['status'], 0)
     pool = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池" ORDER BY id').fetchall()
     customers = db.execute(f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
     return render_template('vp_versions.html', rows=rows, counts=counts, pool=pool,
@@ -1148,6 +1176,14 @@ def _openapi_meta(db, logical):
     cnt = db.execute(f'SELECT COUNT(*) FROM {tbl}').fetchone()[0]
     cols = [r[1] for r in db.execute(f'PRAGMA table_info({tbl})').fetchall()]
     return cnt, cols
+
+
+@blueprint.route('/version_plan/vp.css')
+def vp_css():
+    """插件样式独立路由：蓝图默认静态路径是 /static，与平台冲突会 404。"""
+    from flask import send_from_directory
+    return send_from_directory(os.path.join(os.path.dirname(__file__), 'static'), 'vp.css',
+                               mimetype='text/css')
 
 
 @blueprint.route('/version_plan/__openapi/datasets')

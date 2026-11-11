@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}客户回告 · 版本规划{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('version_plan.static', filename='vp.css') }}">
-<div class="page-header">
-  <h1>✉️ 客户回告</h1>
-  <p class="page-desc">按客户聚合需求兑现情况：提过哪些、各自状态、排入哪版、预计发布日。每条都带云文档溯源，可直接粘进邮件或 IM。</p>
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>✉️ 客户回告</h1>
+    <p>按客户聚合需求兑现情况：提过哪些、各自状态、排入哪版、预计发布日。每条都带云文档溯源，可直接粘进邮件或 IM。</p>
+  </div>
 </div>
 
 <div class="vp-toolbar">

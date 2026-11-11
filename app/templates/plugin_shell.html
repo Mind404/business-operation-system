@@ -39,7 +39,7 @@
     <a class="opt" href="{{ home_url }}" target="_blank" rel="noopener">新窗口打开</a>
   </div>
   <div class="shell-tip" id="shellTip">正在打开 {{ plugin_name }}…</div>
-  <iframe id="shellFrame" src="{{ home_url }}" title="{{ plugin_name }}"></iframe>
+  <iframe id="shellFrame" src="{{ home_url }}{{ '?' if '?' not in home_url else '&' }}embed=1" title="{{ plugin_name }}"></iframe>
   <script>
   /* 插件内容就绪后再淡入，加载过程看到的是同底色而不是白块 */
   (function () {

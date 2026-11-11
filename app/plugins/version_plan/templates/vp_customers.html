@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}客户矩阵 · 版本规划{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('version_plan.static', filename='vp.css') }}">
-<div class="page-header">
-  <h1>🏢 客户 - 版本矩阵</h1>
-  <p class="page-desc">一页看清每个客户：当前在用版本 / 集成中版本 / 定制分支与合回期限。定制分支超期会在首页告警。</p>
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>🏢 客户 - 版本矩阵</h1>
+    <p>一页看清每个客户：当前在用版本 / 集成中版本 / 定制分支与合回期限。定制分支超期会在首页告警。</p>
+  </div>
 </div>
 
 {% if warn %}

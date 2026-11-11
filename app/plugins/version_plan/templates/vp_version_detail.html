@@ -1,18 +1,39 @@
 {% extends "base.html" %}
 {% block title %}{{ v['version_no'] }} · 版本规划{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('version_plan.static', filename='vp.css') }}">
-<div class="page-header">
-  <h1>{{ v['version_no'] }} · {{ v['vtype'] }}</h1>
-  <p class="page-desc">
-    状态 <b>{{ v['status'] }}</b>
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>{{ v['version_no'] }} · {{ v['vtype'] }}</h1>
+    <p>状态 <b>{{ v['status'] }}</b>
     {% if v['base_version_no'] %} · 基线 {{ v['base_version_no'] }}{% endif %}
     · 包含需求 {{ ds|length }} 条
-    {% if v['frozen_at'] %} · 冻结于 {{ v['frozen_at'] }}（{{ v['frozen_by'] }}）{% endif %}
-  </p>
+    {% if v['frozen_at'] %} · 冻结于 {{ v['frozen_at'] }}（{{ v['frozen_by'] }}）{% endif %}</p>
+  </div>
+</div>
+
+{% set stage = {'规划中':0,'已冻结':1,'开发中':2,'测试中':2,'已发布':3,'已归档':3}.get(v['status'], 0) %}
+<div class="vp-card" style="padding:12px 16px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+    <div style="flex:1;min-width:280px">
+      <div class="vp-stage">
+        {% for i in range(4) %}
+        <i class="{% if i < stage %}done{% elif i == stage %}{% if v['status'] in ('已发布','已归档') %}done{% else %}cur{% endif %}{% endif %}"></i>
+        {% endfor %}
+      </div>
+      <div class="vp-stage-labels"><span>规划</span><span>需求冻结</span><span>开发/测试</span><span>发布</span></div>
+    </div>
+    <div class="vp-road-dates" style="margin:0">
+      {% if v['freeze_date'] %}冻结 <b>{{ v['freeze_date'] }}</b>{% endif %}
+      {% if v['test_date'] %}　提测 <b>{{ v['test_date'] }}</b>{% endif %}
+      {% if v['release_date'] %}　发布 <b>{{ v['release_date'] }}</b>{% endif %}
+      {% if v['merge_target_no'] %}<br>合回 <b>{{ v['merge_target_no'] }}</b>　期限 <b>{{ v['merge_deadline'] }}</b>{% endif %}
+    </div>
+  </div>
 </div>
 
 <div class="vp-toolbar">
+
   <a class="vp-btn" href="{{ url_for('version_plan.versions') }}">← 版本列表</a>
   {% if v['status'] == '已发布' %}
   <span class="vp-tag t-done">已发布 {{ v['released_at'] }}</span>

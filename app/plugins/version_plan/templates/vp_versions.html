@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}版本规划 · 版本规划管理{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('version_plan.static', filename='vp.css') }}">
-<div class="page-header">
-  <h1>🗓️ 版本规划</h1>
-  <p class="page-desc">版本规划单 = 开发任务书 + 测试输入 + 客户承诺。只有「规划池」的需求能拉进版本，冻结后不可增删。</p>
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>🗓️ 版本规划</h1>
+    <p>版本规划单 = 开发任务书 + 测试输入 + 客户承诺。只有「规划池」的需求能拉进版本，冻结后不可增删。</p>
+  </div>
 </div>
 
 {% if can_manage %}
@@ -73,30 +75,46 @@
 </div>
 {% endif %}
 
-<div class="vp-card" style="overflow-x:auto">
-  <h3>全部版本（{{ rows|length }}）</h3>
+<div class="vp-card">
+  <div class="vp-card-hd">
+    <h3>全部版本（{{ rows|length }}）</h3>
+    <span class="vp-muted">阶段条：规划 → 冻结 → 开发/测试 → 发布</span>
+  </div>
   {% if rows %}
-  <table class="vp-table">
-    <tr><th>版本号</th><th>类型</th><th>状态</th><th>需求</th><th>冻结</th><th>提测</th><th>发布</th><th>目标客户</th><th>操作</th></tr>
+  <div class="vp-row3">
     {% for v in rows %}
-    <tr>
-      <td><a class="vp-code" href="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">{{ v['version_no'] }}</a></td>
-      <td>{{ v['vtype'] }}{% if v['base_version_no'] %}<div class="vp-muted">基线 {{ v['base_version_no'] }}</div>{% endif %}</td>
-      <td>
-        {% set cls = {'规划中':'t-wait','已冻结':'t-pool','开发中':'t-pool','测试中':'t-pool','已发布':'t-done','已归档':'t-no'} %}
+    <div class="vp-card" style="margin:0;background:#fcfdff">
+      <div class="vp-card-hd" style="margin-bottom:8px">
+        <b style="font-size:15px">{{ v['version_no'] }}</b>
+        {% set cls = {'规划中':'t-wait','已冻结':'t-pool','开发中':'t-plan','测试中':'t-plan','已发布':'t-done','已归档':'t-no'} %}
         <span class="vp-tag {{ cls.get(v['status'],'t-no') }}">{{ v['status'] }}</span>
-      </td>
-      <td>{{ counts[v['version_no']] }} 条</td>
-      <td class="vp-muted">{{ v['freeze_date'] or '—' }}</td>
-      <td class="vp-muted">{{ v['test_date'] or '—' }}</td>
-      <td class="vp-muted">{{ v['release_date'] or '—' }}</td>
-      <td class="vp-muted">{{ v['target_customers'] or '—' }}</td>
-      <td><a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">打开</a></td>
-    </tr>
+      </div>
+      <div class="vp-stage">
+        {% for i in range(4) %}
+        <i class="{% if i < v['stage'] %}done{% elif i == v['stage'] %}{% if v['status'] in ('已发布','已归档') %}done{% else %}cur{% endif %}{% endif %}"></i>
+        {% endfor %}
+      </div>
+      <div class="vp-stage-labels" style="margin-bottom:8px"><span>规划</span><span>冻结</span><span>开发/测试</span><span>发布</span></div>
+      <div class="vp-road-dates">
+        {% if v['freeze_date'] %}冻结 <b>{{ v['freeze_date'] }}</b>{% else %}<span style="color:#b9c3d1">冻结 未定</span>{% endif %}
+        {% if v['test_date'] %}　提测 <b>{{ v['test_date'] }}</b>{% endif %}
+        {% if v['release_date'] %}　发布 <b>{{ v['release_date'] }}</b>
+          {% if v['release_date'] < today and v['status'] not in ('已发布','已归档') %}<span class="vp-tag t-red">超期</span>{% endif %}
+        {% endif %}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap">
+        <span class="vp-tag t-no">{{ v['vtype'] }}</span>
+        <span class="vp-tag t-plan">{{ counts[v['version_no']] }} 条需求</span>
+        {% if v['base_version_no'] %}<span class="vp-muted">基线 {{ v['base_version_no'] }}</span>{% endif %}
+        {% if v['merge_target_no'] %}<span class="vp-tag t-red">合回 {{ v['merge_target_no'] }}</span>{% endif %}
+      </div>
+      {% if v['target_customers'] %}<div class="vp-muted" style="margin-top:6px">交付给：{{ v['target_customers'][:28] }}{% if v['target_customers']|length > 28 %}…{% endif %}</div>{% endif %}
+      <div style="margin-top:10px"><a class="vp-btn vp-btn-sm vp-btn-primary" href="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">打开版本 →</a></div>
+    </div>
     {% endfor %}
-  </table>
+  </div>
   {% else %}
-  <div class="vp-empty">还没有版本，用上面的表单建第一个</div>
+  <div class="vp-empty"><div class="big">🗓️</div><p>还没有版本，用上面的表单建第一个。</p></div>
   {% endif %}
 </div>
 
