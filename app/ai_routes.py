@@ -338,7 +338,7 @@ def _univer_summary(db, max_chars=9000, words=None):
         return ''
     total = len(rooms)
     words = words or []
-    per = max(900, max_chars // total)
+    per = max(1400, max_chars // total)   # v12.7.10.28：下限 1400，保证统计块（约 1100 字符）优先完整
     parts = []
     for r in rooms:
         sheet_txts = []
@@ -388,7 +388,14 @@ def _univer_summary(db, max_chars=9000, words=None):
                     h = grid.get(0, {}).get(c, '')
                     names.append(h[:20] if h else '列%d' % (c + 1))
                 rows = []
-                for rr in range(1, min(maxrow, 3000) + 1):
+                # v12.7.10.28：原上限 3000 行，超限时只在标题里写"基于 3000 行/全表 3500 行"，
+                # 模型极易把 3000 行的合计当成全表合计。现在上限提到 10000（本地 JSON 解析，
+                # 无网络开销），超限时和插件表一样输出醒目 ⚠ 覆盖范围。
+                trunc_note = ''
+                if maxrow > _UNIVER_MAX_ROWS:
+                    trunc_note = ('⚠ 该表共 %d 行，平台单表解析上限 %d 行，本次统计仅覆盖前 %d 行；'
+                                  '超出部分未纳入，全表合计请勿直接引用。' % (maxrow, _UNIVER_MAX_ROWS, _UNIVER_MAX_ROWS))
+                for rr in range(1, min(maxrow, _UNIVER_MAX_ROWS) + 1):
                     rd = {}
                     for c in range(maxcol + 1):
                         rd[names[c]] = grid.get(rr, {}).get(c, '')
@@ -398,8 +405,14 @@ def _univer_summary(db, max_chars=9000, words=None):
                 extra = '\n'.join(x for x in (_kw_rows(names, rows, words),
                                               _extreme_rows(names, rows)) if x)
                 sample = _json.dumps(rows[:3], ensure_ascii=False, default=str)[:480]
-                stxt = ('〔工作表：%s，共 %d 行 x %d 列〕表头: %s\n%s\n%s\n样例行(前3行): %s' % (
-                    sname, maxrow, maxcol + 1, ' | '.join(names), prof, extra, sample))
+                stxt = '〔工作表：%s，共 %d 行 x %d 列〕表头: %s\n' % (
+                    sname, maxrow, maxcol + 1, ' | '.join(names))
+                if trunc_note:
+                    stxt += trunc_note + '\n'
+                stxt += prof
+                if extra:
+                    stxt += '\n' + extra
+                stxt += '\n样例行(前3行): ' + sample
                 sheet_txts.append(stxt)
         head = '表「%s」（房间#%s，v%s，%s更新·%s，工作表%d 个）' % (
             r['name'] or '(未命名)', r['id'], r['version'],
@@ -410,7 +423,8 @@ def _univer_summary(db, max_chars=9000, words=None):
         else:
             txt = head + '\n' + '\n'.join(sheet_txts)
             if len(txt) > per:
-                txt = txt[:per] + '\n…（本表内容超长，已截断，请告知用户数据可能不完整）'
+                # v12.7.10.28：只截样例/极值明细，统计块在头部一定保留，避免模型误判"统计也不完整"
+                txt = txt[:per] + '\n…（本表样例/极值明细因篇幅截断；上方确定性统计按整表计算，可直接引用）'
         parts.append(txt)
     return '【需求统计管理】共 %d 张（按新建先后倒序，以下为各表内容）：\n\n%s' % (total, '\n\n'.join(parts))
 
@@ -992,6 +1006,7 @@ _HISTORY_MAX_CHARS = 5000
 # ============================================================
 _RAW_TRIGGER_CHARS = 6000     # 未压缩原文累计超过此值才触发压缩（短会话不压缩）
 _RECENT_KEEP_CHARS = 2500     # 压缩时：最近这么多字符的原文保留不压（保证近期连贯）
+_UNIVER_MAX_ROWS = 10000      # v12.7.10.28：云表格单表单次解析上限（本地 JSON，纯 CPU 解析）
 _RECENT_RAW_CHARS = 3000      # 注入请求时：从压缩点之后取最近这么多字符原文
 
 _COMPACT_PROMPT = (
