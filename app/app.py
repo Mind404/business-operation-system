@@ -1315,6 +1315,26 @@ def _admin_backup_restore_body():
         flash(f'恢复中止：现场保护备份失败（{msg}）。请先停止系统，手动用备份文件替换 business.db 后重启。', 'error')
         return redirect(url_for('admin_backup'))
     try:
+        # v13.0.0：两种恢复方式。老备份（旧版本做的）请用「只恢复数据」，
+        # 它只搬业务数据，当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变。
+        mode = (request.form.get('mode') or 'full').strip().lower()
+        if pre == 'business' and mode == 'data':
+            try:
+                moved, no_such, defaulted = _restore_data_only(src, target)
+            except Exception as e:
+                print(f'[数据恢复] 搬迁失败：{e}')
+                raise
+            _tip = ''
+            if no_such:
+                _tip += f'（备份里这 {len(no_such)} 张表当前版本没有，已跳过：{"、".join(no_such)}）'
+            if defaulted:
+                _more = '…' if len(defaulted) > 8 else ''
+                _tip += f'（备份里缺 {len(defaulted)} 个新列，已按当前表定义取默认值：{"、".join(defaulted[:8])}{_more}）'
+            log_operation('数据备份', '恢复数据', f'{kind} ← {fname}', session.get('username'))
+            flash(f'✅ 已恢复数据（表结构保持当前版本）：{fname}。'
+                  f'本次搬迁 {len(moved)} 张业务表：{"、".join(moved) or "无"}。'
+                  f'表结构 / 索引 / 账号 / 插件登记 / 模型配置都未改动，无需重启，也不会被踢下线。{_tip}', 'success')
+            return redirect(url_for('admin_backup'))
         # v12.7.10.19：改用 SQLite 在线备份 API 覆盖目标库，不再用“复制文件替换”。
         # 原因：系统运行中数据库文件被进程占用（Windows 上尤其明显），shutil.copy2 会抛 PermissionError，
         # 用户看到的就是“点恢复没反应 / 数据回不来”。在线 backup 走数据库事务写进同一个库，
@@ -1344,6 +1364,8 @@ def _admin_backup_restore_body():
         # 新增的表（如 ui_prefs），用户不重启就会在界面上看到 "no such table"。
         # 必须放在后面任何 return（含"要求重新登录"那条）之前，否则会被跳过。
         _ensure_schema_tables()
+            # 整库覆盖会把结构一起退回，覆盖完成后按当前版本补表 + 补列，避免缺表缺列报错
+
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
         if pre == 'business':
@@ -1744,6 +1766,98 @@ def _ensure_schema_tables(db_path=None):
     except Exception as e:
         print(f'[表结构补建] 增量迁移跳过：{e}')
     return ok
+
+
+# v13.0.0：恢复时"系统表"不参与数据搬迁。
+# 理由：这些表属版本登记 / 账号 / 插件登记 / 模型配置，恢复成旧值轻则插件消失、
+# 重则把当前账号和可用的模型配置一起退掉。业务数据表不在此列，照常搬迁。
+_RESTORE_DATA_SKIP = {
+    'user_sessions',     # 在线会话：搬了就把所有人踢下线
+    'schema_version',    # 结构版本号：保持当前
+    'plugin_registry',   # 插件登记：搬了可能缺 enabled/install_type，插件会"消失"或读不到数据
+    'plugin_tables',     # 插件表登记：同上
+    'users',             # 账号：搬了密码/权限会退回备份时刻
+    'user_plugins',      # 用户与插件的关系：跟账号绑定
+    'ai_providers',      # 模型接口配置：旧 key 可能已失效，搬了 AI 反而不可用
+}
+
+
+def _restore_data_only(src_path, dst_path):
+    """只把备份里的业务数据搬进当前库，一行表结构都不改。
+
+    做法：把备份以只读方式 ATTACH 进来，逐张表按"两边都有的列"覆盖当前库的数据。
+    - 备份里没有的新表 / 新列：保持当前（不回退结构）
+    - 备份里缺的列：插入时取当前表定义的默认值（不会报 no such column）
+    返回 (搬迁的表, 跳过的表, 被兜底为默认值的列)
+    """
+    import sqlite3 as _sq
+    import shutil
+    import tempfile
+    conn = _sq.connect(dst_path, timeout=60, isolation_level=None)
+    moved, no_such, defaulted = [], [], []
+    tmp_bak = None
+    try:
+        # SQLite 的 ATTACH 不认 file: URI，所以先把备份复制成一份临时副本再挂进来，
+        # 保证原始备份文件一个字节都不会被改动。
+        fd, tmp_bak = tempfile.mkstemp(suffix='.db', prefix='restore_src_')
+        os.close(fd)
+        shutil.copy2(src_path, tmp_bak)
+        conn.execute('PRAGMA foreign_keys = OFF')
+        conn.execute('PRAGMA busy_timeout = 30000')
+        conn.execute('ATTACH DATABASE ? AS bak', (tmp_bak,))
+        curry = set(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"))
+        bakry = set(r[0] for r in conn.execute(
+            "SELECT name FROM bak.sqlite_master WHERE type='table'"))
+        conn.execute('BEGIN IMMEDIATE')
+        for t in sorted(bakry):
+            if t.startswith('sqlite_') or t in _RESTORE_DATA_SKIP:
+                continue
+            if t not in curry:
+                no_such.append(t)
+                continue
+            cur_cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')]
+            bak_cols = [r[1] for r in conn.execute(f'PRAGMA bak.table_info("{t}")')]
+            common = [c for c in cur_cols if c in bak_cols]
+            if not common:
+                no_such.append(t)
+                continue
+            for c in cur_cols:
+                if c not in bak_cols:
+                    defaulted.append(f'{t}.{c}')
+            cols = ','.join(f'"{c}"' for c in common)
+            conn.execute(f'DELETE FROM "{t}"')
+            conn.execute(f'INSERT INTO "{t}" ({cols}) SELECT {cols} FROM bak."{t}"')
+            moved.append(t)
+        # 自增序号按搬迁后的真实最大值重设，避免旧的序号偏小导致后续插入主键冲突
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'").fetchone():
+            for t in moved:
+                mx = conn.execute(f'SELECT COALESCE(MAX(rowid), 0) FROM "{t}"').fetchone()[0]
+                conn.execute('DELETE FROM sqlite_sequence WHERE name = ?', (t,))
+                if mx:
+                    conn.execute('INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)', (t, mx))
+        conn.commit()
+        try:
+            conn.execute('DETACH DATABASE bak')
+        except Exception:
+            pass
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        if tmp_bak:
+            try:
+                os.remove(tmp_bak)
+            except Exception:
+                pass
+    return moved, no_such, defaulted
 
 
 def _ensure_ui_prefs(db):
