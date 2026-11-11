@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}需求统计管理 - 业务高效运转系统{% endblock %}
 {% block content %}
+<style>
+/* v12.7.10.19：从本页点进表格工具是独立全屏页面，整页 View Transition 会被打断并抛出
+   "Transition was aborted ... ViewTransition opt-in disabled"，前端会误显示成“表格引擎未能启动”。
+   这里关掉本页的整页过渡，避免误报（平台内其它页面之间的淡入保持不变）。 */
+@view-transition { navigation: none; }
+</style>
 <div style="max-width:1100px;margin:0 auto;padding:24px 20px 40px;">
     <div style="margin-bottom:28px;">
         <h1 style="margin:0 0 8px;font-size:24px;">📊 需求统计管理</h1>

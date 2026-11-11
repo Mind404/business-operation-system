@@ -5,7 +5,19 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
         <h2 style="margin:0;font-size:20px;color:#111827;">💾 数据备份</h2>
         <form method="post" action="{{ url_for('admin_backup_run') }}" style="margin:0;">
-            <button type="submit" style="background:#2563eb;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:14px;cursor:pointer;">⬆ 立即备份全部数据</button>
+            <button id="btn-backup-now" type="submit" style="background:#2563eb;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:14px;cursor:pointer;">⬆ 立即备份全部数据</button>
+<script>
+(function(){
+  var b=document.getElementById('btn-backup-now');
+  if(!b||!b.form) return;
+  b.form.addEventListener('submit',function(){
+    if(b.dataset.busy) return;
+    b.dataset.busy='1'; var t=b.textContent;
+    b.disabled=true; b.style.opacity=.6; b.textContent='备份中…';
+    setTimeout(function(){ b.dataset.busy=''; b.disabled=false; b.style.opacity=1; b.textContent=t; },5000);
+  });
+})();
+</script>
         </form>
     </div>
 

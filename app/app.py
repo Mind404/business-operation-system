@@ -1104,11 +1104,21 @@ def admin_backup():
                            current_db=os.path.basename(app.config['DATABASE']))
 
 
+_LAST_MANUAL_BACKUP = {'ts': 0.0}
+
+
 @app.route('/admin/backup/run', methods=['POST'])
 def admin_backup_run():
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
+    # v12.7.10.19：连点会生成多套同名/同秒备份，10 秒内只处理第一次
+    _now = time.time()
+    if _now - _LAST_MANUAL_BACKUP.get('ts', 0.0) < 10:
+        _left = int(10 - (_now - _LAST_MANUAL_BACKUP.get('ts', 0.0))) + 1
+        flash(f'刚刚已经备份过了，请 {_left} 秒后再点（每点一次会生成一整套备份，连点会产生多套重复备份）', 'warning')
+        return redirect(url_for('admin_backup'))
+    _LAST_MANUAL_BACKUP['ts'] = _now
     try:
         ok, msg, made = perform_backup('手动')
         flash(f'💾 备份成功：{msg}' if ok else f'备份未执行：{msg}', 'success' if ok else 'error')
@@ -1201,20 +1211,31 @@ def admin_backup_restore():
         flash(f'恢复中止：现场保护备份失败（{msg}）。请先停止系统，手动用备份文件替换 business.db 后重启。', 'error')
         return redirect(url_for('admin_backup'))
     try:
-        # 先 checkpoint 当前目标库，把 wal 数据合并，避免覆盖后丢最近未落盘数据
+        # v12.7.10.19：改用 SQLite 在线备份 API 覆盖目标库，不再用“复制文件替换”。
+        # 原因：系统运行中数据库文件被进程占用（Windows 上尤其明显），shutil.copy2 会抛 PermissionError，
+        # 用户看到的就是“点恢复没反应 / 数据回不来”。在线 backup 走数据库事务写进同一个库，
+        # 不替换文件，运行中即可完成并立即生效。
+        from pathlib import Path
         try:
-            c = sqlite3.connect(target)
-            c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-            c.close()
-        except Exception:
-            pass
-        import shutil
-        shutil.copy2(src, target)
-        for suffix in ('-wal', '-shm'):
+            _c0 = sqlite3.connect(target, timeout=30)
             try:
-                os.remove(target + suffix)
+                _c0.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             except Exception:
                 pass
+            _c0.close()
+        except Exception:
+            pass
+        _src = sqlite3.connect(Path(os.path.abspath(src)).as_uri() + '?mode=ro', uri=True)
+        _dst = sqlite3.connect(target, timeout=60)
+        try:
+            _src.backup(_dst)
+            try:
+                _dst.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            except Exception:
+                pass
+        finally:
+            _dst.close()
+            _src.close()
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
         if pre == 'business':
@@ -1246,8 +1267,9 @@ def admin_backup_restore():
                 flash('主库已恢复（数据已覆盖成功）。登录信息也随主库一起还原了，请重新登录——'
                       '账号用备份里的（例如 admin / admin123），登录后再恢复插件库和插件包。', 'warning')
                 return redirect(url_for('login'))
-        flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。{pack_msg}'
-              f'请重启系统（停止.bat → 启动.bat）后完全生效。', 'success')
+        _need_restart = ' 插件包代码已同步，建议重启一次（停止.bat → 启动.bat）让插件界面完全刷新。' if pack_msg else ' 数据已即时生效，无需重启。'
+        flash(f'✅ 已从备份恢复{kind}：{fname}，数据已立即生效（无需停止服务）。'
+              f'恢复前当前数据已另存保护备份。{pack_msg}{_need_restart}', 'success')
     except OSError as e:
         flash(f'恢复{kind}失败（{e}）：可能系统正在占用数据库文件。'
               f'请先停止系统，再点恢复；或手动把 backups/{fname} 复制替换 business.db（插件库对应 data/{pre}.db）后重启。', 'error')

@@ -75,6 +75,7 @@ console.log('[polyfill] toSorted supported:', typeof Array.prototype.toSorted);
   /* Univer 容器占满剩余高度 */
   #univer-container { position: fixed; top: 36px; left: 0; right: 0; bottom: 0; }
 </style>
+<style>@view-transition { navigation: none; }</style>
 </head>
 <body>
 <div id="uv-header">
@@ -225,14 +226,23 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
       + '</div>';
   }
   window.__uvFatal = showFatal;
+  // v12.7.10.19：页面切换动画被打断时浏览器会抛“Transition was aborted / ViewTransition opt-in disabled”，
+  // 这不是引擎问题。原来会立刻弹出“表格引擎未能启动”，几秒后引擎加载完成又自动消失（用户看到闪一下红框）。
+  function isTransitionNoise(msg) {
+    return /Transition was aborted|ViewTransition|view transition/i.test(msg || '');
+  }
+  function reportLater(msg) {
+    if (isTransitionNoise(msg)) return;
+    setTimeout(function () { if (!window.__uvApp) showFatal(msg); }, 1500);
+  }
   window.addEventListener('error', function (e) {
     var m = (e && e.message) ? (e.message + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '')) : '未知脚本错误';
-    if (!window.__uvApp) showFatal(m);
+    reportLater(m);
   });
   window.addEventListener('unhandledrejection', function (e) {
     var r = e && e.reason;
     var m = r ? (r.message || String(r)) : '未处理的 Promise 错误';
-    if (!window.__uvApp) showFatal(m);
+    reportLater(m);
   });
 })();
 </script>
