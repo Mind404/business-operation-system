@@ -338,7 +338,8 @@ def _univer_summary(db, max_chars=9000, words=None):
         return ''
     total = len(rooms)
     words = words or []
-    per = max(1400, max_chars // total)   # v12.7.10.28：下限 1400，保证统计块（约 1100 字符）优先完整
+    # v12.7.10.29：房间变多时按总预算自适应（下限 700），保证每张表都有统计块、总长不无限膨胀
+    per = min(1400, max(700, max_chars // max(1, total)))
     parts = []
     for r in rooms:
         sheet_txts = []
@@ -425,8 +426,21 @@ def _univer_summary(db, max_chars=9000, words=None):
             if len(txt) > per:
                 # v12.7.10.28：只截样例/极值明细，统计块在头部一定保留，避免模型误判"统计也不完整"
                 txt = txt[:per] + '\n…（本表样例/极值明细因篇幅截断；上方确定性统计按整表计算，可直接引用）'
-        parts.append(txt)
-    return '【需求统计管理】共 %d 张（按新建先后倒序，以下为各表内容）：\n\n%s' % (total, '\n\n'.join(parts))
+        parts.append((r['name'] or '(未命名)', txt))
+    # v12.7.10.29：总长超预算时按新→旧顺序保留，并明确列出本次未展开的表名，
+    # 避免整块需求统计被上层降级成一行概览、所有表的统计全部丢失
+    kept, _u, _rest = [], 0, []
+    for _nm, _txt in parts:
+        if _u + len(_txt) > max_chars and kept:
+            _rest.append(_nm)
+            continue
+        kept.append(_txt)
+        _u += len(_txt) + 2
+    out = '【需求统计管理】共 %d 张（按新建先后倒序，以下为各表内容）：\n\n%s' % (total, '\n\n'.join(kept))
+    if _rest:
+        out += ('\n\n【其余 %d 张需求表本次未展开】%s —— 这些表都有数据；'
+                '请指明表名单独提问，平台会输出该表完整统计。' % (len(_rest), '、'.join(_rest)))
+    return out
 
 
 
@@ -513,7 +527,7 @@ def _row_line(row, max_chars=320):
     return t[:max_chars]
 
 
-def _collect_db_context(question, max_chars=14000):
+def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16000，多模块场景少丢表
     """只注入【有数据】的表；按问题关键词做相关性排序（相关表优先完整注入），
     空表与无关表直接跳过 —— 让小模型聚焦真实业务数据，避免被无关空表干扰发散。
     特殊表：univer_rooms（需求统计管理，每行=整本 Workbook 快照 JSON）走专用解析，全量转文本注入。
@@ -561,11 +575,13 @@ def _collect_db_context(question, max_chars=14000):
 
     parts = []
     used = 0
+    skipped = []
     total_active = len(active)
     related = sum(1 for x in scored if x[3] > 0)
     for idx, (t, cnt, cols, score) in enumerate(scored):
         if t == 'univer_rooms':
-            part = _univer_summary(db, max_chars=req_budget, words=sel)
+            # v12.7.10.29：需求统计（多张表共用一块）最多占 60% 总预算，避免把其他模块挤没
+            part = _univer_summary(db, max_chars=min(req_budget, int(max_chars * 0.6)), words=sel)
             tag = '相关'
         elif t == 'wbs_projects':
             if proj_txt:
@@ -583,15 +599,25 @@ def _collect_db_context(question, max_chars=14000):
             part = _sample_part(db, t, cnt, cols, score, words)
             tag = '相关' if score > 0 else ''
         if used + len(part) > max_chars:
-            # 至少保证最相关块能装入
-            if not parts:
-                parts.append(part)
-                used += len(part)
-            break
+            # v12.7.10.29：装不下不再 break 静默丢弃——先降级为极简概览（一行统计）；
+            # 概览也放不下就登记进"未展开清单"，让模型知道这些数据存在、各多少行。
+            brief = _brief_line(db, t, cnt, cols)
+            if used + len(brief) <= max_chars:
+                parts.append(brief)
+                used += len(brief)
+                skipped.append((t, cnt, '仅概览'))
+            else:
+                skipped.append((t, cnt, '未展开'))
+            continue
         parts.append(part)
         used += len(part)
     head = '数据库概要：共 %d 张业务表，其中 %d 张有数据（%d 张与你的问题相关）。只列出有数据的表，空表未读取。' % (
         len(tables), total_active, related)
+    # v12.7.10.29：先把"有哪些表、各多少行"完整告诉模型，避免表多时预算耗尽、后面的表连存在都不知道
+    _all = '、'.join('%s(%d行)' % (x[0], x[1]) for x in scored[:12])
+    if len(scored) > 12:
+        _all += '、…等共 %d 张' % len(scored)
+    head += ' 全部有数据表：%s。' % _all
     # v12.7.0 数据隔离（方案B）：上传插件的数据表在独立库 app/data/<插件id>.db，跨库只读注入
     import os as _os
     data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
@@ -646,6 +672,15 @@ def _collect_db_context(question, max_chars=14000):
                 _hay = ' '.join([t, str(name_p or ''), str(d.get('label') or ''), str(d.get('description') or '')] +
                                 [str(x.get('name') or '') for x in (d.get('fields') or []) if isinstance(x, dict)]).lower()
                 _hit = any(str(w).lower() in _hay for w in list(sel or []) + list(words or []) if w)
+                # v12.7.10.29：问题原文直接出现插件/表的中文标签时也算相关。
+                # 修复"问金额最大的合同，合同表却被判无关、只给统计不给 Top5 明细"的漏判。
+                if not _hit:
+                    _q = (question or '').lower()
+                    for _cand in (name_p, d.get('label'), d.get('description'), d.get('name')):
+                        _c = str(_cand or '')
+                        if _c and any(_c[_i:_i + 2].lower() in _q for _i in range(max(1, len(_c) - 1))):
+                            _hit = True
+                            break
                 _rows_all, _off = [], 0
                 while _off < 3000:
                     _g = _ps.plugin_openapi_rows(_pid, t, limit=1000, offset=_off) or {}
@@ -737,10 +772,23 @@ def _collect_db_context(question, max_chars=14000):
                 cdb.close()
             except Exception as e:
                 plug_parts.append('插件「%s」独立库读取失败: %s' % (pid, e))
-    extra = '\n\n'.join(plug_parts) if plug_parts else ''
+    # v12.7.10.29：插件段总预算 9000 字符，超出只记插件名不展开，避免多插件把上下文吃爆
+    _pl, _pu, _pn = [], 0, []
+    for _pp in plug_parts:
+        if _pu + len(_pp) > 9000:
+            _pn.append(_pp.split('\n')[0][:60])
+            continue
+        _pl.append(_pp); _pu += len(_pp)
+    if _pn:
+        _pl.append('⚠ 以下插件数据因篇幅未展开：%s —— 如需分析请指明插件名单独提问。' % '；'.join(_pn))
+    extra = '\n\n'.join(_pl) if _pl else ''
     if plug_files:
         head += '另有 %d 个上传插件的独立库数据已读取（%s）。' % (len(plug_files), '、'.join(plug_files))
     body = '\n\n'.join(parts) if parts else ''
+    if skipped:
+        # v12.7.10.29：明确告知覆盖度，不让模型把"没展开"当成"没数据"
+        body += ('\n\n【以下表有数据，但本次篇幅不足以展开明细】%s —— 需要时请指明表名（或缩小范围）单独提问，'
+                 '平台会完整统计该表。' % '、'.join('%s（%d 行·%s）' % (t, cnt, how) for t, cnt, how in skipped))
     return head + (('\n\n' + extra) if extra else '') + (('\n\n' + body) if body else '')
 
 
@@ -882,6 +930,38 @@ def _sql_profile(db, t, cols, cnt, budget=900):
         except Exception as e:
             out.append('%s: 统计失败(%s)' % (c, str(e)[:40]))
     return ('【全表精确统计·%d 行】' % cnt) + '；'.join(out)[:budget]
+
+def _brief_line(db, t, cnt, cols):
+    """v12.7.10.29：上下文预算不够展开某张表时输出的极简概览（≤约 220 字符）。
+    目的：多业务模块同时提问时，排后的表不会被静默丢弃，模型至少知道"这张表存在、多少行、
+    核心数值合计多少"，必要时可再单独追问该表。"""
+    try:
+        info = db.execute('PRAGMA table_info(%s)' % t).fetchall()
+    except Exception:
+        info = []
+    types = {r[1]: (r[2] or '').upper() for r in info}
+    safe = [c for c in cols if c not in _SENSITIVE_COL]
+    num = [c for c in safe if any(k in types.get(c, '') for k in
+           ('INT', 'REAL', 'NUM', 'DEC', 'FLOA', 'DOUB')) and c.lower() != 'id' and not c.lower().endswith('_id')]
+    cat = [c for c in safe if ('CHAR' in types.get(c, '') or 'TEXT' in types.get(c, '')) and c.lower() != 'id']
+    bits = ['%d 行' % cnt]
+    for c in num[:1]:
+        try:
+            r = db.execute('SELECT SUM(%s) AS s, MAX(%s) AS mx FROM %s' % (c, c, t)).fetchone()
+            if r and r[0] is not None:
+                bits.append('%s 合计 %s / 最大 %s' % (c, r[0], r[1]))
+        except Exception:
+            pass
+    for c in cat[:1]:
+        try:
+            rs = db.execute('SELECT %s AS v, COUNT(*) AS n FROM %s GROUP BY %s ORDER BY n DESC LIMIT 3'
+                            % (c, t, c)).fetchall()
+            if rs:
+                bits.append('%s: %s' % (c, '，'.join('%s=%d' % (x[0], x[1]) for x in rs)))
+        except Exception:
+            pass
+    return '【表 %s·概览】%s' % (t, '；'.join(bits))[:220]
+
 
 def _sample_part(db, t, cnt, cols, score, words=None):
     """普通表：确定性列画像 + 2 行样例（v12.7.14：取样 200 行做统计，不再只有 2 行）"""
