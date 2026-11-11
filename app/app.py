@@ -1320,7 +1320,17 @@ def _admin_backup_restore_body():
         mode = (request.form.get('mode') or 'full').strip().lower()
         if pre == 'business' and mode == 'data':
             try:
-                moved, no_such, defaulted = _restore_data_only(src, target)
+                _ensure_all_tables()   # 先把懒创建的表建齐，否则备份里同名的数据会被整张跳过
+                # 判断当前是不是"刚装好还没人用"的空库：是的话把备份里的账号也一并搬回来
+                _fresh = False
+                try:
+                    _c = sqlite3.connect(target, timeout=30)
+                    _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                    _c.close()
+                    _fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
+                except Exception:
+                    _fresh = False
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=_fresh)
             except Exception as e:
                 print(f'[数据恢复] 搬迁失败：{e}')
                 raise
@@ -1331,6 +1341,15 @@ def _admin_backup_restore_body():
                 _more = '…' if len(defaulted) > 8 else ''
                 _tip += f'（备份里缺 {len(defaulted)} 个新列，已按当前表定义取默认值：{"、".join(defaulted[:8])}{_more}）'
             log_operation('数据备份', '恢复数据', f'{kind} ← {fname}', session.get('username'))
+            if _fresh:
+                # 账号跟着搬回来了，当前登录态指向的账号可能已变，清掉会话让人按备份里的账号重登
+                session.clear()
+                flash(f'✅ 已导入旧数据（表结构保持当前版本）：{fname}。'
+                      f'本次搬迁 {len(moved)} 张表：{"、".join(moved) or "无"}。'
+                      f'因为这是新装系统，账号也一并从备份导入（{len(_names)} 个），'
+                      f'请用<b>备份时的账号和密码</b>重新登录（通常是 admin / admin123）。'
+                      f'表结构 / 索引 / 插件登记 / 模型配置仍是当前版本，一个都没动。{_tip}', 'warning')
+                return redirect(url_for('login'))
             flash(f'✅ 已恢复数据（表结构保持当前版本）：{fname}。'
                   f'本次搬迁 {len(moved)} 张业务表：{"、".join(moved) or "无"}。'
                   f'表结构 / 索引 / 账号 / 插件登记 / 模型配置都未改动，无需重启，也不会被踢下线。{_tip}', 'success')
@@ -1363,8 +1382,9 @@ def _admin_backup_restore_body():
         # v13.0.0：覆盖完成后立刻补建表结构。老备份里的库结构是旧的，恢复回来可能缺新版本
         # 新增的表（如 ui_prefs），用户不重启就会在界面上看到 "no such table"。
         # 必须放在后面任何 return（含"要求重新登录"那条）之前，否则会被跳过。
-        _ensure_schema_tables()
-            # 整库覆盖会把结构一起退回，覆盖完成后按当前版本补表 + 补列，避免缺表缺列报错
+        # 整库覆盖会把结构一起退回：覆盖完成后按当前版本补表 + 补列 + 补懒加载表，
+        # 否则老库回来会缺表缺列（no such table / no such column）。
+        _ensure_all_tables()
 
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
@@ -1782,7 +1802,7 @@ _RESTORE_DATA_SKIP = {
 }
 
 
-def _restore_data_only(src_path, dst_path):
+def _restore_data_only(src_path, dst_path, include_users=False):
     """只把备份里的业务数据搬进当前库，一行表结构都不改。
 
     做法：把备份以只读方式 ATTACH 进来，逐张表按"两边都有的列"覆盖当前库的数据。
@@ -1810,8 +1830,13 @@ def _restore_data_only(src_path, dst_path):
         bakry = set(r[0] for r in conn.execute(
             "SELECT name FROM bak.sqlite_master WHERE type='table'"))
         conn.execute('BEGIN IMMEDIATE')
+        _skip = set(_RESTORE_DATA_SKIP)
+        if include_users:
+            # 空库导入旧数据时连账号一起搬回来，否则用户得在新版本里手工重建所有人
+            _skip.discard('users')
+            _skip.discard('user_plugins')
         for t in sorted(bakry):
-            if t.startswith('sqlite_') or t in _RESTORE_DATA_SKIP:
+            if t.startswith('sqlite_') or t in _skip:
                 continue
             if t not in curry:
                 no_such.append(t)
@@ -1858,6 +1883,37 @@ def _restore_data_only(src_path, dst_path):
             except Exception:
                 pass
     return moved, no_such, defaulted
+
+
+def _ensure_all_tables():
+    """v13.0.0：把"按功能懒创建"的表也建齐。
+
+    新装版本第一次启动只建核心表；univer_rooms / wbs_recycle / ai_conversations 这些
+    要等对应功能第一次被打开才创建。此时直接导入老备份，这些表还不存在，
+    备份里同名数据会被当成"当前版本没有这张表"整张跳过 —— 数据静默丢失。
+    所以搬数据之前，先把它们建出来。
+    """
+    _ensure_schema_tables()
+    for mod, fn in (('plugin_system', 'init_plugin_tables'),
+                    ('plugins.univer_sheet.routes', '_init_tables'),
+                    ('plugins.wbs.routes', '_init_recycle_tables')):
+        try:
+            m = __import__(mod, fromlist=[fn])
+            getattr(m, fn)()
+        except Exception as e:
+            print(f'[补建懒加载表] {mod}.{fn} 跳过：{e}')
+    try:
+        import ai_routes
+        _c = sqlite3.connect(app.config['DATABASE'], timeout=30)
+        try:
+            ai_routes._init_tables(_c)
+            _c.commit()
+        except Exception:
+            pass
+        finally:
+            _c.close()
+    except Exception as e:
+        print(f'[补建懒加载表] ai_routes 跳过：{e}')
 
 
 def _ensure_ui_prefs(db):
