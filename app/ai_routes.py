@@ -1194,7 +1194,8 @@ def _overdue_report(brief=False):
             parts.append('【7 日内到期 %d 个】：\n%s' % (len(due_week), _fmt(due_week)))
         if brief:
             # v12.7.10.31：泛问时只给一行汇总，避免每次回答都被这段长明细主导
-            return ('WBS 逾期提示（系统计算）：已逾期 %d 个任务、今日到期 %d 个、7 日内到期 %d 个；'
+            return ('「计划管理（WBS）」模块数据（不是需求统计/合同等其它模块的数据，'
+                    '不得写入其它模块的统计里）：已逾期 %d 个任务、今日到期 %d 个、7 日内到期 %d 个；'
                     '如需具体任务明细，请在提问中指明 WBS/项目/逾期。'
                     % (len(overdue), len(due_today), len(due_week)))
         head = 'WBS 任务超期预判（系统按规则计算，请直接引用，不要自行推断）——' \
@@ -1442,9 +1443,12 @@ def chat():
     _qx = (question or '')
     _wbs_strong = any(w in _qx for w in ('WBS', 'wbs', '任务', '项目', '逾期', '超期', '到期', '进度', '计划', '排期', '里程碑'))
     _q_broad = any(w in _qx for w in ('分析', '总览', '整体', '全部', '所有', '数据', '情况', '问题', '风险'))
+    # v13.0.0：问题明确指向其它业务模块（需求统计/云表格/合同/物料等）时，不得注入 WBS 逾期汇总。
+    # 否则小模型会把"已逾期 342 个"写进"需求统计管理"的段落（用户实测复现）。
+    _q_other_module = any(w in _qx for w in ('需求', '云表格', '表格', '台账', '合同', '物料', '库存', '供应商', '客户', '报价', '采购', '报销', '审批单'))
     if _wbs_strong:
         overdue = _overdue_report()
-    elif _q_broad:
+    elif _q_broad and not _q_other_module:
         overdue = _overdue_report(brief=True)
     else:
         overdue = ''

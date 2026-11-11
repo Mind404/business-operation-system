@@ -16,6 +16,14 @@ import io
 import gzip
 from datetime import datetime, date, timedelta
 import time
+import threading
+
+# v13.0.0 恢复闸门：整库恢复时若其它线程仍在读写同一库，SQLite 在线 backup 会与活动事务冲突，
+# 抛 disk I/O error 并把后续请求打成 500（用户侧表现为"点恢复没反应、系统坏掉"）。
+# 恢复期间短暂拦住新请求，完成后必定放行。
+_RESTORE_GATE = threading.Event()
+_RESTORE_LOCK = threading.Lock()
+
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, send_from_directory, current_app, Response
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -333,12 +341,16 @@ def admin_nav_order_reset():
 @app.route('/healthz')
 def healthz():
     from flask import jsonify as _jsonify
+    try:
+        from config import APP_VERSION
+    except Exception:
+        APP_VERSION = '13.0.0'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
     except Exception:
         ok = False
-    return _jsonify({'ok': ok, 'db': ok}), (200 if ok else 503)
+    return _jsonify({'ok': ok, 'db': ok, 'version': APP_VERSION}), (200 if ok else 503)
 
 
 # v12.7.10.23：405 兜底 —— 停用插件的"只接受提交"路由用浏览器直接打开时，
@@ -1219,6 +1231,23 @@ def admin_backup_download(fname):
 
 @app.route('/admin/backup/restore', methods=['POST'])
 def admin_backup_restore():
+    """v13.0.0：恢复期间关闸。
+    备份恢复是整库覆盖；若此时其它请求线程仍在读写同一个库，SQLite 在线 backup 会与活动事务
+    冲突，抛 disk I/O error 并把后续所有请求打成 500（用户侧表现就是"点恢复没反应、系统坏掉"）。
+    这里先拦住新请求、等在途请求收尾，再执行覆盖，最后无论成败必定开闸。"""
+    if _RESTORE_GATE.is_set():
+        flash('已有恢复任务正在进行，请稍候再试。', 'warning')
+        return redirect(url_for('admin_backup'))
+    with _RESTORE_LOCK:
+        _RESTORE_GATE.set()
+        try:
+            time.sleep(0.5)
+            return _admin_backup_restore_body()
+        finally:
+            _RESTORE_GATE.clear()
+
+
+def _admin_backup_restore_body():
     """从备份列表恢复：先把当前库另存为保护备份 → checkpoint → 覆盖目标库 → 清 wal/shm。
     运行时覆盖受文件占用影响时给出明确指引（先停止系统再恢复）。"""
     if not _require_admin():
@@ -1632,6 +1661,11 @@ def inject_permissions():
 # 数据库工具
 # ============================================================
 def get_db():
+    if _RESTORE_GATE.is_set():
+        # v13.0.0：正在整库恢复，等它完成（最多 10 秒）再读库
+        _t0 = time.time()
+        while _RESTORE_GATE.is_set() and time.time() - _t0 < 10:
+            time.sleep(0.05)
     if 'db' not in g:
         # v12.2.0 并发加固：WAL 模式（读写不互相阻塞）+ busy_timeout（写锁等待）+ 连接超时
         # v12.5.28 性能修复：WAL 已持久化在数据库文件头，无需每请求重设；
