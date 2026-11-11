@@ -457,11 +457,38 @@ def _search_wbs_rows(db, words, max_rows_proj=6, max_rows_task=12):
     except Exception:
         tasks = []
     if tasks:
-        task_txt = '【表 wbs_tasks·相关】（%d/%d 行）列: %s\n%s' % (
-            len(tasks),
+        task_txt = '【表 wbs_tasks·相关】（按问题命中 %d 条，仅列前 %d 条；全表 %d 条）列: %s\n%s' % (
+            len(tasks), len(tasks[:max_rows_task]),
             db.execute('SELECT COUNT(*) AS c FROM wbs_tasks').fetchone()['c'],
             ', '.join(_safe_sample_cols([c[1] for c in db.execute('PRAGMA table_info(wbs_tasks)').fetchall()])),
             '\n'.join(_row_line(r) for r in tasks[:max_rows_task]))
+        # v12.7.10.27：命中具体项目时，该项目的【整项目】确定性统计（不依赖抽样行）。
+        # 之前只注入前 15 条任务行，问「这个项目进展/有哪些阻塞任务」会以 15 条代表 205 条，
+        # 分布和阻塞清单都可能失真。这里用 SQL 对命中项目做全量聚合 + 阻塞清单。
+        if pids:
+            stat_blocks = []
+            for pid in pids[:2]:
+                prow = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+                pcnt = db.execute('SELECT COUNT(*) c FROM wbs_tasks WHERE project_id=?', (pid,)).fetchone()['c']
+                dist = db.execute('SELECT status, COUNT(*) n FROM wbs_tasks WHERE project_id=? '
+                                  'GROUP BY status ORDER BY n DESC', (pid,)).fetchall()
+                avgp = db.execute('SELECT AVG(progress) p FROM wbs_tasks WHERE project_id=?', (pid,)).fetchone()['p']
+                blk_n = db.execute("SELECT COUNT(*) c FROM wbs_tasks WHERE project_id=? AND status='阻塞'",
+                                   (pid,)).fetchone()['c']
+                blk = db.execute("SELECT name, plan_end, owner FROM wbs_tasks WHERE project_id=? AND status='阻塞' "
+                                 "ORDER BY plan_end LIMIT 10", (pid,)).fetchall()
+                line = '项目「%s」(#%s)：任务 %d 条；状态 %s；平均进度 %.1f%%；阻塞 %d 个' % (
+                    (prow['name'] if prow else ''), pid, pcnt,
+                    '，'.join('%s=%d' % (x['status'] or '（空）', x['n']) for x in dist),
+                    (avgp or 0), blk_n)
+                if blk:
+                    line += '；阻塞任务（按计划结束先后，前 %d 个）：%s' % (
+                        len(blk), '；'.join('%s(%s/%s)' % (b['name'], b['owner'], b['plan_end']) for b in blk))
+                    if blk_n > len(blk):
+                        line += ' ……等共 %d 个' % blk_n
+                stat_blocks.append(line)
+            if stat_blocks:
+                task_txt += '\n【命中项目·整项目确定性统计（SQL 全量计算，可直接引用）】\n' + '\n'.join(stat_blocks)
     return proj_txt, task_txt
 
 
@@ -567,6 +594,12 @@ def _collect_db_context(question, max_chars=14000):
             if src.get('access') != 'openapi':
                 continue
             name_p = src.get('name') or _pid
+            # v12.7.10.27：插件被停用后，其独立库数据不再注入 AI（页面已不可访问，
+            # 继续参与统计会污染结论）；这里显式告知用户，而不是静默丢弃。
+            if not src.get('enabled', True):
+                plug_parts.append('插件「%s」当前已停用，其数据未纳入本次分析'
+                                  '（如需分析请先在插件管理中启用该插件）。' % name_p)
+                continue
             if src.get('ai_readable') is False:
                 plug_parts.append('插件「%s」声明数据不对平台 AI 开放（data_open.ai_readable=false），已跳过。' % name_p)
                 continue
@@ -594,6 +627,11 @@ def _collect_db_context(question, max_chars=14000):
                 continue
             lines = ['外部插件「%s」开放数据（OpenAPI v1 接口，%d 张有数据表）：' % (name_p, len(usable))]
             for d, t, cnt in usable:
+                # v12.7.10.27：插件表与当前问题的相关性判断。与问题无关的表只给
+                # 列画像概要（不展开极值行/样例），避免上百行无关明细把上下文预算吃满。
+                _hay = ' '.join([t, str(name_p or ''), str(d.get('label') or ''), str(d.get('description') or '')] +
+                                [str(x.get('name') or '') for x in (d.get('fields') or []) if isinstance(x, dict)]).lower()
+                _hit = any(str(w).lower() in _hay for w in list(sel or []) + list(words or []) if w)
                 _rows_all, _off = [], 0
                 while _off < 3000:
                     _g = _ps.plugin_openapi_rows(_pid, t, limit=1000, offset=_off) or {}
@@ -616,12 +654,26 @@ def _collect_db_context(question, max_chars=14000):
                         safe_rows.append({k: v for k, v in r.items() if k not in _SENSITIVE_COL})
                     else:
                         safe_rows.append(r)
-                prof = _profile_text(cols, safe_rows, total=cnt, budget=1000)
-                extra = '\n'.join(x for x in (_kw_rows(cols, safe_rows, sel),
-                                              _extreme_rows(cols, safe_rows)) if x)
-                lines.append('【表 %s·相关】（%d 行）列: %s\n%s\n%s\n样例数据: %s' % (
-                    t, cnt, ', '.join(cols), prof, extra,
-                    __import__('json').dumps(safe_rows[:2], ensure_ascii=False, default=str)[:480]))
+                prof = _profile_text(cols, safe_rows, total=cnt,
+                                     budget=1000 if _hit else 420)
+                if _hit:
+                    extra = '\n'.join(x for x in (_kw_rows(cols, safe_rows, sel),
+                                                  _extreme_rows(cols, safe_rows)) if x)
+                    sample_txt = __import__('json').dumps(
+                        safe_rows[:2], ensure_ascii=False, default=str)[:480]
+                else:
+                    extra = ''
+                    sample_txt = ('（该表与当前问题未直接相关，仅保留列画像概要；'
+                                  '如需明细请提出具体的客户/编号/状态等条件）')
+                # v12.7.10.27：单表最多读 3000 行；超过时必须显式标注覆盖范围，
+                # 否则 >3000 行的表会被静默当全量统计，模型据此报出的合计/分布是错的。
+                _trunc = ''
+                if cnt > len(safe_rows):
+                    _trunc = ('⚠ 该表共 %d 行，平台单次最多读取 3000 行，本次统计仅覆盖前 %d 行；'
+                              '超出部分未纳入，全表合计请勿直接引用\n' % (cnt, len(safe_rows)))
+                lines.append('【表 %s·%s】（%d 行）列: %s\n%s%s\n%s\n样例数据: %s' % (
+                    t, '相关' if _hit else '概要', cnt, ', '.join(cols), _trunc, prof,
+                    (extra + '\n') if extra else '', sample_txt))
             plug_parts.append('\n'.join(lines))
             plug_files.append(_pid)
     # 兼容兜底：没有开放接口的老插件，直读 data/<插件id>.db（AI 上下文显式标注"直读兜底"）
@@ -632,6 +684,9 @@ def _collect_db_context(question, max_chars=14000):
             pid = fn[:-3]
             src = _src.get(pid) or {}
             if src.get('access') == 'openapi':
+                continue
+            if src and not src.get('enabled', True):
+                plug_parts.append('插件「%s」当前已停用，其数据未纳入本次分析。' % (src.get('name') or pid))
                 continue
             if src and src.get('ai_readable') is False:
                 plug_parts.append('插件「%s」在 manifest 中声明数据不对平台 AI 开放（data_open.ai_readable=false），已跳过。'
@@ -789,13 +844,27 @@ def _sql_profile(db, t, cols, cnt, budget=900):
                             c, r[0] or 0, r[1] or 0, r[2] or 0, r[3] or 0))
                 continue
             nd = db.execute('SELECT COUNT(DISTINCT %s) FROM %s' % (c, t)).fetchone()[0]
+            # v12.7.10.27 修复：SQLite 把 NULL 与空串分成两个分组，旧写法会输出两条同名
+            # “（空）=...”，看起来像两种不同的空值；这里先按展示标签合并再输出。
+            # 另：整列全空时不再输出“0 种取值”，直接标注全空，减少噪音与上下文占用。
             if nd and nd <= 40:
                 rs = db.execute('SELECT %s, COUNT(*) n FROM %s GROUP BY %s ORDER BY n DESC LIMIT 8'
                                 % (c, t, c)).fetchall()
-                txt = '，'.join('%s=%d' % ((x[0] if x[0] not in (None, '') else '（空）'), x[1]) for x in rs)
-                out.append('%s: %s' % (c, txt))
+                agg, order = {}, []
+                for x in rs:
+                    k = '（空）' if x[0] in (None, '') else str(x[0])
+                    if k not in agg:
+                        order.append(k)
+                    agg[k] = agg.get(k, 0) + x[1]
+                if len(order) == 1 and order[0] == '（空）':
+                    out.append('%s: 全部为空(%d)' % (c, agg['（空）']))
+                else:
+                    txt = '，'.join('%s=%d' % (k, agg[k]) for k in order[:8])
+                    out.append('%s: %s' % (c, txt))
+            elif not nd:
+                out.append('%s: 全部为空' % c)
             else:
-                out.append('%s: %d 种取值' % (c, nd or 0))
+                out.append('%s: %d 种取值' % (c, nd))
         except Exception as e:
             out.append('%s: 统计失败(%s)' % (c, str(e)[:40]))
     return ('【全表精确统计·%d 行】' % cnt) + '；'.join(out)[:budget]
