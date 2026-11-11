@@ -12,8 +12,13 @@
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;}
   th,td{padding:9px 10px;border:1px solid #d0d7e5;text-align:left;}
   th{background:#f1f5f9;font-weight:600;}
-  .btn{padding:4px 12px;border:none;border-radius:5px;font-size:12px;cursor:pointer;color:#fff;}
-  .btn-ok{background:#2563eb;}.btn-del{background:#c0392b;margin-left:6px;}
+  .wbs-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin:0 0 14px;}
+  .wbs-btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;height:30px;padding:0 14px;font-size:13px;border:1px solid #ccd2e0;border-radius:6px;background:#fff;color:#33415c;cursor:pointer;text-decoration:none;white-space:nowrap;transition:background .12s,border-color .12s;}
+  .wbs-btn:hover{background:#f3f6fb;border-color:#b9c5da;}
+  .wbs-btn-primary{background:#2563eb;border-color:#2563eb;color:#fff;}
+  .wbs-btn-danger{background:#fff;border-color:#f2b8b5;color:#c0392b;}
+  .wbs-btn-danger:hover{background:#fff5f5;}
+  .wbs-btn-sm{height:28px;padding:0 10px;font-size:12px;border-radius:5px;}
   .empty{padding:36px;text-align:center;color:#9ca3af;font-size:14px;}
   .flash{background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;}
   .flash-err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;}
@@ -25,7 +30,10 @@
   <p class="sub">删除的项目/任务保留 <b>7 天</b>，到期自动清空（含附件文件）。仅管理员可见。当前访问已自动清理 {{ cleared }} 条过期记录。</p>
   {% with msgs = get_flashed_messages(with_categories=true) %}{% for c,m in msgs %}
   <div class="{{ 'flash' if c in ('success','ok') else 'flash-err' }}">{{ m }}</div>{% endfor %}{% endwith %}
-  <a href="{{ url_for('wbs.wbs_projects') }}">← 返回项目列表</a>
+  <div class="wbs-toolbar">
+    <a class="wbs-btn" href="{{ url_for('wbs.wbs_projects') }}">← 返回项目列表</a>
+    <span style="margin-left:auto;color:#6b7280;font-size:12px;">共 {{ items|length }} 条待清理记录</span>
+  </div>
   {% if items %}
   <table>
     <tr><th>类型</th><th>名称</th><th>删除人</th><th>删除时间</th><th>到期时间</th><th>操作</th></tr>
@@ -39,11 +47,11 @@
       <td>
         <form method="post" action="{{ url_for('wbs.wbs_recycle_restore', rid=it['id']) }}" style="display:inline;"
               onsubmit="return confirm('确定恢复「{{ it['name'] }}」？恢复后回到删除前状态')">
-          <button class="btn btn-ok">恢复</button>
+          <button class="wbs-btn wbs-btn-sm wbs-btn-primary">恢复</button>
         </form>
-        <form method="post" action="{{ url_for('wbs.wbs_recycle_purge', rid=it['id']) }}" style="display:inline;"
+        <form method="post" action="{{ url_for('wbs.wbs_recycle_purge', rid=it['id']) }}" style="display:inline;margin-left:6px;"
               onsubmit="return confirm('彻底删除「{{ it['name'] }}」？此操作不可恢复！')">
-          <button class="btn btn-del">彻底删除</button>
+          <button class="wbs-btn wbs-btn-sm wbs-btn-danger">彻底删除</button>
         </form>
       </td>
     </tr>

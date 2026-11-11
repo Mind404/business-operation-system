@@ -6,13 +6,17 @@
 .cell-sub { font-size:12px; color:#666; line-height:1.4; max-width:260px; word-break:break-all; }
 .task-jump { color:#1d4ed8; text-decoration:none; }
 .task-jump:hover { text-decoration:underline; }
+.wbs-btn{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 14px;font-size:13px;border:1px solid #ccd2e0;border-radius:6px;background:#fff;color:#33415c;cursor:pointer;text-decoration:none;white-space:nowrap;transition:background .12s,border-color .12s;}
+.wbs-btn:hover{background:#f3f6fb;border-color:#b9c5da;}
 </style>
 <div class="page-header">
     <h1>⚠️ 到期预警</h1>
     <p class="page-desc">跨项目汇总未来7天内到期的任务节点，按紧急程度排序；点击任务名可跳转定位到该任务</p>
 </div>
 
-<a href="{{ url_for('wbs.wbs_projects') }}" style="display:inline-block;margin-bottom:16px;color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+<div class="wbs-toolbar" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:14px;">
+    <a class="wbs-btn" href="{{ url_for('wbs.wbs_projects') }}">← 返回项目列表</a>
+</div>
 
 <!-- 逾期 -->
 {% if overdue %}
