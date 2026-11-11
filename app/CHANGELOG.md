@@ -18,7 +18,12 @@
 2. `app/app.py`：备份恢复增加"恢复闸门"（`_RESTORE_GATE` + `_RESTORE_LOCK`）。
    - 恢复期间 `get_db()` 等待闸门（最多 10s），避免与在途读写冲突导致 `disk I/O error` 与后续 500
    - 恢复流程抽为 `_admin_backup_restore_body()`，由带闸门的 `admin_backup_restore()` 包装，异常也必定开闸
-3. `app/config.py` 新增 `APP_VERSION = "13.0.0"`；`/healthz` 返回 `version` 字段
+3. `app/app.py`：导航顺序保存/重置前兜底建表 `ui_prefs`（`_ensure_ui_prefs`），
+   并新增 `_ensure_schema_tables()` 在整库恢复完成后立即补建全部表结构。
+   原因：恢复老备份会把库结构一起退回旧版本，缺 `ui_prefs` 时拖导航报 `no such table`，
+   且"要求重新登录"的分支会先 return，补表逻辑必须放在覆盖完成处才不会跳过。
+   复测：运行中删表不重启直接保存 → 成功；恢复缺表的旧备份 → 表数 18→19、导航保存正常。
+4. `app/config.py` 新增 `APP_VERSION = "13.0.0"`；`/healthz` 返回 `version` 字段
 
 ## v12.7.10.32（2026-11-11）
 ### 数据总览口径修复（app/ai_routes.py）

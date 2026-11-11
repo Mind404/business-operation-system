@@ -315,6 +315,7 @@ def admin_nav_order():
     keys = [k for k in keys if isinstance(k, str) and _NAV_KEY_RE.match(k)][:60]
     try:
         db = get_db()
+        _ensure_ui_prefs(db)
         db.execute("INSERT INTO ui_prefs (k, v, updated_at) VALUES ('nav_order', ?, ?) "
                    "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
                    (json.dumps(keys), datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
@@ -330,6 +331,7 @@ def admin_nav_order_reset():
         return jsonify({'ok': False, 'msg': '无权限'}), 403
     try:
         db = get_db()
+        _ensure_ui_prefs(db)
         db.execute("DELETE FROM ui_prefs WHERE k='nav_order'")
         db.commit()
         return jsonify({'ok': True})
@@ -1338,6 +1340,10 @@ def _admin_backup_restore_body():
         finally:
             _dst.close()
             _src.close()
+        # v13.0.0：覆盖完成后立刻补建表结构。老备份里的库结构是旧的，恢复回来可能缺新版本
+        # 新增的表（如 ui_prefs），用户不重启就会在界面上看到 "no such table"。
+        # 必须放在后面任何 return（含"要求重新登录"那条）之前，否则会被跳过。
+        _ensure_schema_tables()
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
         if pre == 'business':
@@ -1712,6 +1718,34 @@ def init_db():
             VALUES ('product','product123','产品经理','user',1);
         """)
     db.commit()
+
+def _ensure_schema_tables(db_path=None):
+    """v13.0.0：幂等补建全部表结构（schema.sql 里全是 CREATE TABLE IF NOT EXISTS）。
+    为什么需要：整库"恢复"只是把数据覆盖回来，老备份里的库结构也一并回退了。
+    若那之后新版本加了表（例如 v12.7.10.10 的 ui_prefs），恢复完就会缺表，
+    用户点功能看到的是 "no such table"，必须重启才能好。这里恢复成功即补建。"""
+    path = db_path or app.config['DATABASE']
+    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+    try:
+        c = sqlite3.connect(path, timeout=30)
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            c.executescript(f.read())
+        c.commit()
+        c.close()
+        return True
+    except Exception as e:
+        print(f'[表结构补建] 失败：{e}')
+        return False
+
+
+def _ensure_ui_prefs(db):
+    """v13.0.0：导航顺序保存前的兜底建表，避免老库/恢复后缺表直接报 no such table。"""
+    try:
+        db.execute('CREATE TABLE IF NOT EXISTS ui_prefs (k TEXT PRIMARY KEY, v TEXT, updated_at TEXT)')
+        db.commit()
+    except Exception:
+        pass
+
 
 # ============================================================
 # 输入校验工具
