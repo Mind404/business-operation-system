@@ -4,6 +4,8 @@
 
 {% block content %}
 <div class="dashboard-v2">
+    <!-- v12.7.10.22：WBS 插件停用时不渲染它的入口，避免点进去被拦 -->
+    {% if wbs_on %}
     <!-- 顶部：一句话欢迎 + 今日焦点（点击跳转 WBS 插件页） -->
     <div class="hero-bar">
         <a href="/wbs" class="hero-left" style="text-decoration:none;color:inherit;display:flex;gap:10px;align-items:baseline;">
@@ -20,7 +22,9 @@
             </div>
         </a>
     </div>
+    {% endif %}
 
+    {% if wbs_on %}
     <!-- WBS 统计卡片（点击跳转 WBS 插件页） -->
     <div class="kpi-row">
         <a href="/wbs" class="kpi-card kpi-blue" style="text-decoration:none;color:inherit;cursor:pointer;">
@@ -44,6 +48,7 @@
             <div class="kpi-label">已完成任务（共 {{ stats.wbs_tasks_total }}）→</div>
         </a>
     </div>
+    {% endif %}
 
     <!-- 常用功能 -->
     <div class="dash-panel">
@@ -51,6 +56,7 @@
             <h3 class="panel-title">⚡ 常用功能</h3>
         </div>
         <div class="quick-grid">
+            {% if wbs_on %}
             <a href="{{ url_for('wbs.wbs_projects') }}" class="quick-item q-blue">
                 <span class="qi-icon">🗓️</span>
                 <span class="qi-text">WBS计划</span>
@@ -59,6 +65,7 @@
                 <span class="qi-icon">➕</span>
                 <span class="qi-text">新建项目</span>
             </a>
+            {% endif %}
             <a href="{{ url_for('profile') }}" class="quick-item q-orange">
                 <span class="qi-icon">🔑</span>
                 <span class="qi-text">修改密码</span>

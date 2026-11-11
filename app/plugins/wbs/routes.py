@@ -824,6 +824,15 @@ def wbs_task_inline(tid):
         value = _fmt_date(value)
         if value is None:
             return jsonify({'ok': False, 'msg': '日期格式无法识别，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日'}), 400
+    # v12.7.10.22 修复：行内保存 WBS 编号必须做同项目唯一校验，否则会出现两行同编号、层级挂接歧义
+    if field == 'wbs_code':
+        value = (value or '').strip()
+        if value:
+            dup = db.execute('SELECT id, name FROM wbs_tasks WHERE project_id=? AND wbs_code=? AND id!=?',
+                             (t['project_id'], value, tid)).fetchone()
+            if dup:
+                return jsonify({'ok': False,
+                                'msg': f'WBS编号「{value}」已被任务「{dup["name"]}」占用，请换一个编号'}), 400
     old_value = t[field]
     db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
     db.commit()

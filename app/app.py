@@ -329,11 +329,23 @@ def admin_nav_order_reset():
         return jsonify({'ok': False, 'msg': '重置失败：%s' % e})
 
 
+# v12.7.10.22：补一个轻量健康检查端点（部署监控/脚本探活都在找它，此前缺失返回 404）
+@app.route('/healthz')
+def healthz():
+    from flask import jsonify as _jsonify
+    ok = True
+    try:
+        get_db().execute('SELECT 1').fetchone()
+    except Exception:
+        ok = False
+    return _jsonify({'ok': ok, 'db': ok}), (200 if ok else 503)
+
+
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
     ep = request.endpoint or ''
-    if ep in ('login', 'static') or ep.endswith('.static'):
+    if ep in ('login', 'static', 'healthz') or ep.endswith('.static'):
         return None
     if 'user_id' not in session:
         return redirect(url_for('login', next=request.path))
@@ -1671,11 +1683,19 @@ def index():
     my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
+    # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
+    # 这里把 WBS 的启用状态传给模板，停用时不渲染对应入口。
+    wbs_on = True
+    try:
+        _row = db.execute("SELECT enabled FROM plugin_registry WHERE id='wbs'").fetchone()
+        wbs_on = bool(_row and _row['enabled'])
+    except Exception:
+        wbs_on = True
     return render_template('index.html', stats=stats,
                            recent_logs=recent_logs,
                            my_tasks=my_tasks, my_tasks_count=my_tasks_count,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
-                           now_date=now.strftime('%Y-%m-%d'))
+                           now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
 
 # ============================================================
 # 启动

@@ -327,12 +327,29 @@ def register_plugin_guard(app):
             pid = _plugin_id_for_path(request.path)
         if not pid:
             pid = _manifest_prefix_plugin(request.path)
+        if not pid and ep and '.' in ep:
+            # v12.7.10.22：插件卸载后注册记录已删、路径缓存也失效，但蓝图仍在进程里。
+            # 用蓝图名回查，保证这类"孤儿蓝图"也能落到存在性判断，而不是继续执行抛 500。
+            _bp = ep.split('.')[0]
+            if _bp in _BIZ_ENDPOINTS:
+                pid = _BIZ_ENDPOINTS[_bp]
         if not pid:
             return None
         # 核心常驻插件放行（不可停用）
         core_ids = {p['id'] for p in PLUGINS if p['core']}
         if pid in core_ids:
             return None
+        # v12.7.10.22 修复：插件已卸载时注册记录已删除，旧的 blueprint 还在进程里，
+        # 原来会继续执行并因数据表/目录缺失抛 500。这里先判存在性，给出友好提示。
+        _exists = True
+        try:
+            _row = get_db().execute('SELECT enabled FROM plugin_registry WHERE id=?', (pid,)).fetchone()
+            _exists = _row is not None
+        except Exception:
+            _exists = True
+        if not _exists:
+            flash(f'插件「{pid}」已卸载（业务数据表保留），重启系统后彻底移除', 'error')
+            return redirect(url_for('index'))
         # v12.1.0 平台级停用拦截
         if not _plugin_enabled(pid):
             flash(f'插件「{pid}」已被平台停用', 'error')

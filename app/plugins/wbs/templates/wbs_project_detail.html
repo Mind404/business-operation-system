@@ -515,6 +515,10 @@ document.querySelectorAll('.status-select').forEach(sel => {
             if(res.ok) {
                 sel.dataset.prev = sel.value;
                 sel.style.background = sel.value==='已完成'?'#d4edda':sel.value==='进行中'?'#cce5ff':sel.value==='阻塞'?'#f8d7da':'#fff';
+                // v12.7.10.22 修复：同步这一行的 data-status，否则筛选/计数还按改之前的旧状态算
+                var trRow = sel.closest('tr');
+                if (trRow) { trRow.setAttribute('data-status', sel.value); }
+                if (window.wbsRefreshStatus) window.wbsRefreshStatus();
             } else {
                 alert(res.msg || '保存失败');
                 sel.value = oldVal;
@@ -770,13 +774,15 @@ function setZoom(z) {
     function selectedStatuses() {
         return Object.keys(statusSel).filter(function (k) { return statusSel[k]; });
     }
-    // 状态按钮上的数量徽标
-    var _counts = {};
-    rows.forEach(function (tr) { var s2 = statusOf(tr); if (s2) _counts[s2] = (_counts[s2] || 0) + 1; });
-    [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
-        var n = b.querySelector('.wbs-st-n');
-        if (n) n.textContent = _counts[b.getAttribute('data-st')] || 0;
-    });
+    // 状态按钮上的数量徽标（v12.7.10.22：改为每次重算，行内改状态后数字立即跟上）
+    function recount() {
+        var c = {};
+        dataRows.forEach(function (tr) { var s2 = statusOf(tr); if (s2) c[s2] = (c[s2] || 0) + 1; });
+        [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
+            var n = b.querySelector('.wbs-st-n');
+            if (n) n.textContent = c[b.getAttribute('data-st')] || 0;
+        });
+    }
 
     function codeOf(tr) { return (tr.getAttribute('data-code') || '').trim(); }
     function isDone(tr) { return (tr.getAttribute('data-status') || '').indexOf('已完成') === 0; }
@@ -849,6 +855,7 @@ function setZoom(z) {
         });
         var cb = document.getElementById('btnClearStatus');
         if (cb) cb.style.display = anySel ? '' : 'none';
+        recount();
         var btnDone = document.getElementById('btnCollapseDone');
         if (btnDone) btnDone.textContent = hideDone ? '⊞ 显示已完成' : '⊟ 折叠已完成';
     }
@@ -881,6 +888,8 @@ function setZoom(z) {
         refresh();
     };
     window.wbsClearStatus = function () { statusSel = {}; refresh(); };
+    // v12.7.10.22：行内改状态后同步行上的 data-status，并重算按钮数字与筛选结果
+    window.wbsRefreshStatus = function () { refresh(); };
     window.wbsExpandAll = function () { collapsed = {}; hideDone = false; refresh(); };
     refresh();
 })();
