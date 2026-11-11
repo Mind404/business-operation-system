@@ -88,6 +88,15 @@
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
 
+<style>
+.wbs-st-btn{padding:6px 12px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;transition:background .12s,color .12s;}
+.wbs-st-btn:hover{background:#eef3fb;}
+.wbs-st-btn.on{background:#2b579a;color:#fff;border-color:#2b579a;}
+.wbs-st-btn.on .wbs-st-n{background:rgba(255,255,255,.28);color:#fff;}
+.wbs-st-btn .wbs-st-n{display:inline-block;min-width:18px;margin-left:2px;padding:0 4px;border-radius:8px;background:#eef2f7;color:#374151;font-weight:600;}
+/* 只作为层级上下文保留的父级阶段行：淡化显示，提示它不是筛选结果 */
+.wbs-ctx td{color:#9aa3af;}
+</style>
 <!-- v12.7.10.10 折叠工具栏 -->
 <div id="wbsCollapseBar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 8px;">
     <button type="button" id="btnCollapseDone" onclick="wbsToggleDone()"
@@ -97,6 +106,16 @@
     <button type="button" onclick="wbsExpandAll()"
             style="padding:6px 12px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;">
         ⊞ 全部展开
+    </button>
+    <span style="width:1px;height:18px;background:#e5e7eb;margin:0 2px;"></span>
+    <span style="font-size:12px;color:#6b7280;">按状态筛选（可多选）：</span>
+    <button type="button" class="wbs-st-btn" data-st="进行中" onclick="wbsToggleStatus('进行中')">进行中 <b class="wbs-st-n">0</b></button>
+    <button type="button" class="wbs-st-btn" data-st="未开始" onclick="wbsToggleStatus('未开始')">未开始 <b class="wbs-st-n">0</b></button>
+    <button type="button" class="wbs-st-btn" data-st="阻塞" onclick="wbsToggleStatus('阻塞')">阻塞 <b class="wbs-st-n">0</b></button>
+    <button type="button" class="wbs-st-btn" data-st="已完成" onclick="wbsToggleStatus('已完成')">已完成 <b class="wbs-st-n">0</b></button>
+    <button type="button" id="btnClearStatus" onclick="wbsClearStatus()"
+            style="display:none;padding:6px 10px;font-size:12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px;cursor:pointer;">
+        ✕ 清除筛选
     </button>
     <span id="wbsCollapseInfo" style="font-size:12px;color:#6b7280;">全部展开</span>
 </div>
@@ -741,8 +760,23 @@ function setZoom(z) {
     var table = document.getElementById('wbsTable');
     if (!table) return;
     var rows = [].slice.call(table.querySelectorAll('tbody tr'));
+    // 只把带 data-status 的行算作“数据行”；表格底部的“新增任务”表单行不参与统计
+    var dataRows = rows.filter(function (tr) { return tr.getAttribute('data-status') !== null; });
     var collapsed = {};      // 被收起的父任务编号集合
     var hideDone = false;    // 是否折叠已完成
+    var statusSel = {};      // v12.7.10.20 状态多选筛选：{ '进行中': true }
+
+    function statusOf(tr) { return (tr.getAttribute('data-status') || '').trim(); }
+    function selectedStatuses() {
+        return Object.keys(statusSel).filter(function (k) { return statusSel[k]; });
+    }
+    // 状态按钮上的数量徽标
+    var _counts = {};
+    rows.forEach(function (tr) { var s2 = statusOf(tr); if (s2) _counts[s2] = (_counts[s2] || 0) + 1; });
+    [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
+        var n = b.querySelector('.wbs-st-n');
+        if (n) n.textContent = _counts[b.getAttribute('data-st')] || 0;
+    });
 
     function codeOf(tr) { return (tr.getAttribute('data-code') || '').trim(); }
     function isDone(tr) { return (tr.getAttribute('data-status') || '').indexOf('已完成') === 0; }
@@ -765,14 +799,33 @@ function setZoom(z) {
     }
 
     function refresh() {
+        var sel = selectedStatuses();
+        var anySel = sel.length > 0;
+        var keep = null, ctxRows = 0;
+        if (anySel) {
+            // 命中的行 + 它的所有祖先行（祖先是层级上下文，必须保留，否则会出现挂在缺失父下的孤儿行）
+            keep = {};
+            rows.forEach(function (tr) {
+                if (sel.indexOf(statusOf(tr)) >= 0) {
+                    var c0 = codeOf(tr);
+                    keep[c0] = 'match';
+                    ancestors(c0).forEach(function (a) { if (!keep[a]) keep[a] = 'ctx'; });
+                }
+            });
+        }
         var hidden = 0;
         rows.forEach(function (tr) {
             var code = codeOf(tr);
             var byParent = ancestors(code).some(function (a) { return collapsed[a]; });
-            var byDone = hideDone && canCollapseDone(tr);
-            var hide = byParent || byDone;
+            // 用户显式选了状态时，以筛选为准，“折叠已完成”让位（否则选了已完成却看不到）
+            var byDone = hideDone && !anySel && canCollapseDone(tr);
+            var byStatus = anySel && !keep[code];
+            var hide = byParent || byDone || byStatus;
             tr.style.display = hide ? 'none' : '';
-            if (hide) hidden++;
+            if (hide && tr.getAttribute('data-status') !== null) hidden++;
+            var isCtx = anySel && !hide && keep[code] === 'ctx';
+            if (tr.classList) tr.classList.toggle('wbs-ctx', !!isCtx);
+            if (isCtx) ctxRows++;
             var btn = tr.querySelector('.wbs-toggle');
             if (btn) {
                 var c = !!collapsed[code];
@@ -783,11 +836,19 @@ function setZoom(z) {
         var info = document.getElementById('wbsCollapseInfo');
         if (info) {
             var parts = [];
+            if (anySel) parts.push('筛选：' + sel.join('、') + '（命中 ' + (dataRows.length - hidden - ctxRows) + ' 行）');
             if (hidden) parts.push('已隐藏 ' + hidden + ' 行');
             if (Object.keys(collapsed).length) parts.push('收起 ' + Object.keys(collapsed).length + ' 个父任务');
-            if (hideDone) parts.push('已折叠完成项');
+            if (hideDone && !anySel) parts.push('已折叠完成项');
+            if (anySel && ctxRows) parts.push('父级阶段行 ' + ctxRows + ' 个（灰色，仅作层级上下文）');
             info.textContent = parts.length ? parts.join(' · ') : '全部展开';
         }
+        // 按钮选中态 / 清除按钮显隐
+        [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
+            if (b.classList) b.classList.toggle('on', !!statusSel[b.getAttribute('data-st')]);
+        });
+        var cb = document.getElementById('btnClearStatus');
+        if (cb) cb.style.display = anySel ? '' : 'none';
         var btnDone = document.getElementById('btnCollapseDone');
         if (btnDone) btnDone.textContent = hideDone ? '⊞ 显示已完成' : '⊟ 折叠已完成';
     }
@@ -813,6 +874,13 @@ function setZoom(z) {
     });
 
     window.wbsToggleDone = function () { hideDone = !hideDone; refresh(); };
+    // v12.7.10.20 状态多选筛选：点一次加入，再点一次取消；可同时选多个状态
+    window.wbsToggleStatus = function (st) {
+        statusSel[st] = !statusSel[st];
+        if (selectedStatuses().length) hideDone = false;
+        refresh();
+    };
+    window.wbsClearStatus = function () { statusSel = {}; refresh(); };
     window.wbsExpandAll = function () { collapsed = {}; hideDone = false; refresh(); };
     refresh();
 })();
