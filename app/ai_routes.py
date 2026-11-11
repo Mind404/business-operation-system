@@ -289,7 +289,7 @@ def _safe_sample_cols(cols):
     return [c for c in cols if c not in _SENSITIVE_COL]
 
 
-def _univer_summary(db, max_chars=9000, words=None):
+def _univer_summary(db, max_chars=9000, words=None, expand_names=None):
     """需求统计管理提取（v12.7.14 重构）：
     大表（几百~几千行）不再把单元格全文拼接后被截断，而是输出
     「表头 + 确定性列画像（合计/均值/分布）+ 3 行样例」，让 AI 能回答
@@ -338,10 +338,22 @@ def _univer_summary(db, max_chars=9000, words=None):
         return ''
     total = len(rooms)
     words = words or []
-    # v12.7.10.29：房间变多时按总预算自适应（下限 700），保证每张表都有统计块、总长不无限膨胀
-    per = min(1400, max(700, max_chars // max(1, total)))
+    # v12.7.10.30：不限制模式（max_chars=None）下每张表固定 1400，统计块不被压缩；
+    # 总长交给"分块编译"消化，不再靠压缩房间内容来省篇幅。
+    if max_chars is None:
+        per = 1400
+    else:
+        per = min(1400, max(700, max_chars // max(1, total)))
     parts = []
     for r in rooms:
+        _rname = r['name'] or '(未命名)'
+        # v12.7.10.30：expand_names 给定时，未被问题命中的房间只输出一行（行数+未展开说明），
+        # 数据仍在（行数准确），真正问到哪张表时才完整展开统计
+        if expand_names is not None and _rname not in expand_names:
+            parts.append((_rname, '表「%s」（房间#%s，v%s，%s更新·%s）本次未展开统计（表名未出现在问题中）；'
+                                 '如需分析该表请点名提问，平台会完整统计。'
+                          % (_rname, r['id'], r['version'], (r['updated_at'] or '')[:16], r['updated_by'] or '?')))
+            continue
         sheet_txts = []
         snap = None
         try:
@@ -431,7 +443,7 @@ def _univer_summary(db, max_chars=9000, words=None):
     # 避免整块需求统计被上层降级成一行概览、所有表的统计全部丢失
     kept, _u, _rest = [], 0, []
     for _nm, _txt in parts:
-        if _u + len(_txt) > max_chars and kept:
+        if max_chars is not None and _u + len(_txt) > max_chars and kept:
             _rest.append(_nm)
             continue
         kept.append(_txt)
@@ -527,7 +539,7 @@ def _row_line(row, max_chars=320):
     return t[:max_chars]
 
 
-def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16000，多模块场景少丢表
+def _collect_db_context(question, max_chars=None):   # v12.7.10.30：默认不限制，全量装载后由分块编译消化
     """只注入【有数据】的表；按问题关键词做相关性排序（相关表优先完整注入），
     空表与无关表直接跳过 —— 让小模型聚焦真实业务数据，避免被无关空表干扰发散。
     特殊表：univer_rooms（需求统计管理，每行=整本 Workbook 快照 JSON）走专用解析，全量转文本注入。
@@ -580,8 +592,29 @@ def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16
     related = sum(1 for x in scored if x[3] > 0)
     for idx, (t, cnt, cols, score) in enumerate(scored):
         if t == 'univer_rooms':
-            # v12.7.10.29：需求统计（多张表共用一块）最多占 60% 总预算，避免把其他模块挤没
-            part = _univer_summary(db, max_chars=min(req_budget, int(max_chars * 0.6)), words=sel)
+            # v12.7.10.30：全量模式下按问题命中程度决定展开哪些表（未命中的只给一行，行数仍真实）；
+            # 若问题没有点名任何表且属于泛问（"各表多少条""总览"），则全部展开。
+            _expand = None
+            try:
+                _rooms = db.execute('SELECT name FROM univer_rooms WHERE deleted = 0').fetchall()
+                _names = [x['name'] or '' for x in _rooms]
+                _qn = (question or '').lower()
+                _hit_names = set()
+                for _n in _names:
+                    if any(_n[_i:_i + 2].lower() in _qn for _i in range(max(1, len(_n) - 1))):
+                        _hit_names.add(_n)
+                _generic = any(w in (question or '') for w in ('总览', '所有', '全部', '各表', '各模块', '整体', '全局'))  # v12.7.10.30：'一共/多少条'只问数量，不再当总览
+                _req_like = any(w in (question or '') for w in ('需求', '收集', '子表', '清单', '采集', '表格'))
+                _other_rel = any(x[0] != 'univer_rooms' and x[3] > 0 for x in scored)
+                if _hit_names and not _generic:
+                    _expand = _hit_names
+                elif _generic or _req_like:
+                    _expand = None            # 问的就是需求/总览 → 全部展开
+                else:
+                    _expand = set()           # 没点名需求表 → 只列行数，避免无关模块挤进上下文
+            except Exception:
+                _expand = None
+            part = _univer_summary(db, max_chars=None, words=sel, expand_names=_expand)
             tag = '相关'
         elif t == 'wbs_projects':
             if proj_txt:
@@ -596,9 +629,15 @@ def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16
                 part = _sample_part(db, t, cnt, cols, score, words)
             tag = '相关' if (task_txt or score > 0) else ''
         else:
-            part = _sample_part(db, t, cnt, cols, score, words)
-            tag = '相关' if score > 0 else ''
-        if used + len(part) > max_chars:
+            _generic_q = any(w in (question or '') for w in ('全部', '所有', '各表', '总览', '一共', '整体', '汇总', '多少条'))
+            if max_chars is None and score <= 0 and not _generic_q:
+                # v12.7.10.30：与本问题无关的表只给一行概览（行数+核心合计），不丢数据、也不占篇幅
+                part = _brief_line(db, t, cnt, cols)
+                tag = ''
+            else:
+                part = _sample_part(db, t, cnt, cols, score, words)
+                tag = '相关' if score > 0 else ''
+        if max_chars is not None and used + len(part) > max_chars:
             # v12.7.10.29：装不下不再 break 静默丢弃——先降级为极简概览（一行统计）；
             # 概览也放不下就登记进"未展开清单"，让模型知道这些数据存在、各多少行。
             brief = _brief_line(db, t, cnt, cols)
@@ -682,7 +721,7 @@ def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16
                             _hit = True
                             break
                 _rows_all, _off = [], 0
-                while _off < 3000:
+                while _off < 200000:   # v12.7.10.30：取消插件单表 3000 行限制，分页读全表
                     _g = _ps.plugin_openapi_rows(_pid, t, limit=1000, offset=_off) or {}
                     _rs = _g.get('rows') or []
                     if not _rs:
@@ -772,16 +811,8 @@ def _collect_db_context(question, max_chars=16000):   # v12.7.10.29：14000→16
                 cdb.close()
             except Exception as e:
                 plug_parts.append('插件「%s」独立库读取失败: %s' % (pid, e))
-    # v12.7.10.29：插件段总预算 9000 字符，超出只记插件名不展开，避免多插件把上下文吃爆
-    _pl, _pu, _pn = [], 0, []
-    for _pp in plug_parts:
-        if _pu + len(_pp) > 9000:
-            _pn.append(_pp.split('\n')[0][:60])
-            continue
-        _pl.append(_pp); _pu += len(_pp)
-    if _pn:
-        _pl.append('⚠ 以下插件数据因篇幅未展开：%s —— 如需分析请指明插件名单独提问。' % '；'.join(_pn))
-    extra = '\n\n'.join(_pl) if _pl else ''
+    # v12.7.10.30：插件数据不再截断（原先 9000 字符上限会丢掉后面插件的明细）
+    extra = '\n\n'.join(plug_parts) if plug_parts else ''
     if plug_files:
         head += '另有 %d 个上传插件的独立库数据已读取（%s）。' % (len(plug_files), '、'.join(plug_files))
     body = '\n\n'.join(parts) if parts else ''
@@ -1086,7 +1117,7 @@ _HISTORY_MAX_CHARS = 5000
 # ============================================================
 _RAW_TRIGGER_CHARS = 6000     # 未压缩原文累计超过此值才触发压缩（短会话不压缩）
 _RECENT_KEEP_CHARS = 2500     # 压缩时：最近这么多字符的原文保留不压（保证近期连贯）
-_UNIVER_MAX_ROWS = 10000      # v12.7.10.28：云表格单表单次解析上限（本地 JSON，纯 CPU 解析）
+_UNIVER_MAX_ROWS = 200000     # v12.7.10.30：取消单表 1 万行限制，按全表统计（仅留安全阀防解析爆内存）
 _RECENT_RAW_CHARS = 3000      # 注入请求时：从压缩点之后取最近这么多字符原文
 
 _COMPACT_PROMPT = (
@@ -1311,13 +1342,11 @@ def chat():
         hist_msgs.append({'role': hr['role'], 'content': hc})
         used += len(hc) + 1
     hist_msgs.reverse()
-    req_messages = [{'role': 'system', 'content': _SYSTEM_PROMPT}]
+    _head_msgs = [{'role': 'system', 'content': _SYSTEM_PROMPT}]
     if long_summary:
-        req_messages.append({'role': 'system',
-                             'content': '【本会话长期要点摘要（早期对话已压缩为以下摘要，可据此理解上下文）】\n' + long_summary})
-    req_messages += hist_msgs + [
-        {'role': 'user', 'content': '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s%s\n\n请回答/分析：%s' % (context, extra, question)},
-    ]
+        _head_msgs.append({'role': 'system',
+                           'content': '【本会话长期要点摘要（早期对话已压缩为以下摘要，可据此理解上下文）】\n' + long_summary})
+    _head_msgs += hist_msgs
     api_url, api_key = prov['api_url'], prov['api_key']
 
     def gen():
@@ -1327,7 +1356,44 @@ def chat():
         err_msg = ''
         try:
             yield 'event: meta\ndata: %s\n\n' % json.dumps({'conv_id': cid, 'user_msg_id': user_msg_id})
-            for chunk in _stream_chat(api_url, api_key, model, req_messages):
+            # v12.7.10.30：数据超过单轮阈值时，分批送入模型、滚动汇总要点，再基于要点作答；
+            # 不再靠丢弃表/压缩统计来"挤进一轮"。
+            msgs = list(_head_msgs)
+            if len(context) > _CTX_SINGLE:
+                chunks = _split_chunks(context)
+                memos, covered = [], 0
+                for i, ch in enumerate(chunks, 1):
+                    covered += len(ch)
+                    yield 'data: %s\n\n' % json.dumps(
+                        {'stage': '正在分批分析数据：第 %d/%d 批（本批 %d 字符，累计已读 %d 字符）…'
+                         % (i, len(chunks), len(ch), covered)}, ensure_ascii=False)
+                    bmemo, cerr = _compile_batch(api_url, api_key, model, ch, i, len(chunks), question)
+                    if bmemo:
+                        memos.append('【第 %d/%d 批】%s' % (i, len(chunks), bmemo))
+                    if cerr:
+                        yield 'data: %s\n\n' % json.dumps(
+                            {'stage': '第 %d 批分析失败（%s），该批数据未纳入汇总' % (i, cerr)}, ensure_ascii=False)
+                memo = '\n'.join(memos)
+                if len(memo) > _CTX_SINGLE:
+                    yield 'data: %s\n\n' % json.dumps(
+                        {'stage': '各批要点合计 %d 字符，正在统一合并…' % len(memo)}, ensure_ascii=False)
+                    memo = _merge_memos(api_url, api_key, model, memo, question)
+                if memo:
+                    yield 'data: %s\n\n' % json.dumps(
+                        {'stage': '全量数据汇总完成（共 %d 批），正在生成结论…' % len(chunks)}, ensure_ascii=False)
+                    msgs.append({'role': 'user', 'content':
+                        '【全量数据要点（由 %d 批数据逐步汇总而成，已覆盖上面所有表）】\n%s\n%s\n\n请基于以上要点回答/分析：%s'
+                        % (len(chunks), memo, extra, question)})
+                else:
+                    # 全部批次失败：退回原文（放宽到 6 万字符），并明确提示覆盖度
+                    msgs.append({'role': 'user', 'content':
+                        '以下是数据库当前（有数据的）结构、行数与样例数据（分批汇总失败，本次仅直接投喂前 6 万字符）：\n%s%s\n\n请回答/分析：%s'
+                        % (context[:60000], extra, question)})
+            else:
+                msgs.append({'role': 'user', 'content':
+                    '以下是数据库当前（有数据的）结构、行数与样例数据：\n%s%s\n\n请回答/分析：%s'
+                    % (context, extra, question)})
+            for chunk in _stream_chat(api_url, api_key, model, msgs):
                 collected += chunk
                 yield 'data: %s\n\n' % json.dumps({'delta': chunk})
             done = True
@@ -1525,6 +1591,66 @@ def _llm_preflight(api_url):
         return None
     except Exception as e:
         return _diagnose_llm_error(e, target)
+
+
+_CTX_SINGLE = 12000     # v12.7.10.30：单轮直接送模型的数据阈值，超过则进入分批编译
+_CTX_CHUNK = 9000       # 分批编译时每批字符数（按表块边界切，不切断统计块）
+_MEMO_MAX = 1800        # 滚动要点上限（每批合并后重写，不是简单追加）
+
+
+def _split_chunks(text, size=_CTX_CHUNK):
+    """v12.7.10.30：按"表块"（空行分隔）切分数据文本，保证不把一张表的统计切断；
+    单块本身超长时按行硬切兜底。"""
+    blocks = text.split('\n\n')
+    chunks, cur = [], ''
+    for b in blocks:
+        while len(b) > size:
+            if cur:
+                chunks.append(cur); cur = ''
+            cut = b.rfind('\n', 0, size)
+            cut = size if cut <= 0 else cut
+            chunks.append(b[:cut]); b = b[cut:]
+        if cur and len(cur) + len(b) + 2 > size:
+            chunks.append(cur); cur = b
+        else:
+            cur = (cur + '\n\n' + b) if cur else b
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
+
+_COMPILE_SYS = ('你是数据摘录员。用户逐批给你业务数据，你负责把事实压成要点，供后续汇总。'
+                '必须遵守：1) 保留所有表名与总行数；2) 保留数值列的合计/均值/最大/最小；'
+                '3) 保留分类列的前 5 项分布计数；4) 保留与问题直接相关的关键明细行（编号/名称/金额等）；'
+                '5) 不得省略数字、不得推测、不得给建议、不得编造；6) 只输出要点，不写过程说明。')
+
+
+def _compile_batch(api_url, api_key, model, chunk, idx, total, question):
+    """v12.7.10.30：把单批数据压成要点（只摘本批，不与其他批合并）。
+    各批要点会全部保留并汇总，最终必要时再统一合并——避免模型"忘了合并"导致前面批次的信息丢失。
+    返回 (本批要点, 错误文本)。"""
+    usr = ('【用户问题】%s\n\n【本批数据（第 %d/%d 批）】\n%s\n\n'
+           '请输出本批要点（不超过 700 字）：只写事实与数字，按表分组；'
+           '与问题最相关的表保留其关键明细行（编号/名称/金额等）。'
+           % (question, idx, total, chunk))
+    out = ''.join(_stream_chat(api_url, api_key, model,
+                               [{'role': 'system', 'content': _COMPILE_SYS},
+                                {'role': 'user', 'content': usr}], timeout=300))
+    if out.startswith('【调用失败') or out.startswith('【诊断'):
+        return '', out[:120]
+    return out.strip()[:700], ''
+
+
+def _merge_memos(api_url, api_key, model, joined, question):
+    """v12.7.10.30：各批要点总长超过单轮预算时，统一合并压缩一次（保留全部数字）。"""
+    usr = ('【用户问题】%s\n\n【各批要点（必须全部保留，不得丢弃任何表名与数字）】\n%s\n\n'
+           '请合并成一份要点（不超过 %d 字），按表分组，只写事实与数字。' % (question, joined, _MEMO_MAX))
+    out = ''.join(_stream_chat(api_url, api_key, model,
+                               [{'role': 'system', 'content': _COMPILE_SYS},
+                                {'role': 'user', 'content': usr}], timeout=300))
+    if out.startswith('【调用失败') or out.startswith('【诊断'):
+        return joined[:_MEMO_MAX * 3]
+    return out.strip()[:_MEMO_MAX]
 
 
 def _stream_chat(api_url, api_key, model, messages, timeout=180):

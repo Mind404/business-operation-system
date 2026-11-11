@@ -661,6 +661,20 @@ function handleSSEEvent(evt) {
         if (obj.user_msg_id && lastUserWrap) bindMsgActions(lastUserWrap, obj.user_msg_id);
         return;
     }
+    if (obj.stage) {
+        // v12.7.10.30：分批分析进度（不进入正文，单独一行灰字）
+        let el = document.getElementById('aiStageLine');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'aiStageLine';
+            el.style.cssText = 'font-size:12px;color:#8a8f98;padding:4px 0 6px;line-height:1.5;';
+            // 固定在消息列表末尾（不依赖气泡是否已创建），保证任何时序下都能看到进度
+            const body = document.getElementById('chatBody');
+            if (body) { body.appendChild(el); body.scrollTop = body.scrollHeight; }
+        }
+        el.textContent = obj.stage;
+        return;
+    }
     if (obj.delta) {
         streamCollect += obj.delta;
         updateStreamContent(mdRender(streamCollect));
@@ -668,6 +682,7 @@ function handleSSEEvent(evt) {
     }
     if (obj.answer !== undefined) {
         // end 事件
+        const _st = document.getElementById('aiStageLine'); if (_st) _st.remove();
         const done = !!obj.ok;
         streamCollect = obj.answer || streamCollect;
         if (done) {
