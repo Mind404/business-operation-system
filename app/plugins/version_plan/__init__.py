@@ -13,7 +13,7 @@ manifest = {
     'icon': '🗺️',
     'group': '业务插件',
     'core': False,
-    'version': '13.0.1.0',
+    'version': '13.0.1.1',
     'description': '多产品按月版本火车：需求评估→装车（人日容量/停发/加车/一步改挂）→版本→7项确认清单+四方签核门禁→发布→客户回告',
     'endpoint': 'version_plan.index',
     'url_prefix': '/version_plan',
@@ -68,7 +68,7 @@ manifest = {
                         'version_no 排入版本，doc_ref 云文档溯源）；'
                         'version_plan_versions 一行=一个版本（version_no 版本号，product_code 所属产品，status 版本状态）；'
                         'version_plan_customers 一行=一个客户（product_code 所属产品，当前在用/集成中/定制分支版本）；'
-                        'version_plan_trains 一行=一个车次（code，product_code，month，status 计划/停发/已转版本，capacity 人日）；'
+                        'version_plan_trains 一行=一个车次（code，product_code，month，status 计划/停发/已转版本/已发布，capacity 人日）；'
                         'version_plan_items 一行=需求装载状态（train_code，demand_code，state 已装/候补/已移出）；'
                         'version_plan_checks 一行=发布清单项（version_no+product_code 双键，item_no 1-7，result）；'
                         'version_plan_signoffs 一行=签核（role 产品/测试/发布经理/客户代表，verdict）；'

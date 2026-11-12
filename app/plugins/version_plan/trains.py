@@ -21,7 +21,7 @@ from .routes import (PID, _can_manage, _deny, _ensure_product, _log, _now,
 # 装车临界区：SQLite 单写者，平台单进程多线程，用进程内锁把「读容量→判断→写」串成一步
 LOCK = threading.RLock()
 
-TRAIN_STATUS = ['计划', '停发', '已转版本']
+TRAIN_STATUS = ['计划', '停发', '已转版本', '已发布']
 SIGN_ROLES = ['产品负责人', '测试负责人', '发布经理']
 CUSTOM_ROLE = '客户代表'
 CHECK_ITEMS = [
@@ -166,8 +166,8 @@ def train_skip(code):
     if not t:
         flash('车次不存在', 'error')
         return redirect(url_for('version_plan.trains'))
-    if t['status'] == '已转版本':
-        flash('该车次已转成版本，不能停发；如需停止发布请走版本解冻流程', 'error')
+    if t['status'] in ('已转版本', '已发布'):
+        flash('该车次已转成版本或已发布，不能停发；如需停止发布请走版本解冻流程', 'error')
         return redirect(url_for('version_plan.train_board', code=code))
     reason = (request.form.get('reason') or '').strip()
     if not reason:
@@ -243,8 +243,8 @@ def train_to_version(code):
     if not t:
         flash('车次不存在', 'error')
         return redirect(url_for('version_plan.trains'))
-    if t['status'] == '已转版本':
-        flash('该车次已转过版本', 'error')
+    if t['status'] in ('已转版本', '已发布'):
+        flash('该车次已转过版本或已发布', 'error')
         return redirect(url_for('version_plan.train_board', code=code))
     no = (request.form.get('version_no') or '').strip()
     if not no:
@@ -301,7 +301,7 @@ def train_board():
             'ORDER BY id DESC LIMIT 30', (code, code)).fetchall()]
     used, cnt = _used(db, code) if t else (0, 0)
     pct = min(100, int(used / float(t['capacity']) * 100)) if t and t['capacity'] else 0
-    open_trains = [r for r in rows if r['status'] != '已转版本' and r['code'] != code]
+    open_trains = [r for r in rows if r['status'] not in ('已转版本', '已发布') and r['code'] != code]
     return render_template('vp_train_board.html', rows=rows, t=t, code=code, loaded=loaded,
                            waiting=waiting, pool=pool, changes=changes, used=used, cnt=cnt,
                            pct=pct, product=prod, products=_product_rows(db),
@@ -318,8 +318,8 @@ def board_load():
     code = (request.form.get('code') or '').strip()
     dcode = (request.form.get('demand') or '').strip()
     t = _train(db, code)
-    if not t or t['status'] == '已转版本':
-        flash('车次不存在或已转版本，不能再装', 'error')
+    if not t or t['status'] in ('已转版本', '已发布'):
+        flash('车次不存在、已转版本或已发布，不能再装', 'error')
         return redirect(url_for('version_plan.train_board', code=code))
     if t['status'] == '停发':
         flash('该车次已停发，先恢复发车再装车', 'error')
@@ -380,8 +380,8 @@ def board_unload():
     if not t:
         flash('车次不存在', 'error')
         return redirect(url_for('version_plan.trains'))
-    if t['status'] == '已转版本':
-        flash('车次已转版本，装载清单已固化，不能再移出', 'error')
+    if t['status'] in ('已转版本', '已发布'):
+        flash('车次已转版本或已发布，装载清单已固化，不能再移出', 'error')
         return redirect(url_for('version_plan.train_board', code=code))
     with LOCK:
         try:
@@ -498,7 +498,8 @@ def assess_submit(code):
         flash('评分必须在 1-5 之间', 'error')
         return redirect(url_for('version_plan.assess'))
     v, cl, ur, cost = w
-    score = round((v * 0.35 + cl * 0.30 + ur * 0.20 + (6 - cost) * 0.15) / 5 * 100, 1)
+    # 权重对齐规则 R3：业务价值 35% / 客户影响 25% / 紧急度 20% / 成本反向 20%
+    score = round((v * 0.35 + cl * 0.25 + ur * 0.20 + (6 - cost) * 0.20) / 5 * 100, 1)
     verdict = VERDICT_POOL if score >= 70 else (VERDICT_HOLD if score >= 40 else VERDICT_NO)
     with LOCK:
         try:
@@ -644,6 +645,20 @@ def customer_notice():
     db.execute(f'INSERT INTO {_t("version_plan_notices")} '
                '(customer_id, customer_name, version_no, content, sent_at, created_at) VALUES (?,?,?,?,?,?)',
                (cid, c['name'], no, content, _now(), _now()))
+    # 回告联动：按客户所属产品 + 版本号回写「升级中版本」（对齐 Leantime upgrading_version 口径，
+    # Python 客户表对应列为 integrating_version_no；遗留 customer_products 表为空结构）
+    if no:
+        vprod = (c['product_code'] or '').strip()
+        if vprod:
+            vexists = db.execute(
+                f'SELECT 1 FROM {_t("version_plan_versions")} WHERE version_no=? AND product_code=?',
+                (no, vprod)).fetchone()
+            if not vexists:
+                flash(f'版本 {no} 不属于 {vprod}（{c["name"]} 所属产品），请核对后再回告', 'error')
+                return redirect(url_for('version_plan.customers'))
+            db.execute(
+                f'UPDATE {_t("version_plan_customers")} SET integrating_version_no=? '
+                'WHERE id=? AND product_code=?', (no, cid, vprod))
     db.commit()
     _ulog('客户', c['name'], '发回告', f'{no}：{content[:40]}')
     _log('客户回告', f'{c["name"]} {no}')

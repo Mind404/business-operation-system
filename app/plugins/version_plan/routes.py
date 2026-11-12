@@ -93,6 +93,7 @@ DDL = [
         upgrade_path TEXT DEFAULT '',
         merge_target_no TEXT DEFAULT '',
         merge_deadline TEXT DEFAULT '',
+        rollback_plan TEXT DEFAULT '',
         status TEXT DEFAULT '规划中',
         frozen_at TEXT DEFAULT '',
         frozen_by TEXT DEFAULT '',
@@ -131,6 +132,7 @@ DDL = [
         product_code TEXT DEFAULT '',
         content TEXT DEFAULT '',
         status TEXT DEFAULT '草稿',
+        rollback_plan TEXT DEFAULT '',
         created_at TEXT,
         updated_at TEXT,
         finalized_by TEXT DEFAULT '',
@@ -263,6 +265,17 @@ def _migrate(db=None):
         cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(L_DEMANDS)})').fetchall()]
         if col not in cols:
             db.execute(f'ALTER TABLE {_t(L_DEMANDS)} ADD COLUMN {col} {ddl}')
+    # 回滚方案：版本表留编辑态，发布时复制到发布说明表
+    for logical in (L_VERSIONS, L_RELEASES):
+        cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(logical)})').fetchall()]
+        if 'rollback_plan' not in cols:
+            db.execute(f'ALTER TABLE {_t(logical)} ADD COLUMN rollback_plan TEXT DEFAULT ""')
+    # G10 历史回填：已发布版本的关联车次联动置「已发布」（幂等）
+    db.execute(f'''UPDATE {_t(L_TRAINS)} SET status="已发布" WHERE code IN (
+        SELECT DISTINCT i.train_code FROM {_t(L_ITEMS)} i
+        JOIN {_t(L_DEMANDS)} d ON d.code=i.demand_code
+        JOIN {_t(L_VERSIONS)} v ON v.version_no=d.version_no AND v.product_code=d.product_code
+        WHERE v.status="已发布" AND i.state="已装")''')
     _migrate_version_key(db)
     _migrate_release_key(db)
     db.commit()
@@ -1160,12 +1173,13 @@ def version_detail(no):
         db.execute(
             f'''UPDATE {_t(L_VERSIONS)} SET freeze_date=?, test_date=?, release_date=?, modules=?,
             interface_change=?, regression_scope=?, known_issues=?, target_customers=?, upgrade_path=?,
-            base_version_no=?, updated_at=? WHERE version_no=? AND product_code=?''',
+            rollback_plan=?, base_version_no=?, updated_at=? WHERE version_no=? AND product_code=?''',
             ((f.get('freeze_date') or '').strip(), (f.get('test_date') or '').strip(),
              (f.get('release_date') or '').strip(), ','.join(request.form.getlist('modules')),
              (f.get('interface_change') or '').strip(), (f.get('regression_scope') or '').strip(),
              (f.get('known_issues') or '').strip(), ','.join(request.form.getlist('customers')),
-             (f.get('upgrade_path') or '').strip(), (f.get('base_version_no') or '').strip(),
+             (f.get('upgrade_path') or '').strip(), (f.get('rollback_plan') or '').strip(),
+             (f.get('base_version_no') or '').strip(),
              _now(), no, v['product_code'] or ''))
         db.commit()
         _ulog('版本', no, '编辑', '更新里程碑/元数据（版本号不可改）')
@@ -1332,15 +1346,26 @@ def version_status(no):
                        (no, prod)).fetchone()['c']
         db.execute(f'UPDATE {_t(L_DEMANDS)} SET status="已发布", updated_at=? '
                    'WHERE version_no=? AND product_code=?', (_now(), no, prod))
-        # 自动生成 Release Note 草稿
+        # 自动生成 Release Note 草稿；回滚方案随发布留档（缺省「按发布方案回滚」）
         draft = _build_release(db, no, prod)
+        rb = (v['rollback_plan'] or '').strip() or '按发布方案回滚'
         rel = _rel_row(db, no, prod)
         if rel:
-            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? '
-                       'WHERE version_no=? AND product_code=?', (draft, _now(), no, prod))
+            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, rollback_plan=?, updated_at=? '
+                       'WHERE version_no=? AND product_code=?', (draft, rb, _now(), no, prod))
         else:
-            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, product_code, content, status, created_at, updated_at) '
-                       'VALUES (?,?,?,?,?,?)', (no, prod, draft, '草稿', _now(), _now()))
+            db.execute(f'INSERT INTO {_t(L_RELEASES)} '
+                       '(version_no, product_code, content, status, rollback_plan, created_at, updated_at) '
+                       'VALUES (?,?,?,?,?,?,?)', (no, prod, draft, '草稿', rb, _now(), _now()))
+        # 关联车次联动置「已发布」（按需求-车次装载记录反查）
+        train_codes = [r['train_code'] for r in db.execute(
+            f'SELECT DISTINCT i.train_code FROM {_t(L_ITEMS)} i '
+            f'JOIN {_t(L_DEMANDS)} d ON d.code=i.demand_code '
+            'WHERE d.version_no=? AND d.product_code=? AND i.state=?',
+            (no, prod, '已装')).fetchall()]
+        for tc in train_codes:
+            db.execute(f'UPDATE {_t(L_TRAINS)} SET status="已发布", updated_at=? WHERE code=?',
+                       (_now(), tc))
         # 客户在用版本自动更新（同产品内定位客户）
         for cust in [c for c in (v['target_customers'] or '').split(',') if c]:
             c0 = db.execute(
@@ -1403,6 +1428,8 @@ def _build_release(db, no, prod=''):
               (v['known_issues'] if v and v['known_issues'] else '- 无'), '']
     lines += ['## 七、升级与回退说明',
               (v['upgrade_path'] if v and v['upgrade_path'] else '- 按常规 FOTA 升级，可从上一版本升级'), '']
+    lines += ['## 八、回滚方案',
+              (v['rollback_plan'] if v and v['rollback_plan'] else '- 按发布方案回滚'), '']
     return '\n'.join(lines)
 
 

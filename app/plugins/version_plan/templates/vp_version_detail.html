@@ -111,6 +111,7 @@
       <div class="vp-field"><label class="vp-label">已知遗留问题</label><textarea class="vp-textarea" name="known_issues" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['known_issues'] }}</textarea></div>
       <div class="vp-field"><label class="vp-label">升级路径说明</label><textarea class="vp-textarea" name="upgrade_path" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['upgrade_path'] }}</textarea></div>
     </div>
+    <div class="vp-field"><label class="vp-label">回滚方案（发布前须可执行并演练过）</label><textarea class="vp-textarea" name="rollback_plan" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['rollback_plan'] }}</textarea></div>
     {% if can_edit %}<button class="vp-btn vp-btn-primary" type="submit">保存元数据</button>{% else %}<span class="vp-muted">版本号 {{ v['version_no'] }} 创建后不可修改（R4）；当前状态不可编辑，仅管理员在规划中/已冻结可改。</span>{% endif %}
   </form>
 </div>
@@ -299,6 +300,9 @@ elease', no=v['version_no']) }}" style="margin:0">
       <div style="margin-top:8px"><button class="vp-btn vp-btn-primary" type="submit">保存草稿</button>
         <span class="vp-muted">版本置为「已发布」时会自动生成草稿；定稿后不可再改。</span></div>
     </form>
+    {% endif %}
+    {% if release['rollback_plan'] %}
+    <div class="vp-field" style="margin-top:10px"><label class="vp-label">回滚方案</label><div class="vp-pre" style="white-space:pre-wrap">{{ release['rollback_plan'] }}</div></div>
     {% endif %}
   {% else %}
   <div class="vp-empty">还没有发布说明。版本推进到「已发布」会自动生成；也可点上面「按版本数据重生成草稿」。</div>
