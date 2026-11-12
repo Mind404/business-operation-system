@@ -1700,7 +1700,25 @@ OPENAPI_TABLES = {
                   '一行=一个客户；product_code 所属产品；current_version_no 当前在用版本；integrating_version_no 集成中版本；'
                   'custom_branch_no 定制分支；merge_target_no/merge_deadline 计划合回与期限'),
     L_RELEASES: ('发布说明 Release Notes', 'id', 'updated_at',
-                 '一行=一个版本的发布说明；status：草稿/定稿；content 为 Markdown 正文'),
+                 '一行=一个版本的发布说明；同一版本号按 product_code 区分；status：草稿/定稿；content 为 Markdown 正文'),
+    L_TRAINS: ('月版本火车（车次）', 'id', 'created_at',
+               '一行=一个车次；code 如 P1-2607-01；product_code 所属产品；month 发车月；status：计划/停发/已转版本；'
+               'capacity 人日容量；skip_reason 停发原因'),
+    L_ITEMS: ('车次装载清单', 'id', 'added_at',
+              '一行=一个需求在某车次的装载状态；train_code 车次；demand_code 需求；state：已装/候补/已移出；reason 原因'),
+    L_LOADCHG: ('装车变更留痕', 'id', 'created_at',
+                '一行=一次装车/移出/改挂操作；demand_code 需求；from_train/to_train 车次；action 动作；operator 操作人'),
+    L_ASSESS: ('需求四维评估', 'id', 'created_at',
+               '一行=一次评估；demand_code 需求；round 轮次；w_value/w_client/w_urgent/w_cost 四维 1-5 分；'
+               'score 加权分；verdict：规划池/挂起/不做'),
+    L_CHECKS: ('发布确认清单（7 项）', 'id', 'checked_at',
+               '一行=某版本某清单项；version_no+product_code 双键；item_no 1-7；result：pending/通过/不通过；evidence 证据'),
+    L_SIGNOFFS: ('发布签核', 'id', 'signed_at',
+                 '一行=某版本某角色的签核；version_no+product_code 双键；role：产品负责人/测试负责人/发布经理/客户代表；verdict：同意/驳回'),
+    L_NOTICES: ('客户回告记录', 'id', 'sent_at',
+                '一行=一次客户回告；customer_name 客户；version_no 回告版本；content 回告正文；sent_at 发送时间'),
+    L_CUSTPROD: ('客户-产品版本占用', 'id', 'updated_at',
+                 '一行=某客户在某产品的版本占用；customer_id 客户；product_code 产品；in_use_version 在用版本；upgrading_version 升级中版本'),
 }
 
 
