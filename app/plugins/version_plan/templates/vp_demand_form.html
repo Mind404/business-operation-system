@@ -12,9 +12,12 @@
 </div>
 
 <div class="vp-toolbar">
-  <a class="vp-btn" href="{{ url_for('version_plan.demands', status='待过滤' if not d else '') }}">← 返回列表</a>
+  <a class="vp-btn" href="{{ url_for('version_plan.demands', product=(d['product_code'] if d else product) or '') }}">← 返回列表</a>
   {% if d and d['version_no'] %}<a class="vp-btn" href="{{ url_for('version_plan.version_detail', no=d['version_no']) }}">看所在版本</a>{% endif %}
 </div>
+
+{% set active = 'demands' %}{% set product = (d['product_code'] if d else product) or '' %}
+{% include 'vp_nav.html' with context %}
 
 {% if not d %}
 <div class="vp-warnbox">三条硬要求：<b>云文档溯源必填</b>（能回到原始登记对口径，R6）；进规划池前还要有<b>来源客户 / 业务价值 / 验收标准</b>。</div>
@@ -36,6 +39,14 @@
 <form method="post" action="{{ url_for('version_plan.demand_edit', code=d['code']) if d else url_for('version_plan.demand_new') }}">
   <div class="vp-card">
     <h3>原始登记信息</h3>
+    <div class="vp-field">
+      <label class="vp-label">所属产品 <span class="vp-req">*</span></label>
+      <select class="vp-select" name="product_code" style="max-width:260px" {{ 'disabled' if d and d['status'] in ('已排期','已发布') }}>
+        <option value="">未分配</option>
+        {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if (d['product_code'] or '')==p['code'] or (not d and product==p['code']) }}>{{ p['name'] }}</option>{% endfor %}
+      </select>
+      {% if d and d['status'] in ('已排期','已发布') %}<div class="vp-muted">需求已「{{ d['status'] }}」，产品归属锁定，不可再改</div>{% endif %}
+    </div>
     <div class="vp-row2">
       <div class="vp-field">
         <label class="vp-label">云文档溯源 <span class="vp-req">*</span>（行号 / 原始编号 / 原文摘要，不可清空）</label>

@@ -5,12 +5,15 @@
 <div class="vp-page-head">
   <div>
     <h1>{{ v['version_no'] }} · {{ v['vtype'] }}</h1>
-    <p>状态 <b>{{ v['status'] }}</b>
+    <p>📦 {{ prod_name or '未分配' }}　状态 <b>{{ v['status'] }}</b>
     {% if v['base_version_no'] %} · 基线 {{ v['base_version_no'] }}{% endif %}
     · 包含需求 {{ ds|length }} 条
     {% if v['frozen_at'] %} · 冻结于 {{ v['frozen_at'] }}（{{ v['frozen_by'] }}）{% endif %}</p>
   </div>
 </div>
+
+{% set active = 'versions' %}{% set product = v['product_code'] or '' %}
+{% include 'vp_nav.html' with context %}
 
 {% set stage = {'规划中':0,'已冻结':1,'开发中':2,'测试中':2,'已发布':3,'已归档':3}.get(v['status'], 0) %}
 <div class="vp-card" style="padding:12px 16px;margin-bottom:12px">
@@ -34,7 +37,7 @@
 
 <div class="vp-toolbar">
 
-  <a class="vp-btn" href="{{ url_for('version_plan.versions') }}">← 版本列表</a>
+  <a class="vp-btn" href="{{ url_for('version_plan.versions', product=v['product_code'] or '') }}">← 版本列表</a>
   {% if v['status'] == '已发布' %}
   <span class="vp-tag t-done">已发布 {{ v['released_at'] }}</span>
   {% endif %}

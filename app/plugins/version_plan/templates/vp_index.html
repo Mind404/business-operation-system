@@ -6,15 +6,18 @@
 <div class="vp-page-head">
   <div>
     <h1>🗺️ 版本规划管理</h1>
-    <p>云文档需求登记 → 需求过滤 → 版本规划 → 冻结/开发/测试 → 发布说明 → 客户回告</p>
+    <p>分产品过滤需求 → 规划版本 → 冻结/开发/测试 → 发布说明 → 客户回告，各产品数据隔离、流转受控</p>
   </div>
   {% if can_manage %}
   <div class="vp-head-actions">
     <a class="vp-btn" href="{{ url_for('version_plan.demands') }}?status=待过滤">🧹 去过滤（{{ stat['待过滤'] }}）</a>
-    <a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan.version_new') }}">＋ 新建版本</a>
+    <a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan.products') }}">📦 管理产品</a>
   </div>
   {% endif %}
 </div>
+
+{% set active = 'index' %}{% set product = '' %}
+{% include 'vp_nav.html' with context %}
 
 {% if overdue_branches %}
 <div class="vp-errbox">
@@ -24,6 +27,42 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<!-- ============ 产品矩阵 ============ -->
+<div class="vp-card">
+  <div class="vp-card-hd">
+    <h3>📦 产品矩阵</h3>
+    <span class="vp-muted">共 {{ products|length }} 个产品 · 点击卡片进入产品空间</span>
+  </div>
+  {% if products %}
+  <div class="vp-prod-grid">
+    {% for p in products %}
+    <a class="vp-prod-card {{ 'off' if p['status'] != '启用' }}" href="{{ url_for('version_plan.product_home', code=p['code']) }}">
+      <div class="vp-prod-top">
+        <div>
+          <b class="vp-prod-name">{{ p['name'] }}</b>
+          <span class="vp-code">{{ p['code'] }}</span>
+        </div>
+        <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>
+      </div>
+      {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner'] }}</div>{% endif %}
+      <div class="vp-prod-stats">
+        <div><b>{{ p['demands'] }}</b><span>需求</span></div>
+        <div><b>{{ p['pool'] }}</b><span>规划池</span></div>
+        <div><b>{{ p['active'] }}</b><span>在建版本</span></div>
+        <div><b>{{ p['customers'] }}</b><span>客户</span></div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="vp-empty">
+    <div class="big">📦</div>
+    <p>还没有产品。先建产品，再在其空间内登记需求、规划版本。</p>
+    {% if can_manage %}<a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan.products') }}">＋ 新建第一个产品</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
 
 <!-- ============ KPI ============ -->
 <div class="vp-kpis">
@@ -52,7 +91,7 @@
 <!-- ============ 需求流转分布 ============ -->
 <div class="vp-card">
   <div class="vp-card-hd">
-    <h3>需求流转</h3>
+    <h3>需求流转（全部产品）</h3>
     <span class="vp-muted">共 {{ total }} 条 · 过滤完成率 <b>{{ rate }}%</b>（已判定 {{ total - stat['待过滤'] }}/{{ total }}）</span>
   </div>
   <div class="vp-dist-bar">
@@ -123,8 +162,7 @@
   {% else %}
   <div class="vp-empty">
     <div class="big">🗓️</div>
-    <p>还没有版本。先建一个版本，再把规划池里的需求拉进来。</p>
-    {% if can_manage %}<a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan.version_new') }}">＋ 建第一个版本</a>{% endif %}
+    <p>还没有版本。先建产品与版本，再把规划池里的需求拉进来。</p>
   </div>
   {% endif %}
 </div>

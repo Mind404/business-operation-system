@@ -2,6 +2,7 @@
 {% block title %}客户回告 · 版本规划{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+{% set qp = {'product': product} if product else {} %}
 <div class="vp-page-head">
   <div>
     <h1>✉️ 客户回告</h1>
@@ -9,23 +10,31 @@
   </div>
 </div>
 
+{% set active = 'report' %}
+{% include 'vp_nav.html' with context %}
+
 <div class="vp-toolbar">
-  {% if customers %}
   <form method="get" action="{{ url_for('version_plan.report') }}" class="vp-inline" style="margin:0">
+    <select class="vp-select" name="product" onchange="this.form.submit()" style="max-width:180px">
+      <option value="">全部产品</option>
+      {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
+    </select>
+    {% if customers %}
     <select class="vp-select" name="customer" onchange="this.form.submit()" style="max-width:200px">
+      <option value="">全部客户</option>
       {% for c in customers %}<option value="{{ c['name'] }}" {{ 'selected' if cust == c['name'] }}>{{ c['name'] }}</option>{% endfor %}
     </select>
+    {% endif %}
   </form>
-  {% endif %}
   <button class="vp-btn vp-btn-primary" type="button" onclick="vpCopy()">📋 一键复制回告文本</button>
-  <a class="vp-btn" href="{{ url_for('version_plan.report_text', customer=cust) }}" target="_blank">看纯文本接口</a>
+  <a class="vp-btn" href="{{ url_for('version_plan.report_text', customer=cust, **qp) }}" target="_blank">看纯文本接口</a>
 </div>
 
 {% if not customers %}
 <div class="vp-card"><div class="vp-empty">还没有客户，先去「客户矩阵」建客户</div></div>
 {% else %}
 <div class="vp-card">
-  <h3>📊 {{ cust }} · 需求兑现汇总</h3>
+  <h3>📊 {{ cust or '全部客户' }} · 需求兑现汇总</h3>
   <div class="vp-grid">
     <div class="vp-stat"><div class="n">{{ rows|length }}</div><div class="l">合计登记需求</div></div>
     <div class="vp-stat ok"><div class="n">{{ summary.get('已发布', 0) }}</div><div class="l">已发布</div></div>
@@ -45,10 +54,11 @@
   <h3>需求明细（含云文档溯源）</h3>
   {% if rows %}
   <table class="vp-table">
-    <tr><th>编号</th><th>溯源</th><th>描述</th><th>状态</th><th>版本</th><th>预计发布</th></tr>
+    <tr><th>编号</th><th>产品</th><th>溯源</th><th>描述</th><th>状态</th><th>版本</th><th>预计发布</th></tr>
     {% for d in rows %}
     <tr>
       <td><span class="vp-code">{{ d['code'] }}</span></td>
+      <td><span class="vp-tag t-pool">{{ prod_map.get(d['product_code'], {}).get('name', '未分配') }}</span></td>
       <td class="vp-muted" style="max-width:220px">{{ d['doc_ref'] }}</td>
       <td style="max-width:420px">{{ d['description'] }}</td>
       <td>

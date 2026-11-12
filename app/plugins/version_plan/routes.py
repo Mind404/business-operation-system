@@ -22,6 +22,7 @@ blueprint = make_blueprint('version_plan', __name__)
 
 PID = 'version_plan'
 # 逻辑表名（真实表名由平台分配，统一走 _T 缓存）
+L_PRODUCTS = 'version_plan_products'
 L_DEMANDS = 'version_plan_demands'
 L_VERSIONS = 'version_plan_versions'
 L_CUSTOMERS = 'version_plan_customers'
@@ -46,6 +47,15 @@ VERSION_FLOW = {
 }
 
 DDL = [
+    (L_PRODUCTS, L_PRODUCTS, '''CREATE TABLE IF NOT EXISTS version_plan_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL UNIQUE,
+        owner TEXT DEFAULT '',
+        status TEXT DEFAULT '启用',
+        description TEXT DEFAULT '',
+        created_at TEXT,
+        updated_at TEXT)'''),
     (L_CUSTOMERS, L_CUSTOMERS, '''CREATE TABLE IF NOT EXISTS version_plan_customers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -150,12 +160,17 @@ def _ensure_tables():
 
 
 def _migrate(db=None):
-    """老库补列（插件自管迁移）：版本表新增定制版合回目标/期限。"""
+    """老库补列（插件自管迁移）：版本表新增定制版合回目标/期限；
+    需求/版本/客户表新增产品归属列 product_code（空串归入未分配）。"""
     db = db or get_db()
     cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(L_VERSIONS)})').fetchall()]
     for col in ('merge_target_no', 'merge_deadline'):
         if col not in cols:
             db.execute(f'ALTER TABLE {_t(L_VERSIONS)} ADD COLUMN {col} TEXT DEFAULT ""')
+    for logical in (L_DEMANDS, L_VERSIONS, L_CUSTOMERS):
+        cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(logical)})').fetchall()]
+        if 'product_code' not in cols:
+            db.execute(f'ALTER TABLE {_t(logical)} ADD COLUMN product_code TEXT DEFAULT ""')
     db.commit()
 
 
@@ -163,6 +178,57 @@ def _t(logical):
     if logical not in _T:
         _ensure_tables()
     return _T.get(logical, logical)
+
+
+def _req_product():
+    """当前请求选中的产品编号（空串=全部产品/未分配）。支持 query 与 form。"""
+    v = (request.args.get('product') or request.form.get('product') or '').strip()
+    return v
+
+
+def _product_rows(db, only_active=False):
+    """产品列表：启用优先，再按名称排序。返回 dict 列表。"""
+    sql = f'SELECT * FROM {_t(L_PRODUCTS)}'
+    if only_active:
+        sql += " WHERE status='启用'"
+    sql += ' ORDER BY CASE status WHEN "启用" THEN 0 ELSE 1 END, name ASC'
+    return [dict(r) for r in db.execute(sql).fetchall()]
+
+
+def _product_map(db):
+    """product_code -> 产品行 dict。"""
+    return {r['code']: dict(r) for r in db.execute(f'SELECT * FROM {_t(L_PRODUCTS)}').fetchall()}
+
+
+def _product_name(db, code):
+    if not code:
+        return ''
+    r = db.execute(f'SELECT name FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+    return r['name'] if r else code
+
+
+def _prod_where(product, table_alias=''):
+    """按产品拼 WHERE 条件。返回 (sql 片段, args)；空产品返回 ('', [])。
+    table_alias 用于多表 join 时限定列名。"""
+    if not product:
+        return '', []
+    col = f'{table_alias}.product_code' if table_alias else 'product_code'
+    return f'{col}=?', [product]
+
+
+def _ensure_product(db, code):
+    """产品存在且启用则返回行；否则 None。"""
+    if not code:
+        return None
+    return db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+
+
+def _vrow(db, no, prod=''):
+    """按版本号定位版本；版本号全局唯一，带产品编号时再按归属加固定位，无产品时回退全库取第一条（兼容老链接）。"""
+    if prod:
+        return db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=? AND product_code=?',
+                          (no, prod)).fetchone()
+    return db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
 
 
 def _can_manage():
@@ -210,13 +276,16 @@ def _norm(s):
     return re.sub(r'[^\w\u4e00-\u9fff]+', '', (s or '')).lower()
 
 
-def _similar(db, desc, exclude_id=None, limit=300):
-    """描述相似度检测（疑似重复/同源）。返回 [(code, description, score, customer)]"""
+def _similar(db, desc, exclude_id=None, limit=300, product=''):
+    """描述相似度检测（疑似重复/同源）。返回 [(code, description, score, customer)]；同产品内比对。"""
     base = _norm(desc)
     if not base or len(base) < 6:
         return []
-    rows = db.execute(f'SELECT id, code, description, customer_name FROM {_t(L_DEMANDS)} '
-                      'ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
+    pwhere = 'WHERE product_code=?' if product else ''
+    rows = db.execute(
+        f'SELECT id, code, description, customer_name, product_code FROM {_t(L_DEMANDS)} '
+        f'{pwhere} ORDER BY id DESC LIMIT ?',
+        ([product] if product else []) + [limit]).fetchall()
     out = []
     for r in rows:
         if exclude_id and r['id'] == exclude_id:
@@ -234,65 +303,213 @@ def _similar(db, desc, exclude_id=None, limit=300):
 
 
 # ---------------------------------------------------------------- 工作台
-@blueprint.route('/version_plan/')
-def index():
-    _ensure_tables()
-    db = get_db()
+STAGE_MAP = {'规划中': 0, '已冻结': 1, '开发中': 2, '测试中': 2, '已发布': 3, '已归档': 3}
+
+
+def _overview(db, product=''):
+    """计算工作台概览统计。product 为空=全部产品；非空=只看该产品。"""
+    where, args = _prod_where(product)
+    dwsql = ('WHERE ' + where) if where else ''
     stat = {}
     for st in DEMAND_STATUS:
-        stat[st] = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status=?', (st,)).fetchone()['c']
-    total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)}').fetchone()['c']
+        if where:
+            stat[st] = db.execute(
+                f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status=? AND {where}',
+                [st] + args).fetchone()['c']
+        else:
+            stat[st] = db.execute(
+                f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status=?', (st,)).fetchone()['c']
+    total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} {dwsql}', args).fetchone()['c']
     vstat = {}
     for st in VERSION_STATUS:
-        vstat[st] = db.execute(f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE status=?', (st,)).fetchone()['c']
-    # 本期过滤率 = 已判定（非待过滤）占比
+        if where:
+            vstat[st] = db.execute(
+                f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE status=? AND {where}',
+                [st] + args).fetchone()['c']
+        else:
+            vstat[st] = db.execute(
+                f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE status=?', (st,)).fetchone()['c']
     judged = total - stat.get('待过滤', 0)
     rate = round(judged * 100.0 / total, 1) if total else 0.0
-    # 定制分支超期
-    overdue_branches = [r for r in db.execute(
-        f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE custom_branch_no<>"" AND merge_deadline<>""').fetchall()
-        if r['merge_deadline'] and r['merge_deadline'] < _today()]
+    # 定制分支超期（按产品）
+    overdue = [r for r in db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} {dwsql}', args).fetchall()
+               if r['custom_branch_no'] and r['merge_deadline'] and r['merge_deadline'] < _today()]
     # 里程碑 7 天内
     horizon = (date.today() + timedelta(days=7)).strftime('%Y-%m-%d')
     milestones = []
-    for r in db.execute(f'SELECT * FROM {_t(L_VERSIONS)} '
-                        'WHERE status NOT IN ("已发布","已归档")').fetchall():
+    vrows = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} {dwsql}', args).fetchall()
+    for r in vrows:
+        if r['status'] in ('已发布', '已归档'):
+            continue
         for label, key in (('需求冻结日', 'freeze_date'), ('提测日', 'test_date'), ('发布日', 'release_date')):
             val = (r[key] or '').strip()
             if val and val <= horizon:
                 milestones.append({'version_no': r['version_no'], 'label': label,
-                                   'date': val, 'state': r['status']})
+                                   'date': val, 'state': r['status'],
+                                   'product_code': r['product_code']})
     milestones.sort(key=lambda x: x['date'])
-    recent = db.execute(f'SELECT * FROM {_t(L_LOGS)} ORDER BY id DESC LIMIT 12').fetchall()
-    # 每个版本的需求数 / 已交付数 + 当前阶段索引（0 规划 1 冻结 2 开发测试 3 发布）
+    # 每个版本的需求数 / 已交付数
     vneed = {}
-    for r in db.execute(f'SELECT version_no, COUNT(*) c, '
-                        'SUM(CASE WHEN status="已发布" THEN 1 ELSE 0 END) d '
-                        f'FROM {_t(L_DEMANDS)} WHERE version_no<>"" GROUP BY version_no').fetchall():
+    for r in db.execute(
+            f'SELECT version_no, COUNT(*) c, '
+            'SUM(CASE WHEN status="已发布" THEN 1 ELSE 0 END) d '
+            f'FROM {_t(L_DEMANDS)} WHERE version_no<>"" GROUP BY version_no').fetchall():
         vneed[r['version_no']] = (r['c'], r['d'] or 0)
-    stage_map = {'规划中': 0, '已冻结': 1, '开发中': 2, '测试中': 2, '已发布': 3, '已归档': 3}
-    versions = [dict(r) for r in db.execute(
-        f'SELECT * FROM {_t(L_VERSIONS)} '
-        "ORDER BY CASE status WHEN '测试中' THEN 0 WHEN '开发中' THEN 1 WHEN '已冻结' THEN 2 "
-        "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC LIMIT 6").fetchall()]
+    versions = [dict(r) for r in vrows]
+    versions.sort(key=lambda v: (
+        {'测试中': 0, '开发中': 1, '已冻结': 2, '规划中': 3, '已发布': 4}.get(v['status'], 5),
+        v['release_date'] or '9999-12-31'))
+    versions = versions[:6]
     for v in versions:
         c, d = vneed.get(v['version_no'], (0, 0))
         v['needs'], v['needs_done'] = c, d
-        v['stage'] = stage_map.get(v['status'], 0)
+        v['stage'] = STAGE_MAP.get(v['status'], 0)
     month = _today()[:7]
-    month_release = db.execute(
-        f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE substr(release_date,1,7)=?',
-        (month,)).fetchone()['c']
-    week_new = db.execute(
-        f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE substr(created_at,1,10)>=?',
-        ((date.today() - timedelta(days=30)).strftime('%Y-%m-%d'),)).fetchone()['c']
-    pending = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="待过滤" '
-                         'ORDER BY id DESC LIMIT 8').fetchall()
-    return render_template('vp_index.html', stat=stat, total=total, rate=rate, vstat=vstat,
-                           overdue_branches=overdue_branches, milestones=milestones,
-                           recent=recent, versions=versions, pending=pending,
-                           month_release=month_release, week_new=week_new,
+    if where:
+        month_release = db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE substr(release_date,1,7)=? AND {where}',
+            [month] + args).fetchone()['c']
+        week_new = db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE substr(created_at,1,10)>=? AND {where}',
+            [(date.today() - timedelta(days=30)).strftime('%Y-%m-%d')] + args).fetchone()['c']
+        pending = db.execute(
+            f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="待过滤" AND {where} ORDER BY id DESC LIMIT 8',
+            args).fetchall()
+    else:
+        month_release = db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_VERSIONS)} WHERE substr(release_date,1,7)=?',
+            (month,)).fetchone()['c']
+        week_new = db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE substr(created_at,1,10)>=?',
+            ((date.today() - timedelta(days=30)).strftime('%Y-%m-%d'),)).fetchone()['c']
+        pending = db.execute(
+            f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="待过滤" ORDER BY id DESC LIMIT 8').fetchall()
+    recent = db.execute(f'SELECT * FROM {_t(L_LOGS)} ORDER BY id DESC LIMIT 12').fetchall()
+    return dict(stat=stat, total=total, rate=rate, vstat=vstat, overdue_branches=overdue,
+                milestones=milestones, recent=recent, versions=versions, pending=pending,
+                month_release=month_release, week_new=week_new)
+
+
+@blueprint.route('/version_plan/')
+def index():
+    _ensure_tables()
+    db = get_db()
+    ov = _overview(db)
+    products = _product_rows(db)
+    # 每个产品的概览小统计
+    prod_cards = []
+    for p in products:
+        pc = p['code']
+        dstat = {st: db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE product_code=? AND status=?',
+            (pc, st)).fetchone()['c'] for st in DEMAND_STATUS}
+        vrows = db.execute(f'SELECT status FROM {_t(L_VERSIONS)} WHERE product_code=?', (pc,)).fetchall()
+        active = sum(1 for v in vrows if v['status'] in ('规划中', '已冻结', '开发中', '测试中'))
+        prod_cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
+                           'pool': dstat['规划池'], 'versions': len(vrows), 'active': active,
+                           'released': dstat['已发布']})
+    return render_template('vp_index.html', products=prod_cards, **ov,
                            can_manage=_can_manage(), today=_today())
+
+
+@blueprint.route('/version_plan/products/<code>')
+def product_home(code):
+    _ensure_tables()
+    db = get_db()
+    p = db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+    if not p:
+        flash('产品不存在或已停用', 'error')
+        return redirect(url_for('version_plan.index'))
+    ov = _overview(db, code)
+    return render_template('vp_product.html', p=dict(p), **ov,
+                           can_manage=_can_manage(), today=_today())
+
+
+# ---------------------------------------------------------------- 产品管理
+@blueprint.route('/version_plan/products')
+def products():
+    _ensure_tables()
+    db = get_db()
+    prows = _product_rows(db)
+    cards = []
+    for p in prows:
+        pc = p['code']
+        dstat = {st: db.execute(
+            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE product_code=? AND status=?',
+            (pc, st)).fetchone()['c'] for st in DEMAND_STATUS}
+        vrows = db.execute(f'SELECT status FROM {_t(L_VERSIONS)} WHERE product_code=?', (pc,)).fetchall()
+        cust_n = db.execute(f'SELECT COUNT(*) c FROM {_t(L_CUSTOMERS)} WHERE product_code=?',
+                            (pc,)).fetchone()['c']
+        active = sum(1 for v in vrows if v['status'] in ('规划中', '已冻结', '开发中', '测试中'))
+        cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
+                      'pool': dstat['规划池'], 'released': dstat['已发布'],
+                      'versions': len(vrows), 'active': active, 'customers': cust_n})
+    return render_template('vp_products.html', products=cards, can_manage=_can_manage())
+
+
+@blueprint.route('/version_plan/products/new', methods=['POST'])
+def product_new():
+    _ensure_tables()
+    if not _can_manage():
+        return _deny()
+    db = get_db()
+    f = request.form
+    code = (f.get('code') or '').strip()
+    name = (f.get('name') or '').strip()
+    if not code or not name:
+        flash('产品编号与名称都必填', 'error')
+        return redirect(url_for('version_plan.products'))
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,20}', code):
+        flash('产品编号仅限字母/数字/中划线/下划线（最长 20），如 P1、MODEM-A', 'error')
+        return redirect(url_for('version_plan.products'))
+    if db.execute(f'SELECT 1 FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone():
+        flash(f'产品编号 {code} 已存在', 'error')
+        return redirect(url_for('version_plan.products'))
+    if db.execute(f'SELECT 1 FROM {_t(L_PRODUCTS)} WHERE name=?', (name,)).fetchone():
+        flash(f'产品名称「{name}」已存在', 'error')
+        return redirect(url_for('version_plan.products'))
+    now = _now()
+    db.execute(
+        f'''INSERT INTO {_t(L_PRODUCTS)} (code, name, owner, status, description, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?)''',
+        (code, name, (f.get('owner') or '').strip(), '启用',
+         (f.get('description') or '').strip(), now, now))
+    db.commit()
+    _ulog('产品', code, '新建', name)
+    _log('新建产品', f'{code} {name}')
+    flash(f'产品「{name}」已创建，可在其空间内过滤需求、规划版本', 'success')
+    return redirect(url_for('version_plan.product_home', code=code))
+
+
+@blueprint.route('/version_plan/products/<code>/edit', methods=['POST'])
+def product_edit(code):
+    _ensure_tables()
+    if not _can_manage():
+        return _deny()
+    db = get_db()
+    p = db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+    if not p:
+        flash('产品不存在', 'error')
+        return redirect(url_for('version_plan.products'))
+    f = request.form
+    name = (f.get('name') or '').strip()
+    status = (f.get('status') or '启用').strip()
+    if not name:
+        flash('产品名称必填', 'error')
+        return redirect(url_for('version_plan.products'))
+    if db.execute(f'SELECT 1 FROM {_t(L_PRODUCTS)} WHERE name=? AND code<>?', (name, code)).fetchone():
+        flash(f'产品名称「{name}」已被其它产品占用', 'error')
+        return redirect(url_for('version_plan.products'))
+    if status not in ('启用', '停用'):
+        status = '启用'
+    db.execute(
+        f'''UPDATE {_t(L_PRODUCTS)} SET name=?, owner=?, status=?, description=?, updated_at=?
+        WHERE code=?''',
+        (name, (f.get('owner') or '').strip(), status, (f.get('description') or '').strip(), _now(), code))
+    db.commit()
+    _ulog('产品', code, '编辑', f'{name} / {status}')
+    flash(f'产品「{name}」已更新', 'success')
+    return redirect(url_for('version_plan.products'))
 
 
 # ---------------------------------------------------------------- 需求
@@ -304,12 +521,16 @@ def demands():
     st = (request.args.get('status') or '').strip()
     ver = (request.args.get('version') or '').strip()
     cust = (request.args.get('customer') or '').strip()
+    prod = _req_product()
     try:
         page = max(1, int(request.args.get('page', 1)))
     except Exception:
         page = 1
     size = 40
     where, args = [], []
+    if prod:
+        where.append('product_code=?')
+        args.append(prod)
     if q:
         where.append('(code LIKE ? OR description LIKE ? OR doc_ref LIKE ? OR customer_name LIKE ?)')
         args += ['%' + q + '%'] * 4
@@ -326,12 +547,18 @@ def demands():
     total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} {wsql}', args).fetchone()['c']
     rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} {wsql} ORDER BY id DESC LIMIT ? OFFSET ?',
                       args + [size, (page - 1) * size]).fetchall()
-    customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
-    versions = db.execute(f'SELECT version_no FROM {_t(L_VERSIONS)} ORDER BY id DESC').fetchall()
-    counts = {k: db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status=?', (k,)).fetchone()['c']
-              for k in DEMAND_STATUS}
+    # 下拉候选按当前产品收敛
+    cwhere, cargs = _prod_where(prod)
+    cwsql = ('WHERE ' + cwhere) if cwhere else ''
+    customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} {cwsql} ORDER BY name', cargs).fetchall()
+    versions = db.execute(f'SELECT version_no FROM {_t(L_VERSIONS)} {cwsql} ORDER BY id DESC', cargs).fetchall()
+    counts = {k: db.execute(
+        f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status=?{" AND product_code=?" if prod else ""}',
+        [k] + ([prod] if prod else [])).fetchone()['c'] for k in DEMAND_STATUS}
+    prod_map = _product_map(db)
     return render_template('vp_demands.html', rows=rows, total=total, page=page, size=size,
                            pages=max(1, (total + size - 1) // size), q=q, st=st, ver=ver, cust=cust,
+                           product=prod, products=_product_rows(db), prod_map=prod_map,
                            customers=customers, versions=versions, counts=counts,
                            statuses=DEMAND_STATUS, dtypes=DEMAND_TYPE, can_manage=_can_manage())
 
@@ -342,42 +569,51 @@ def demand_new():
     if not _can_manage():
         return _deny()
     db = get_db()
+    products = _product_rows(db)
     if request.method == 'GET':
-        customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
-        versions = db.execute(f'SELECT version_no FROM {_t(L_VERSIONS)} ORDER BY id DESC').fetchall()
+        prod = _req_product()
+        cwhere, cargs = _prod_where(prod)
+        cwsql = ('WHERE ' + cwhere) if cwhere else ''
+        customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} {cwsql} ORDER BY name', cargs).fetchall()
+        versions = db.execute(f'SELECT version_no FROM {_t(L_VERSIONS)} {cwsql} ORDER BY id DESC', cargs).fetchall()
         return render_template('vp_demand_form.html', d=None, customers=customers,
-                               versions=versions, dtypes=DEMAND_TYPE, statuses=DEMAND_STATUS,
+                               versions=versions, products=products, product=prod,
+                               dtypes=DEMAND_TYPE, statuses=DEMAND_STATUS,
                                sims=[], today=_today())
     f = request.form
     doc_ref = (f.get('doc_ref') or '').strip()
     desc = (f.get('description') or '').strip()
     if not doc_ref:
         flash('云文档溯源必填：请填写原始登记的行号 / 原始编号 / 原文摘要（R6）', 'error')
-        return redirect(url_for('version_plan.demand_new'))
+        return redirect(url_for('version_plan.demand_new', product=_req_product()))
     if not desc:
         flash('需求描述必填', 'error')
+        return redirect(url_for('version_plan.demand_new', product=_req_product()))
+    prod = (f.get('product_code') or '').strip()
+    if prod and not _ensure_product(db, prod):
+        flash('所选产品不存在，请重新选择', 'error')
         return redirect(url_for('version_plan.demand_new'))
     code = _next_code(db)
     now = _now()
     db.execute(
         f'''INSERT INTO {_t(L_DEMANDS)}
         (code, doc_ref, raised_at, customer_name, description, business_value, acceptance, demand_type,
-         filter_result, filter_note, version_no, is_custom, custom_customer, status, note,
+         filter_result, filter_note, version_no, is_custom, custom_customer, status, note, product_code,
          created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (code, doc_ref, (f.get('raised_at') or _today()), (f.get('customer_name') or '').strip(),
          desc, (f.get('business_value') or '').strip(), (f.get('acceptance') or '').strip(),
          (f.get('demand_type') or '新增功能'), '', '', (f.get('version_no') or ''),
          1 if f.get('is_custom') else 0, (f.get('custom_customer') or '').strip(),
-         '待过滤', (f.get('note') or '').strip(), now, now))
+         '待过滤', (f.get('note') or '').strip(), prod, now, now))
     db.commit()
-    sims = _similar(db, desc)
+    sims = _similar(db, desc, product=prod)
     _log('新增需求', f'{code} {desc[:30]}')
     tip = f'已录入需求 {code}，当前状态「待过滤」。'
     if sims:
         tip += ' 疑似重复：' + '、'.join(f'{s[0]}({s[2]})' for s in sims) + '，请在过滤时确认。'
     flash(tip, 'warning' if sims else 'success')
-    return redirect(url_for('version_plan.demands', status='待过滤'))
+    return redirect(url_for('version_plan.demands', status='待过滤', product=prod))
 
 
 @blueprint.route('/version_plan/demands/<code>', methods=['GET', 'POST'])
@@ -391,13 +627,17 @@ def demand_edit(code):
         flash('需求不存在', 'error')
         return redirect(url_for('version_plan.demands'))
     if request.method == 'GET':
-        customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
-        versions = db.execute(f'SELECT version_no, status FROM {_t(L_VERSIONS)} ORDER BY id DESC').fetchall()
+        cwhere, cargs = _prod_where(d['product_code'] or '')
+        cwsql = ('WHERE ' + cwhere) if cwhere else ''
+        customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} {cwsql} ORDER BY name', cargs).fetchall()
+        versions = db.execute(f'SELECT version_no, status FROM {_t(L_VERSIONS)} {cwsql} ORDER BY id DESC', cargs).fetchall()
         logs = db.execute(f'SELECT * FROM {_t(L_LOGS)} WHERE obj_no=? ORDER BY id DESC LIMIT 20',
                           (code,)).fetchall()
         return render_template('vp_demand_form.html', d=d, customers=customers, versions=versions,
+                               products=_product_rows(db), product=d['product_code'] or '',
                                dtypes=DEMAND_TYPE, statuses=DEMAND_STATUS,
-                               sims=_similar(db, d['description'], exclude_id=d['id']),
+                               sims=_similar(db, d['description'], exclude_id=d['id'],
+                                             product=d['product_code'] or ''),
                                logs=logs, today=_today())
     f = request.form
     doc_ref = (f.get('doc_ref') or '').strip()
@@ -412,15 +652,25 @@ def demand_edit(code):
         if not ver or ver['status'] != '已发布':
             flash('不能把需求标为「已发布」：它排入的版本还不是「已发布」状态（R3）', 'error')
             return redirect(url_for('version_plan.demand_edit', code=code))
+    # 产品归属：未排期前可调整；已排期/已发布锁定，避免跨产品串版本
+    if d['status'] in ('已排期', '已发布'):
+        new_prod = d['product_code'] or ''
+    else:
+        new_prod = (f.get('product_code') or '').strip()
+        if new_prod != (d['product_code'] or ''):
+            if new_prod and not _ensure_product(db, new_prod):
+                flash('所选产品不存在，请重新选择', 'error')
+                return redirect(url_for('version_plan.demand_edit', code=code))
     db.execute(
         f'''UPDATE {_t(L_DEMANDS)} SET doc_ref=?, raised_at=?, customer_name=?, description=?,
-        business_value=?, acceptance=?, demand_type=?, is_custom=?, custom_customer=?, note=?, updated_at=?
+        business_value=?, acceptance=?, demand_type=?, is_custom=?, custom_customer=?, note=?,
+        product_code=?, updated_at=?
         WHERE code=?''',
         (doc_ref, (f.get('raised_at') or '').strip(), (f.get('customer_name') or '').strip(),
          (f.get('description') or '').strip(), (f.get('business_value') or '').strip(),
          (f.get('acceptance') or '').strip(), (f.get('demand_type') or '新增功能'),
          1 if f.get('is_custom') else 0, (f.get('custom_customer') or '').strip(),
-         (f.get('note') or '').strip(), _now(), code))
+         (f.get('note') or '').strip(), new_prod, _now(), code))
     db.commit()
     _ulog('需求', code, '编辑', '更新需求信息')
     flash(f'已保存 {code}', 'success')
@@ -473,15 +723,15 @@ def demand_filter(code):
     db.commit()
     _ulog('需求', code, f'过滤→{result}', note)
     _log('需求过滤', f'{code} → {result}')
-    # 挂起复活提示：同源需求被多个客户提出
+    # 挂起复活提示：同源需求被多个客户提出（同产品内比对）
     tips = []
     if new_status in ('规划池', '挂起'):
-        sims = _similar(db, d['description'], exclude_id=d['id'])
+        sims = _similar(db, d['description'], exclude_id=d['id'], product=d['product_code'] or '')
         for s in sims:
             if s[1] and s[3] and s[3] != (d['customer_name'] or ''):
                 tips.append(f'与 {s[0]}（客户 {s[3]}）描述相似度 {s[2]}，属多个客户提出，建议重新评估优先级')
     flash(f'{code} 已判定为「{result}」。' + (' '.join(tips) if tips else ''), 'success')
-    return redirect(url_for('version_plan.demands', status='待过滤'))
+    return redirect(url_for('version_plan.demands', status='待过滤', product=d['product_code'] or ''))
 
 
 @blueprint.route('/version_plan/demands/<code>/link', methods=['POST'])
@@ -502,6 +752,9 @@ def demand_link(code):
         flash(f'需求 {other} 不存在', 'error')
         return redirect(url_for('version_plan.demand_edit', code=code))
     d = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE code=?', (code,)).fetchone()
+    if (o['product_code'] or '') != (d['product_code'] or ''):
+        flash(f'{other} 属于另一产品，只能在同一产品内标记重复/冲突关系', 'error')
+        return redirect(url_for('version_plan.demand_edit', code=code))
     cur = [x for x in (d['related_codes'] or '').split(',') if x]
     if other not in cur:
         cur.append(other)
@@ -544,6 +797,7 @@ def demand_import():
         flash('文件里没有数据行', 'error')
         return redirect(url_for('version_plan.demands'))
     alias = {
+        'product_code': ['产品', '产品名称', '所属产品', 'product_code'],
         'doc_ref': ['云文档溯源', '溯源', '原始位置', '原始编号', 'doc_ref'],
         'raised_at': ['提出日期', '登记日期', 'raised_at'],
         'customer_name': ['来源客户', '客户', '客户名称', 'customer_name'],
@@ -560,6 +814,10 @@ def demand_import():
                 return row[a].strip()
         return ''
 
+    default_prod = _req_product()
+    pmap = _product_map(db)
+    name2code = {p['name']: p['code'] for p in pmap.values()}
+
     ok, bad, dup, no_ref = 0, 0, [], 0
     now = _now()
     for row in rows:
@@ -573,18 +831,23 @@ def demand_import():
         if not doc_ref:
             no_ref += 1
             doc_ref = '导入时未填（R6 要求补全后过滤）'
+        # 产品归属：CSV 产品名/编号优先，否则沿用当前筛选产品
+        prod_raw = pick(row, 'product_code')
+        prod = name2code.get(prod_raw, prod_raw) if prod_raw else default_prod
+        if prod and prod not in pmap:
+            prod = default_prod
         code = _next_code(db)
-        sims = _similar(db, desc)
+        sims = _similar(db, desc, product=prod)
         db.execute(
             f'''INSERT INTO {_t(L_DEMANDS)}
             (code, doc_ref, raised_at, customer_name, description, business_value, acceptance,
-             demand_type, status, is_custom, note, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             demand_type, status, is_custom, note, product_code, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (code, doc_ref, pick(row, 'raised_at') or _today(), pick(row, 'customer_name'),
              desc, pick(row, 'business_value'), pick(row, 'acceptance'),
              pick(row, 'demand_type') or '新增功能', '待过滤',
              1 if pick(row, 'is_custom') in ('是', '1', 'Y', 'y', 'true') else 0,
-             'CSV 导入', now, now))
+             'CSV 导入', prod, now, now))
         ok += 1
         if sims:
             dup.append(f'{code}≈{sims[0][0]}')
@@ -598,22 +861,27 @@ def demand_import():
         msg += f'，疑似重复 {len(dup)} 条：' + '、'.join(dup[:8])
     _log('需求导入', f'新增 {ok} 条')
     flash(msg, 'warning' if (no_ref or dup) else 'success')
-    return redirect(url_for('version_plan.demands', status='待过滤'))
+    return redirect(url_for('version_plan.demands', status='待过滤', product=default_prod))
 
 
 @blueprint.route('/version_plan/demands/export')
 def demand_export():
     _ensure_tables()
     db = get_db()
-    rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} ORDER BY id').fetchall()
+    prod = _req_product()
+    where, args = _prod_where(prod)
+    wsql = ('WHERE ' + where) if where else ''
+    rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} {wsql} ORDER BY id', args).fetchall()
+    pmap = _product_map(db)
     out = io.StringIO()
     w = csv.writer(out)
-    head = ['需求编号', '云文档溯源', '提出日期', '来源客户', '需求描述', '业务价值', '验收标准',
+    head = ['产品', '需求编号', '云文档溯源', '提出日期', '来源客户', '需求描述', '业务价值', '验收标准',
             '需求类型', '过滤结论', '过滤备注', '排入版本', '是否定制', '定制客户',
             '关联需求', '关系', '状态', '备注']
     w.writerow(head)
     for r in rows:
-        w.writerow([r['code'], r['doc_ref'], r['raised_at'], r['customer_name'], r['description'],
+        w.writerow([(pmap.get(r['product_code'], {}) or {}).get('name', '未分配'),
+                    r['code'], r['doc_ref'], r['raised_at'], r['customer_name'], r['description'],
                     r['business_value'], r['acceptance'], r['demand_type'], r['filter_result'],
                     r['filter_note'], r['version_no'], '是' if r['is_custom'] else '否',
                     r['custom_customer'], r['related_codes'], r['relation_type'], r['status'], r['note']])
@@ -627,20 +895,27 @@ def demand_export():
 def versions():
     _ensure_tables()
     db = get_db()
+    prod = _req_product()
+    where, args = _prod_where(prod)
+    wsql = ('WHERE ' + where) if where else ''
     rows = [dict(r) for r in db.execute(
-        f'SELECT * FROM {_t(L_VERSIONS)} '
+        f'SELECT * FROM {_t(L_VERSIONS)} {wsql} '
         "ORDER BY CASE status WHEN '测试中' THEN 0 WHEN '开发中' THEN 1 WHEN '已冻结' THEN 2 "
-        "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC").fetchall()]
-    stage_map = {'规划中': 0, '已冻结': 1, '开发中': 2, '测试中': 2, '已发布': 3, '已归档': 3}
+        "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC", args).fetchall()]
     counts = {}
     for r in rows:
         counts[r['version_no']] = db.execute(
             f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=?', (r['version_no'],)).fetchone()['c']
-        r['stage'] = stage_map.get(r['status'], 0)
-    pool = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池" ORDER BY id').fetchall()
-    customers = db.execute(f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
+        r['stage'] = STAGE_MAP.get(r['status'], 0)
+    # 规划池只列同产品
+    pool = db.execute(
+        f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池"{" AND product_code=?" if prod else ""} ORDER BY id',
+        [prod] if prod else []).fetchall()
+    customers = db.execute(
+        f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} {wsql} ORDER BY name', args).fetchall()
     return render_template('vp_versions.html', rows=rows, counts=counts, pool=pool,
                            customers=customers, statuses=VERSION_STATUS, vtypes=VERSION_TYPE,
+                           product=prod, products=_product_rows(db), prod_map=_product_map(db),
                            can_manage=_can_manage(), today=_today(), modules=_modules())
 
 
@@ -653,26 +928,35 @@ def version_new():
     f = request.form
     no = (f.get('version_no') or '').strip()
     vtype = (f.get('vtype') or '迭代').strip()
+    prod = (f.get('product_code') or '').strip()
+    if not prod:
+        flash('请先选择该版本所属的产品', 'error')
+        return redirect(url_for('version_plan.versions', product=_req_product()))
+    if not _ensure_product(db, prod):
+        flash('所选产品不存在，请重新选择', 'error')
+        return redirect(url_for('version_plan.versions', product=prod))
     if not re.fullmatch(r'[0-9]+(?:\.[0-9A-Za-z]+){2,}(?:-[0-9A-Za-z._]+)?', no):
         flash(f'版本号「{no}」格式不对：请用 主.次.修订（如 1.2.0），定制版可加客户后缀（如 1.2.0-A）', 'error')
-        return redirect(url_for('version_plan.versions'))
-    exists = db.execute(f'SELECT 1 FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+        return redirect(url_for('version_plan.versions', product=prod))
+    # 版本号全局唯一（DB 层 UNIQUE 兜底），创建后不可改（R4）
+    exists = db.execute(
+        f'SELECT 1 FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
     if exists:
-        flash(f'版本号 {no} 已存在（版本号全库唯一且创建后不可改，R4）', 'error')
-        return redirect(url_for('version_plan.versions'))
+        flash(f'版本号 {no} 已存在（版本号全局唯一且创建后不可改，R4）', 'error')
+        return redirect(url_for('version_plan.versions', product=prod))
     # R2：定制版本必须填合回目标与期限
     if vtype == '客户定制':
         if not (f.get('merge_target_no') or '').strip() or not (f.get('merge_deadline') or '').strip():
             flash('客户定制版本必须填写「计划合回主线的目标版本」和「合回期限」才能创建（R2）', 'error')
-            return redirect(url_for('version_plan.versions'))
+            return redirect(url_for('version_plan.versions', product=prod))
     now = _now()
     db.execute(
         f'''INSERT INTO {_t(L_VERSIONS)}
-        (version_no, vtype, base_version_no, freeze_date, test_date, release_date, modules,
+        (version_no, vtype, product_code, base_version_no, freeze_date, test_date, release_date, modules,
          interface_change, regression_scope, known_issues, target_customers, upgrade_path,
          merge_target_no, merge_deadline, status, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (no, vtype, (f.get('base_version_no') or '').strip(), (f.get('freeze_date') or '').strip(),
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (no, vtype, prod, (f.get('base_version_no') or '').strip(), (f.get('freeze_date') or '').strip(),
          (f.get('test_date') or '').strip(), (f.get('release_date') or '').strip(),
          ','.join(request.form.getlist('modules')), (f.get('interface_change') or '').strip(),
          (f.get('regression_scope') or '').strip(), (f.get('known_issues') or '').strip(),
@@ -681,17 +965,17 @@ def version_new():
          (f.get('merge_deadline') or '').strip() if vtype == '客户定制' else '',
          '规划中', now, now))
     db.commit()
-    _ulog('版本', no, '创建', f'类型 {vtype}')
+    _ulog('版本', no, '创建', f'类型 {vtype}（产品 {_product_name(db, prod)}）')
     _log('创建版本', no)
     flash(f'已创建版本 {no}（规划中）。去版本详情勾选规划池需求拉进来。', 'success')
-    return redirect(url_for('version_plan.versions'))
+    return redirect(url_for('version_plan.versions', product=prod))
 
 
 @blueprint.route('/version_plan/versions/<no>', methods=['GET', 'POST'])
 def version_detail(no):
     _ensure_tables()
     db = get_db()
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, _req_product())
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
@@ -702,20 +986,24 @@ def version_detail(no):
         db.execute(
             f'''UPDATE {_t(L_VERSIONS)} SET freeze_date=?, test_date=?, release_date=?, modules=?,
             interface_change=?, regression_scope=?, known_issues=?, target_customers=?, upgrade_path=?,
-            base_version_no=?, updated_at=? WHERE version_no=?''',
+            base_version_no=?, updated_at=? WHERE version_no=? AND product_code=?''',
             ((f.get('freeze_date') or '').strip(), (f.get('test_date') or '').strip(),
              (f.get('release_date') or '').strip(), ','.join(request.form.getlist('modules')),
              (f.get('interface_change') or '').strip(), (f.get('regression_scope') or '').strip(),
              (f.get('known_issues') or '').strip(), ','.join(request.form.getlist('customers')),
              (f.get('upgrade_path') or '').strip(), (f.get('base_version_no') or '').strip(),
-             _now(), no))
+             _now(), no, v['product_code'] or ''))
         db.commit()
         _ulog('版本', no, '编辑', '更新里程碑/元数据（版本号不可改）')
         flash(f'{no} 已保存（版本号不可修改，R4）', 'success')
         return redirect(url_for('version_plan.version_detail', no=no))
     ds = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE version_no=? ORDER BY id', (no,)).fetchall()
-    pool = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池" ORDER BY id').fetchall()
-    customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
+    pool = db.execute(
+        f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池" AND product_code=? ORDER BY id',
+        (v['product_code'] or '',)).fetchall()
+    customers = db.execute(
+        f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=? ORDER BY name',
+        (v['product_code'] or '',)).fetchall()
     release = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=?', (no,)).fetchone()
     logs = db.execute(f'SELECT * FROM {_t(L_LOGS)} WHERE obj_no=? ORDER BY id DESC LIMIT 20',
                       (no,)).fetchall()
@@ -723,6 +1011,7 @@ def version_detail(no):
     can_edit = _can_manage() and v['status'] in ('规划中', '已冻结')
     return render_template('vp_version_detail.html', v=v, ds=ds, pool=pool, customers=customers,
                            release=release, logs=logs, frozen=frozen, can_edit=can_edit,
+                           prod_map=_product_map(db), prod_name=_product_name(db, v['product_code'] or ''),
                            can_manage=_can_manage(), is_platform=_is_platform(),
                            statuses=VERSION_STATUS, flow=VERSION_FLOW.get(v['status'], []),
                            today=_today(),
@@ -751,10 +1040,13 @@ def version_add(no):
     if not codes:
         flash('请先勾选要拉入的规划池需求', 'error')
         return redirect(url_for('version_plan.version_detail', no=no))
-    added, blocked = [], []
+    added, blocked, blocked_prod = [], [], []
     for code in codes:
         d = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE code=?', (code,)).fetchone()
         if not d:
+            continue
+        if (d['product_code'] or '') != (v['product_code'] or ''):   # 同产品隔离
+            blocked_prod.append(code)
             continue
         if d['status'] != '规划池':          # R7
             blocked.append(f'{code}({d["status"]})')
@@ -766,6 +1058,8 @@ def version_add(no):
     msg = (f'已拉入 {len(added)} 条需求：{"、".join(added)}' if added else '没有可拉入的需求')
     if blocked:
         msg += f'；{len(blocked)} 条被阻止（只有「规划池」的需求能进版本，R7）：{"、".join(blocked)}'
+    if blocked_prod:
+        msg += f'；{len(blocked_prod)} 条属于其他产品，不能拉入本版本：{"、".join(blocked_prod)}'
     _ulog('版本', no, '拉入需求', ','.join(added))
     flash(msg, 'warning' if blocked else 'success')
     return redirect(url_for('version_plan.version_detail', no=no))
@@ -856,12 +1150,14 @@ def version_status(no):
         else:
             db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, content, status, created_at, updated_at) '
                        'VALUES (?,?,?,?,?)', (no, draft, '草稿', _now(), _now()))
-        # 客户在用版本自动更新
+        # 客户在用版本自动更新（同产品内定位客户）
         for cust in [c for c in (v['target_customers'] or '').split(',') if c]:
-            c0 = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?', (cust,)).fetchone()
+            c0 = db.execute(
+                f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=? AND product_code=?',
+                (cust, v['product_code'] or '')).fetchone()
             if c0:
-                db.execute(f'UPDATE {_t(L_CUSTOMERS)} SET current_version_no=?, updated_at=? WHERE name=?',
-                           (no, _now(), cust))
+                db.execute(f'UPDATE {_t(L_CUSTOMERS)} SET current_version_no=?, updated_at=? WHERE name=? AND product_code=?',
+                           (no, _now(), cust, v['product_code'] or ''))
         extra = f'{n} 条需求已自动变为「已发布」，Release Note 草稿已生成，客户在用版本已更新。'
     else:
         db.execute(f'UPDATE {_t(L_VERSIONS)} SET status=?, updated_at=? WHERE version_no=?',
@@ -994,51 +1290,77 @@ def release_md(no):
 def customers():
     _ensure_tables()
     db = get_db()
+    prod = _req_product()
     if request.method == 'POST':
         if not _can_manage():
             return _deny()
         f = request.form
         name = (f.get('name') or '').strip()
+        prod = (f.get('product_code') or '').strip()
         if not name:
             flash('客户名称必填', 'error')
+            return redirect(url_for('version_plan.customers', product=prod))
+        if prod and not _ensure_product(db, prod):
+            flash('所选产品不存在，请重新选择', 'error')
             return redirect(url_for('version_plan.customers'))
         itg = (f.get('integrating_version_no') or '').strip()
         if itg:
-            row = db.execute(f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} '
-                             'WHERE integrating_version_no=? AND name<>?', (itg, name)).fetchall()
+            row = db.execute(
+                f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} '
+                'WHERE integrating_version_no=? AND name<>? AND product_code=?',
+                (itg, name, prod)).fetchall()
             if row:
                 flash(f'「{itg}」已被客户 {row[0]["name"]} 标为集成中，同一版本同时只能给一个客户做集成（R4）', 'error')
-                return redirect(url_for('version_plan.customers'))
+                return redirect(url_for('version_plan.customers', product=prod))
         # 定制分支必须带合回目标与期限（R2）
         cb = (f.get('custom_branch_no') or '').strip()
         if cb and (not (f.get('merge_target_no') or '').strip() or not (f.get('merge_deadline') or '').strip()):
             flash('填了定制分支版本，就必须同时填「合回目标版本」和「合回期限」（R2）', 'error')
-            return redirect(url_for('version_plan.customers'))
+            return redirect(url_for('version_plan.customers', product=prod))
         now = _now()
-        old = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?', (name,)).fetchone()
+        is_edit = f.get('mode') == 'edit'
+        old = db.execute(
+            f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?',
+            (name,)).fetchone()
         vals = (itg, cb, (f.get('merge_target_no') or '').strip(),
                 (f.get('merge_deadline') or '').strip(), (f.get('contact') or '').strip(),
-                (f.get('note') or '').strip(), (f.get('current_version_no') or '').strip(), now, name)
-        if old:
+                (f.get('note') or '').strip(), (f.get('current_version_no') or '').strip(), now, name, prod)
+        if is_edit:
+            if not old:
+                flash(f'客户「{name}」不存在，无法编辑', 'error')
+                return redirect(url_for('version_plan.customers', product=prod))
             db.execute(f'''UPDATE {_t(L_CUSTOMERS)} SET integrating_version_no=?, custom_branch_no=?,
                         merge_target_no=?, merge_deadline=?, contact=?, note=?, current_version_no=?,
-                        updated_at=? WHERE name=?''', vals)
+                        product_code=?, updated_at=? WHERE name=?''',
+                       (itg, cb, (f.get('merge_target_no') or '').strip(),
+                        (f.get('merge_deadline') or '').strip(), (f.get('contact') or '').strip(),
+                        (f.get('note') or '').strip(), (f.get('current_version_no') or '').strip(),
+                        prod, now, name))
         else:
+            # 客户名全局唯一校验（DB 层 UNIQUE 兜底）；新建重名一律拦截，不静默转成编辑
+            if old:
+                flash(f'已有客户「{name}」，请改名或在列表里点「编辑」更新', 'error')
+                return redirect(url_for('version_plan.customers', product=prod))
             db.execute(f'''INSERT INTO {_t(L_CUSTOMERS)}
                         (integrating_version_no, custom_branch_no, merge_target_no, merge_deadline,
-                         contact, note, current_version_no, updated_at, name, created_at)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)''', vals + (now,))
+                         contact, note, current_version_no, updated_at, name, product_code, created_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)''', vals + (now,))
         db.commit()
-        _ulog('客户', name, '保存', '')
+        _ulog('客户', name, '保存', f'产品 {_product_name(db, prod)}')
         flash(f'客户「{name}」已保存', 'success')
-        return redirect(url_for('version_plan.customers'))
-    rows = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
-    versions = db.execute(f'SELECT version_no, status, release_date FROM {_t(L_VERSIONS)} '
-                          'ORDER BY id DESC').fetchall()
+        return redirect(url_for('version_plan.customers', product=prod))
+    where, args = _prod_where(prod)
+    wsql = ('WHERE ' + where) if where else ''
+    rows = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} {wsql} ORDER BY name', args).fetchall()
+    versions = db.execute(
+        f'SELECT version_no, status, release_date FROM {_t(L_VERSIONS)} {wsql} ORDER BY id DESC', args).fetchall()
     warn = [r for r in rows if r['custom_branch_no'] and r['merge_deadline'] and r['merge_deadline'] < _today()]
     edit_name = (request.args.get('edit') or '').strip()
-    edit_row = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?', (edit_name,)).fetchone() if edit_name else None
+    edit_row = db.execute(
+        f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?{" AND product_code=?" if prod else ""}',
+        [edit_name] + ([prod] if prod else [])).fetchone() if edit_name else None
     return render_template('vp_customers.html', rows=rows, versions=versions, warn=warn,
+                           products=_product_rows(db), product=prod, prod_map=_product_map(db),
                            can_manage=_can_manage(), today=_today(), edit_row=edit_row)
 
 
@@ -1048,25 +1370,30 @@ def report():
     _ensure_tables()
     db = get_db()
     cust = (request.args.get('customer') or '').strip()
-    customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} ORDER BY name').fetchall()
+    prod = _req_product()
+    where, args = _prod_where(prod)
+    cwhere, cargs = _prod_where(prod)
+    cwsql = ('WHERE ' + cwhere) if cwhere else ''
+    customers = db.execute(f'SELECT name FROM {_t(L_CUSTOMERS)} {cwsql} ORDER BY name', cargs).fetchall()
     if not cust and customers:
         cust = customers[0]['name']
     rows = []
     if cust:
-        rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE customer_name=? ORDER BY id',
-                          (cust,)).fetchall()
+        q = f'SELECT * FROM {_t(L_DEMANDS)} WHERE customer_name=?{" AND product_code=?" if prod else ""} ORDER BY id'
+        rows = db.execute(q, [cust] + ([prod] if prod else [])).fetchall()
     # 汇总
     summary = {}
     for r in rows:
         summary[r['status']] = summary.get(r['status'], 0) + 1
     text = _report_text(db, cust, rows) if cust else ''
     release_map = {r['version_no']: (r['release_date'] or '待定')
-                   for r in db.execute(f'SELECT version_no, release_date FROM {_t(L_VERSIONS)}').fetchall()}
+                   for r in db.execute(f'SELECT version_no, release_date FROM {_t(L_VERSIONS)} {cwsql}', cargs).fetchall()}
     return render_template('vp_report.html', customers=customers, cust=cust, rows=rows,
+                           product=prod, products=_product_rows(db), prod_map=_product_map(db),
                            summary=summary, text=text, can_manage=_can_manage(), release_map=release_map)
 
 
-def _report_text(db, cust, rows):
+def _report_text(db, cust, rows, prod=''):
     lines = [f'{cust} 需求兑现情况（{_today()}）', '']
     if not rows:
         lines.append('截至今日，暂无登记的需求。')
@@ -1084,8 +1411,9 @@ def _report_text(db, cust, rows):
     if sch:
         lines.append('二、已排期（未发布）')
         for r in sch:
-            v = db.execute(f'SELECT release_date, status FROM {_t(L_VERSIONS)} WHERE version_no=?',
-                           (r['version_no'],)).fetchone()
+            v = db.execute(
+                f'SELECT release_date, status FROM {_t(L_VERSIONS)} WHERE version_no=?'
+                ' AND product_code=?', (r['version_no'], r['product_code'] or '')).fetchone()
             eta = (v['release_date'] if v and v['release_date'] else '待定')
             lines.append(f'  • {r["code"]}（溯源 {r["doc_ref"]}）{r["description"]}｜版本 {r["version_no"]}｜预计发布 {eta}')
         lines.append('')
@@ -1095,7 +1423,11 @@ def _report_text(db, cust, rows):
             note = f'：{r["filter_note"]}' if r['filter_note'] else ''
             lines.append(f'  • {r["code"]}（溯源 {r["doc_ref"]}）{r["description"]}｜当前「{r["status"]}」{note}')
         lines.append('')
-    cust_row = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?', (cust,)).fetchone()
+    if prod:
+        cust_row = db.execute(
+            f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=? AND product_code=?', (cust, prod)).fetchone()
+    else:
+        cust_row = db.execute(f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?', (cust,)).fetchone()
     if cust_row:
         lines.append('当前在用版本：' + (cust_row['current_version_no'] or '未登记'))
         if cust_row['integrating_version_no']:
@@ -1111,9 +1443,11 @@ def report_text():
     _ensure_tables()
     db = get_db()
     cust = (request.args.get('customer') or '').strip()
-    rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE customer_name=? ORDER BY id',
-                      (cust,)).fetchall() if cust else []
-    return jsonify({'ok': True, 'customer': cust, 'text': _report_text(db, cust, rows)})
+    prod = _req_product()
+    rows = db.execute(
+        f'SELECT * FROM {_t(L_DEMANDS)} WHERE customer_name=?{" AND product_code=?" if prod else ""} ORDER BY id',
+        [cust] + ([prod] if prod else [])).fetchall() if cust else []
+    return jsonify({'ok': True, 'customer': cust, 'text': _report_text(db, cust, rows, prod)})
 
 
 # ---------------------------------------------------------------- 设置（模块字典）
@@ -1156,14 +1490,17 @@ def _modules():
 #   GET /version_plan/__openapi/datasets                       → 声明数据集
 #   GET /version_plan/__openapi/rows?table=&limit=&offset=     → 分页取行
 OPENAPI_TABLES = {
+    L_PRODUCTS: ('产品', 'id', 'created_at',
+                 '一行=一个产品；code 产品编号；name 产品名；owner 负责人；status 启用/停用；'
+                 'demands/versions/customers 均通过 product_code 归属到产品'),
     L_DEMANDS: ('需求（过滤+排期）', 'id', 'raised_at',
-                '一行=一条需求；code 需求编号；status：待过滤/规划池/挂起/已排期/已发布/不做；'
+                '一行=一条需求；code 需求编号；product_code 所属产品；status：待过滤/规划池/挂起/已排期/已发布/不做；'
                 'version_no 排入版本；doc_ref 云文档溯源；filter_result 过滤结论；is_custom 是否定制'),
     L_VERSIONS: ('版本', 'id', 'release_date',
-                 '一行=一个版本；version_no 版本号；status：规划中/已冻结/开发中/测试中/已发布/已归档；'
+                 '一行=一个版本；version_no 版本号；product_code 所属产品；status：规划中/已冻结/开发中/测试中/已发布/已归档；'
                  'vtype：迭代/热修复/客户定制；freeze_date/test_date/release_date 里程碑'),
     L_CUSTOMERS: ('客户与客户-版本矩阵', 'id', 'updated_at',
-                  '一行=一个客户；current_version_no 当前在用版本；integrating_version_no 集成中版本；'
+                  '一行=一个客户；product_code 所属产品；current_version_no 当前在用版本；integrating_version_no 集成中版本；'
                   'custom_branch_no 定制分支；merge_target_no/merge_deadline 计划合回与期限'),
     L_RELEASES: ('发布说明 Release Notes', 'id', 'updated_at',
                  '一行=一个版本的发布说明；status：草稿/定稿；content 为 Markdown 正文'),

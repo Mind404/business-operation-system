@@ -218,6 +218,26 @@
 .vp-tab { padding: 5px 13px; border-radius: 8px; font-size: 12.5px; color: var(--vp-ink-2); text-decoration: none; }
 .vp-tab.on { background: #fff; color: var(--vp-ink); font-weight: 600; box-shadow: 0 1px 3px rgba(16, 32, 64, .08); }
 
+/* ---------- 二级导航 ---------- */
+.vp-nav { display: flex; gap: 4px; flex-wrap: wrap; background: #fff; border: 1px solid var(--vp-line); border-radius: 12px; padding: 5px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(16, 32, 64, .04); }
+.vp-nav-item { padding: 7px 13px; border-radius: 9px; font-size: 13px; color: var(--vp-ink-2); text-decoration: none; white-space: nowrap; }
+.vp-nav-item:hover { background: var(--vp-blue-soft); color: var(--vp-blue); }
+.vp-nav-item.on { background: var(--vp-blue); color: #fff; font-weight: 600; }
+
+/* ---------- 产品卡片 ---------- */
+.vp-prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+.vp-prod-card { display: block; background: #fff; border: 1px solid var(--vp-line); border-radius: 14px; padding: 15px 16px; text-decoration: none; color: var(--vp-ink); transition: border-color .15s, box-shadow .15s, transform .05s; }
+.vp-prod-card:hover { border-color: #c8d6ee; box-shadow: 0 4px 16px rgba(47, 107, 255, .12); }
+.vp-prod-card.off { background: #f7f9fc; opacity: .72; }
+.vp-prod-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.vp-prod-name { font-size: 15.5px; font-weight: 650; color: var(--vp-ink); margin-right: 8px; text-decoration: none; }
+.vp-prod-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--vp-line-2); }
+.vp-prod-stats div { display: flex; flex-direction: column; gap: 2px; }
+.vp-prod-stats b { font-size: 18px; color: var(--vp-ink); font-variant-numeric: tabular-nums; }
+.vp-prod-stats span { font-size: 11px; color: var(--vp-ink-3); }
+
+.vp-req { color: var(--vp-red); }
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 1180px) {
   .vp-kpis { grid-template-columns: repeat(2, 1fr); }
