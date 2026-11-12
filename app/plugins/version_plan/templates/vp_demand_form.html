@@ -13,7 +13,7 @@
 
 <div class="vp-toolbar">
   <a class="vp-btn" href="{{ url_for('version_plan.demands', product=(d['product_code'] if d else product) or '') }}">← 返回列表</a>
-  {% if d and d['version_no'] %}<a class="vp-btn" href="{{ url_for('version_plan.version_detail', no=d['version_no']) }}">看所在版本</a>{% endif %}
+  {% if d and d['version_no'] %}<a class="vp-btn" href="{{ url_for('version_plan.version_detail', no=d['version_no'], product=d['product_code']) }}">看所在版本</a>{% endif %}
 </div>
 
 {% set active = 'demands' %}{% set product = (d['product_code'] if d else product) or '' %}
@@ -73,6 +73,11 @@
         <select class="vp-select" name="demand_type">
           {% for t in dtypes %}<option value="{{ t }}" {{ 'selected' if d and d['demand_type'] == t }}>{{ t }}</option>{% endfor %}
         </select>
+      </div>
+      <div class="vp-field">
+        <label class="vp-label">预估人日（装车容量口径）</label>
+        <input class="vp-input" name="estimate" type="number" min="0" step="0.5"
+               value="{{ d['estimate'] if d and d['estimate'] else '2' }}" placeholder="如 3.5">
       </div>
       <div class="vp-field">
         <label class="vp-label">是否客户定制</label>

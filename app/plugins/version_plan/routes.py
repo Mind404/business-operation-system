@@ -29,6 +29,14 @@ L_CUSTOMERS = 'version_plan_customers'
 L_RELEASES = 'version_plan_releases'
 L_LOGS = 'version_plan_logs'
 L_META = 'version_plan_meta'
+L_TRAINS = 'version_plan_trains'
+L_ITEMS = 'version_plan_items'
+L_LOADCHG = 'version_plan_load_changes'
+L_ASSESS = 'version_plan_assessments'
+L_CHECKS = 'version_plan_checks'
+L_SIGNOFFS = 'version_plan_signoffs'
+L_NOTICES = 'version_plan_notices'
+L_CUSTPROD = 'version_plan_customer_products'
 
 _T = {}
 
@@ -70,8 +78,9 @@ DDL = [
         updated_at TEXT)'''),
     (L_VERSIONS, L_VERSIONS, '''CREATE TABLE IF NOT EXISTS version_plan_versions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        version_no TEXT NOT NULL UNIQUE,
+        version_no TEXT NOT NULL,
         vtype TEXT DEFAULT '迭代',
+        product_code TEXT DEFAULT '',
         base_version_no TEXT DEFAULT '',
         freeze_date TEXT DEFAULT '',
         test_date TEXT DEFAULT '',
@@ -90,7 +99,8 @@ DDL = [
         unfreeze_log TEXT DEFAULT '',
         released_at TEXT DEFAULT '',
         created_at TEXT,
-        updated_at TEXT)'''),
+        updated_at TEXT,
+        UNIQUE(product_code, version_no))'''),
     (L_DEMANDS, L_DEMANDS, '''CREATE TABLE IF NOT EXISTS version_plan_demands (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT NOT NULL UNIQUE,
@@ -117,12 +127,14 @@ DDL = [
         updated_at TEXT)'''),
     (L_RELEASES, L_RELEASES, '''CREATE TABLE IF NOT EXISTS version_plan_releases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        version_no TEXT NOT NULL UNIQUE,
+        version_no TEXT NOT NULL,
+        product_code TEXT DEFAULT '',
         content TEXT DEFAULT '',
         status TEXT DEFAULT '草稿',
         created_at TEXT,
         updated_at TEXT,
-        finalized_by TEXT DEFAULT '')'''),
+        finalized_by TEXT DEFAULT '',
+        UNIQUE(product_code, version_no))'''),
     (L_LOGS, L_LOGS, '''CREATE TABLE IF NOT EXISTS version_plan_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         obj_type TEXT DEFAULT '',
@@ -136,6 +148,80 @@ DDL = [
         kind TEXT DEFAULT '',
         value TEXT DEFAULT '',
         created_at TEXT)'''),
+    # ---- v13.0.1 版本火车 / 装车 / 评估 / 签核 / 回告 ----
+    (L_TRAINS, L_TRAINS, '''CREATE TABLE IF NOT EXISTS version_plan_trains (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE,
+        product_code TEXT DEFAULT '',
+        month TEXT DEFAULT '',
+        status TEXT DEFAULT '计划',
+        skip_reason TEXT DEFAULT '',
+        release_day TEXT DEFAULT '',
+        capacity REAL DEFAULT 40,
+        capacity_unit TEXT DEFAULT '人日',
+        merged_into TEXT DEFAULT '',
+        created_at TEXT,
+        updated_at TEXT)'''),
+    (L_ITEMS, L_ITEMS, '''CREATE TABLE IF NOT EXISTS version_plan_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        train_code TEXT NOT NULL,
+        demand_code TEXT NOT NULL,
+        state TEXT DEFAULT '已装',
+        added_at TEXT,
+        removed_at TEXT,
+        reason TEXT DEFAULT '')''' ),
+    (L_LOADCHG, L_LOADCHG, '''CREATE TABLE IF NOT EXISTS version_plan_load_changes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        demand_code TEXT NOT NULL,
+        from_train TEXT DEFAULT '',
+        to_train TEXT DEFAULT '',
+        action TEXT DEFAULT '',
+        operator TEXT DEFAULT '',
+        created_at TEXT)''' ),
+    (L_ASSESS, L_ASSESS, '''CREATE TABLE IF NOT EXISTS version_plan_assessments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        demand_code TEXT NOT NULL,
+        round INTEGER DEFAULT 1,
+        w_value INTEGER DEFAULT 3,
+        w_client INTEGER DEFAULT 3,
+        w_urgent INTEGER DEFAULT 3,
+        w_cost INTEGER DEFAULT 3,
+        score REAL DEFAULT 0,
+        verdict TEXT DEFAULT '',
+        comment TEXT DEFAULT '',
+        operator TEXT DEFAULT '',
+        created_at TEXT)''' ),
+    (L_CHECKS, L_CHECKS, '''CREATE TABLE IF NOT EXISTS version_plan_checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version_no TEXT NOT NULL,
+        product_code TEXT DEFAULT '',
+        item_no INTEGER NOT NULL,
+        result TEXT DEFAULT 'pending',
+        evidence TEXT DEFAULT '',
+        checked_by TEXT DEFAULT '',
+        checked_at TEXT DEFAULT '')''' ),
+    (L_SIGNOFFS, L_SIGNOFFS, '''CREATE TABLE IF NOT EXISTS version_plan_signoffs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version_no TEXT NOT NULL,
+        product_code TEXT DEFAULT '',
+        role TEXT NOT NULL,
+        verdict TEXT DEFAULT '',
+        comment TEXT DEFAULT '',
+        signed_at TEXT DEFAULT '')''' ),
+    (L_NOTICES, L_NOTICES, '''CREATE TABLE IF NOT EXISTS version_plan_notices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER DEFAULT 0,
+        customer_name TEXT DEFAULT '',
+        version_no TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        sent_at TEXT DEFAULT '',
+        created_at TEXT)''' ),
+    (L_CUSTPROD, L_CUSTPROD, '''CREATE TABLE IF NOT EXISTS version_plan_customer_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER DEFAULT 0,
+        product_code TEXT DEFAULT '',
+        in_use_version TEXT DEFAULT '',
+        upgrading_version TEXT DEFAULT '')''' ),
 ]
 
 
@@ -171,7 +257,71 @@ def _migrate(db=None):
         cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(logical)})').fetchall()]
         if 'product_code' not in cols:
             db.execute(f'ALTER TABLE {_t(logical)} ADD COLUMN product_code TEXT DEFAULT ""')
+    # v13.0.1：需求补「人日 / 评分 / 来源」三列，装车与评估要用
+    for col, ddl in (('estimate', 'REAL DEFAULT 0'), ('score', 'REAL DEFAULT 0'),
+                     ('source_type', 'TEXT DEFAULT ""'), ('source_ref', 'TEXT DEFAULT ""')):
+        cols = [r[1] for r in db.execute(f'PRAGMA table_info({_t(L_DEMANDS)})').fetchall()]
+        if col not in cols:
+            db.execute(f'ALTER TABLE {_t(L_DEMANDS)} ADD COLUMN {col} {ddl}')
+    _migrate_version_key(db)
+    _migrate_release_key(db)
     db.commit()
+
+
+def _migrate_version_key(db):
+    """v13.0.1 缺陷修复：版本号由「全局唯一」改为「产品内唯一」。
+
+    多产品场景下第二个产品无法使用 1.0.0（唯一索引冲突直接 500），
+    老库需要重建表：去掉 version_no 单列唯一索引，改为 (product_code, version_no) 联合唯一。
+    """
+    tbl = _t(L_VERSIONS)
+    global_unique = False
+    for idx in db.execute(f'PRAGMA index_list({tbl})').fetchall():
+        if idx['unique'] and idx['origin'] == 'u':
+            cols = [c['name'] for c in db.execute(f"PRAGMA index_info('{idx['name']}')").fetchall()]
+            if cols == ['version_no']:
+                global_unique = True
+                break
+    if not global_unique:
+        return
+    tmp = tbl + '_rk_mig'
+    cols = [r[1] for r in db.execute(f'PRAGMA table_info({tbl})').fetchall()]
+    db.execute(f'ALTER TABLE {tbl} RENAME TO {tmp}')
+    for logical, desired, ddl in DDL:
+        if logical == L_VERSIONS:
+            db.execute(ddl)
+            break
+    col_sql = ', '.join(cols)
+    db.execute(f'INSERT INTO {tbl} ({col_sql}) SELECT {col_sql} FROM {tmp}')
+    db.execute(f'DROP TABLE {tmp}')
+
+
+def _migrate_release_key(db):
+    """v13.0.1 缺陷修复：发布说明由「版本号全局唯一」改为「(产品, 版本号) 唯一」。
+
+    否则多个产品的 1.0.0 会共用同一份 Release Note（A 产品的发布说明被 B 产品覆盖）。
+    """
+    tbl = _t(L_RELEASES)
+    hit = False
+    for idx in db.execute(f'PRAGMA index_list({tbl})').fetchall():
+        if idx['unique'] and idx['origin'] == 'u':
+            cols = [c['name'] for c in db.execute(f"PRAGMA index_info('{idx['name']}')").fetchall()]
+            if cols == ['version_no']:
+                hit = True
+                break
+    if not hit:
+        return
+    tmp = tbl + '_rk_mig'
+    cols = [r[1] for r in db.execute(f'PRAGMA table_info({tbl})').fetchall()]
+    db.execute(f'ALTER TABLE {tbl} RENAME TO {tmp}')
+    for logical, desired, ddl in DDL:
+        if logical == L_RELEASES:
+            db.execute(ddl)
+            break
+    if 'product_code' not in cols:
+        cols = cols + ['product_code']
+    db.execute(f'INSERT INTO {tbl} ({", ".join(cols)}) SELECT {", ".join(cols)} FROM {tmp}')
+    db.execute(f'DROP TABLE {tmp}')
 
 
 def _t(logical):
@@ -216,11 +366,32 @@ def _prod_where(product, table_alias=''):
     return f'{col}=?', [product]
 
 
+def _safe_estimate(db, code, raw):
+    """写预估人日：非数字或负数一律按 0 处理，避免容量统计被脏值污染。"""
+    try:
+        v = float(raw or 0)
+        if v < 0 or v != v:
+            v = 0.0
+    except (TypeError, ValueError):
+        v = 0.0
+    db.execute(f'UPDATE {_t(L_DEMANDS)} SET estimate=? WHERE code=?', (v, code))
+
+
 def _ensure_product(db, code):
     """产品存在且启用则返回行；否则 None。"""
     if not code:
         return None
     return db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+
+
+def _rel_row(db, no, prod):
+    """发布说明定位：优先取本产品记录；老库（改造前写入）只有 product_code='' 的全局记录，做一次兼容回退。"""
+    rel = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=? AND product_code=?',
+                     (no, prod or '')).fetchone()
+    if rel:
+        return rel
+    return db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=? AND product_code=""',
+                      (no,)).fetchone()
 
 
 def _vrow(db, no, prod=''):
@@ -606,6 +777,7 @@ def demand_new():
          (f.get('demand_type') or '新增功能'), '', '', (f.get('version_no') or ''),
          1 if f.get('is_custom') else 0, (f.get('custom_customer') or '').strip(),
          '待过滤', (f.get('note') or '').strip(), prod, now, now))
+    _safe_estimate(db, code, f.get('estimate'))
     db.commit()
     sims = _similar(db, desc, product=prod)
     _log('新增需求', f'{code} {desc[:30]}')
@@ -671,6 +843,7 @@ def demand_edit(code):
          (f.get('acceptance') or '').strip(), (f.get('demand_type') or '新增功能'),
          1 if f.get('is_custom') else 0, (f.get('custom_customer') or '').strip(),
          (f.get('note') or '').strip(), new_prod, _now(), code))
+    _safe_estimate(db, code, f.get('estimate'))
     db.commit()
     _ulog('需求', code, '编辑', '更新需求信息')
     flash(f'已保存 {code}', 'success')
@@ -905,7 +1078,8 @@ def versions():
     counts = {}
     for r in rows:
         counts[r['version_no']] = db.execute(
-            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=?', (r['version_no'],)).fetchone()['c']
+            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=? AND product_code=?',
+            (r['version_no'], r['product_code'] or '')).fetchone()['c']
         r['stage'] = STAGE_MAP.get(r['status'], 0)
     # 规划池只列同产品
     pool = db.execute(
@@ -938,11 +1112,11 @@ def version_new():
     if not re.fullmatch(r'[0-9]+(?:\.[0-9A-Za-z]+){2,}(?:-[0-9A-Za-z._]+)?', no):
         flash(f'版本号「{no}」格式不对：请用 主.次.修订（如 1.2.0），定制版可加客户后缀（如 1.2.0-A）', 'error')
         return redirect(url_for('version_plan.versions', product=prod))
-    # 版本号全局唯一（DB 层 UNIQUE 兜底），创建后不可改（R4）
+    # 版本号「产品内唯一」（DB 层 UNIQUE(product_code, version_no) 兜底），创建后不可改（R4）
     exists = db.execute(
-        f'SELECT 1 FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+        f'SELECT 1 FROM {_t(L_VERSIONS)} WHERE version_no=? AND product_code=?', (no, prod)).fetchone()
     if exists:
-        flash(f'版本号 {no} 已存在（版本号全局唯一且创建后不可改，R4）', 'error')
+        flash(f'产品 {_product_name(db, prod)} 下版本号 {no} 已存在（产品内唯一且创建后不可改，R4）', 'error')
         return redirect(url_for('version_plan.versions', product=prod))
     # R2：定制版本必须填合回目标与期限
     if vtype == '客户定制':
@@ -996,20 +1170,27 @@ def version_detail(no):
         db.commit()
         _ulog('版本', no, '编辑', '更新里程碑/元数据（版本号不可改）')
         flash(f'{no} 已保存（版本号不可修改，R4）', 'success')
-        return redirect(url_for('version_plan.version_detail', no=no))
-    ds = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE version_no=? ORDER BY id', (no,)).fetchall()
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+    ds = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE version_no=? AND product_code=? ORDER BY id',
+                    (no, v['product_code'] or '')).fetchall()
     pool = db.execute(
         f'SELECT * FROM {_t(L_DEMANDS)} WHERE status="规划池" AND product_code=? ORDER BY id',
         (v['product_code'] or '',)).fetchall()
     customers = db.execute(
         f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=? ORDER BY name',
         (v['product_code'] or '',)).fetchall()
-    release = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=?', (no,)).fetchone()
+    release = _rel_row(db, no, v['product_code'] or '')
     logs = db.execute(f'SELECT * FROM {_t(L_LOGS)} WHERE obj_no=? ORDER BY id DESC LIMIT 20',
                       (no,)).fetchall()
     frozen = v['status'] == '已冻结'
     can_edit = _can_manage() and v['status'] in ('规划中', '已冻结')
+    from .trains import CHECK_ITEMS, ensure_checks, ensure_signoffs, release_gate
+    ensure_checks(db, no, v['product_code'] or '')
+    roles = ensure_signoffs(db, no, v['product_code'] or '', v['vtype'])
+    gate = release_gate(db, no, v['product_code'] or '', v['vtype'])
     return render_template('vp_version_detail.html', v=v, ds=ds, pool=pool, customers=customers,
+                           gate=gate, checks=gate['checks'], signs=gate['signs'],
+                           sign_roles=roles, check_items=CHECK_ITEMS,
                            release=release, logs=logs, frozen=frozen, can_edit=can_edit,
                            prod_map=_product_map(db), prod_name=_product_name(db, v['product_code'] or ''),
                            can_manage=_can_manage(), is_platform=_is_platform(),
@@ -1025,21 +1206,21 @@ def version_add(no):
     if not _can_manage():
         return _deny()
     db = get_db()
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
     # R1：冻结后不可增删
     if v['status'] == '已冻结':
         flash(f'{no} 已冻结，不能再增删需求（R1）。确需调整请由平台管理员强制解冻并留痕。', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     if v['status'] not in ('规划中',):
         flash(f'{no} 当前状态「{v["status"]}」，只有「规划中」的版本能调整需求构成', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     codes = [c.strip() for c in request.form.getlist('codes') if c.strip()]
     if not codes:
         flash('请先勾选要拉入的规划池需求', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     added, blocked, blocked_prod = [], [], []
     for code in codes:
         d = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE code=?', (code,)).fetchone()
@@ -1062,7 +1243,7 @@ def version_add(no):
         msg += f'；{len(blocked_prod)} 条属于其他产品，不能拉入本版本：{"、".join(blocked_prod)}'
     _ulog('版本', no, '拉入需求', ','.join(added))
     flash(msg, 'warning' if blocked else 'success')
-    return redirect(url_for('version_plan.version_detail', no=no))
+    return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
 
 @blueprint.route('/version_plan/versions/<no>/remove', methods=['POST'])
@@ -1071,23 +1252,23 @@ def version_remove(no):
     if not _can_manage():
         return _deny()
     db = get_db()
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
     if v['status'] == '已冻结':
         flash(f'{no} 已冻结，不能再增删需求（R1）', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     if v['status'] != '规划中':
         flash(f'{no} 当前状态「{v["status"]}」，不能调整需求构成', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     code = (request.form.get('code') or '').strip()
     db.execute(f'UPDATE {_t(L_DEMANDS)} SET version_no="", status="规划池", updated_at=? WHERE code=?',
                (_now(), code))
     db.commit()
     _ulog('版本', no, '移出需求', code)
     flash(f'已把 {code} 移出 {no}，回到规划池', 'success')
-    return redirect(url_for('version_plan.version_detail', no=no))
+    return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
 
 @blueprint.route('/version_plan/versions/<no>/status', methods=['POST'])
@@ -1096,7 +1277,7 @@ def version_status(no):
     if not _can_manage():
         return _deny()
     db = get_db()
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
@@ -1106,50 +1287,60 @@ def version_status(no):
     if target == '规划中' and v['status'] == '已冻结':
         if not _is_platform():
             flash('解冻只能由平台管理员执行（R1）', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no))
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         reason = (request.form.get('reason') or '').strip()
         if not reason:
             flash('强制解冻必须填写原因，便于留痕（R1）', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no))
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         log = (v['unfreeze_log'] or '')
         log += f'[{_now()}] {session.get("username")} 强制解冻：{reason}\n'
         db.execute(f'UPDATE {_t(L_VERSIONS)} SET status="规划中", unfreeze_log=?, updated_at=? '
-                   'WHERE version_no=?', (log, _now(), no))
+                   'WHERE version_no=? AND product_code=?', (log, _now(), no, v['product_code'] or ''))
         db.commit()
         _ulog('版本', no, '强制解冻', reason)
         _log('版本解冻', f'{no} 原因：{reason}')
         flash(f'{no} 已强制解冻，原因已记入留痕（R1）', 'warning')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
     allowed = VERSION_FLOW.get(v['status'], [])
     if target not in allowed:
         flash(f'状态不能从「{v["status"]}」直接到「{target}」；下一步只能是：{"、".join(allowed) or "无"}', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     extra = ''
     if target == '已冻结':
         cnt = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=?', (no,)).fetchone()['c']
         if cnt == 0:
             flash('版本里还没有需求，不能冻结', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no))
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         db.execute(f'UPDATE {_t(L_VERSIONS)} SET status="已冻结", frozen_at=?, frozen_by=?, updated_at=? '
-                   'WHERE version_no=?', (_now(), session.get('username', ''), _now(), no))
+                   'WHERE version_no=? AND product_code=?',
+                   (_now(), session.get('username', ''), _now(), no, v['product_code'] or ''))
         extra = '冻结后需求构成不可再增删（R1）。'
     elif target == '已发布':
+        # v13.0.1：发布受控 —— 确认清单 7 项全通过 + 三方（定制版四方）签核，缺一不可
+        from .trains import release_gate
+        gate = release_gate(db, no, v['product_code'] or '', v['vtype'])
+        if not gate['ok']:
+            flash('发布门禁未通过：' + '；'.join(gate['reasons']), 'error')
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         db.execute(f'UPDATE {_t(L_VERSIONS)} SET status="已发布", released_at=?, updated_at=? '
-                   'WHERE version_no=?', (_now(), _now(), no))
-        # 需求状态自动推进到已发布（R3 前置已满足：版本此刻就是已发布）
-        n = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=?', (no,)).fetchone()['c']
-        db.execute(f'UPDATE {_t(L_DEMANDS)} SET status="已发布", updated_at=? WHERE version_no=?',
-                   (_now(), no))
+                   'WHERE version_no=? AND product_code=?',
+                   (_now(), _now(), no, v['product_code'] or ''))
+        # 需求状态自动推进到已发布（仅本产品本版本，不波及其它产品的同号版本）
+        prod = v['product_code'] or ''
+        n = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=? AND product_code=?',
+                       (no, prod)).fetchone()['c']
+        db.execute(f'UPDATE {_t(L_DEMANDS)} SET status="已发布", updated_at=? '
+                   'WHERE version_no=? AND product_code=?', (_now(), no, prod))
         # 自动生成 Release Note 草稿
-        draft = _build_release(db, no)
-        rel = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=?', (no,)).fetchone()
+        draft = _build_release(db, no, prod)
+        rel = _rel_row(db, no, prod)
         if rel:
-            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? WHERE version_no=?',
-                       (draft, _now(), no))
+            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? '
+                       'WHERE version_no=? AND product_code=?', (draft, _now(), no, prod))
         else:
-            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, content, status, created_at, updated_at) '
-                       'VALUES (?,?,?,?,?)', (no, draft, '草稿', _now(), _now()))
+            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, product_code, content, status, created_at, updated_at) '
+                       'VALUES (?,?,?,?,?,?)', (no, prod, draft, '草稿', _now(), _now()))
         # 客户在用版本自动更新（同产品内定位客户）
         for cust in [c for c in (v['target_customers'] or '').split(',') if c]:
             c0 = db.execute(
@@ -1160,19 +1351,21 @@ def version_status(no):
                            (no, _now(), cust, v['product_code'] or ''))
         extra = f'{n} 条需求已自动变为「已发布」，Release Note 草稿已生成，客户在用版本已更新。'
     else:
-        db.execute(f'UPDATE {_t(L_VERSIONS)} SET status=?, updated_at=? WHERE version_no=?',
-                   (target, _now(), no))
+        db.execute(f'UPDATE {_t(L_VERSIONS)} SET status=?, updated_at=? '
+                   'WHERE version_no=? AND product_code=?', (target, _now(), no, v['product_code'] or ''))
     db.commit()
     _ulog('版本', no, f'状态→{target}', extra)
     _log('版本状态', f'{no} → {target}')
     flash(f'{no} 状态已变为「{target}」。{extra}', 'success')
-    return redirect(url_for('version_plan.version_detail', no=no))
+    return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
 
-def _build_release(db, no):
+def _build_release(db, no, prod=''):
     """根据版本数据自动生成 Release Note 草稿"""
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
-    ds = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE version_no=? ORDER BY id', (no,)).fetchall()
+    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=? AND product_code=?',
+                   (no, prod or '')).fetchone()
+    ds = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE version_no=? AND product_code=? ORDER BY id',
+                    (no, prod or '')).fetchall()
     groups = {k: [] for k in DEMAND_TYPE}
     for d in ds:
         groups.setdefault(d['demand_type'] or '新增功能', []).append(d)
@@ -1219,23 +1412,23 @@ def version_release(no):
     if not _can_manage():
         return _deny()
     db = get_db()
-    v = db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
     act = (request.form.get('act') or 'save').strip()
-    rel = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=?', (no,)).fetchone()
+    rel = _rel_row(db, no, v['product_code'] or '')
     if act == 'regen':
         if rel and rel['status'] == '定稿':
             flash('已定稿的发布说明不能被覆盖，如需重生成请先取消定稿', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no))
-        draft = _build_release(db, no)
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+        draft = _build_release(db, no, v['product_code'] or '')
         if rel:
-            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? WHERE version_no=?',
-                       (draft, _now(), no))
+            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? WHERE version_no=? AND product_code=?',
+                       (draft, _now(), no, v['product_code'] or ''))
         else:
-            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, content, status, created_at, updated_at) '
-                       'VALUES (?,?,?,?,?)', (no, draft, '草稿', _now(), _now()))
+            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, product_code, content, status, created_at, updated_at) '
+                       'VALUES (?,?,?,?,?,?)', (no, v['product_code'] or '', draft, '草稿', _now(), _now()))
         db.commit()
         flash('已按当前版本数据重新生成草稿', 'success')
     elif act == 'save':
@@ -1243,43 +1436,47 @@ def version_release(no):
         if rel:
             if rel['status'] == '定稿':
                 flash('已定稿，不能再改；如需修改请先「取消定稿」', 'error')
-                return redirect(url_for('version_plan.version_detail', no=no))
-            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? WHERE version_no=?',
-                       (content, _now(), no))
+                return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+            db.execute(f'UPDATE {_t(L_RELEASES)} SET content=?, updated_at=? WHERE version_no=? AND product_code=?',
+                       (content, _now(), no, v['product_code'] or ''))
         else:
-            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, content, status, created_at, updated_at) '
-                       'VALUES (?,?,?,?,?)', (no, content, '草稿', _now(), _now()))
+            db.execute(f'INSERT INTO {_t(L_RELEASES)} (version_no, product_code, content, status, created_at, updated_at) '
+                       'VALUES (?,?,?,?,?,?)', (no, v['product_code'] or '', content, '草稿', _now(), _now()))
         db.commit()
         _ulog('版本', no, '保存发布说明', '草稿')
         flash('发布说明草稿已保存', 'success')
     elif act == 'finalize':
         if not rel or not (rel['content'] or '').strip():
             flash('还没有内容，不能定稿', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no))
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         db.execute(f'UPDATE {_t(L_RELEASES)} SET status="定稿", finalized_by=?, updated_at=? '
-                   'WHERE version_no=?', (session.get('username', ''), _now(), no))
+                   'WHERE version_no=? AND product_code=?', (session.get('username', ''), _now(), no, v['product_code'] or ''))
         db.commit()
         _ulog('版本', no, '定稿发布说明', '')
         flash('发布说明已定稿，可导出 Markdown 发给客户', 'success')
     elif act == 'unfinalize':
         if not _is_platform() and not _can_manage():
             return _deny()
-        db.execute(f'UPDATE {_t(L_RELEASES)} SET status="草稿", updated_at=? WHERE version_no=?',
-                   (_now(), no))
+        db.execute(f'UPDATE {_t(L_RELEASES)} SET status="草稿", updated_at=? WHERE version_no=? AND product_code=?',
+                   (_now(), no, v['product_code'] or ''))
         db.commit()
         _ulog('版本', no, '取消定稿', '')
         flash('已取消定稿，可继续编辑', 'warning')
-    return redirect(url_for('version_plan.version_detail', no=no))
+    return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
 
 @blueprint.route('/version_plan/versions/<no>/release.md')
 def release_md(no):
     _ensure_tables()
     db = get_db()
-    rel = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=?', (no,)).fetchone()
+    v = _vrow(db, no, (request.args.get('product') or request.form.get('product') or '').strip())
+    if not v:
+        flash('版本不存在', 'error')
+        return redirect(url_for('version_plan.versions'))
+    rel = _rel_row(db, no, v['product_code'] or '')
     if not rel:
         flash('这个版本还没有发布说明，先在版本详情里生成草稿', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
+        return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
     text = rel['content'] or ''
     return Response(text.encode('utf-8'), mimetype='text/markdown',
                     headers={'Content-Disposition': f'attachment; filename=ReleaseNote_{no}.md'})

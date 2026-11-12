@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}装车工作台 · 版本规划管理{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>🏗️ 装车工作台</h1>
+    <p>三视图一屏维护：车次时间轴 → 待装需求池 → 装载槽。容量按人日实时校验，装不下后端直接拒绝，改挂一步完成且两端留痕。</p>
+  </div>
+</div>
+
+{% set active = 'train_board' %}
+{% include 'vp_nav.html' with context %}
+
+<form method="get" class="vp-toolbar" style="margin-bottom:12px">
+  <select class="vp-select" name="product" style="max-width:190px" onchange="this.form.submit()">
+    <option value="">全部产品</option>
+    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
+  </select>
+  <select class="vp-select" name="code" style="max-width:190px" onchange="this.form.submit()">
+    {% for r in rows %}<option value="{{ r['code'] }}" {{ 'selected' if code == r['code'] }}>{{ r['code'] }} · {{ r['status'] }}</option>{% endfor %}
+  </select>
+  <span class="vp-muted" style="margin-left:auto">当前：{{ prod_map.get(t['product_code'], {}).get('name', '') if t else '无车次' }}</span>
+</form>
+
+{% if not t %}
+<div class="vp-empty">还没有车次，先去 <a href="{{ url_for('version_plan.trains') }}">车次日历</a> 加开一个。</div>
+{% else %}
+
+<div class="vp-kpis" style="margin-bottom:14px">
+  <div class="vp-kpi"><div class="vp-muted">车次</div><div class="vp-stat">{{ t['code'] }}</div></div>
+  <div class="vp-kpi"><div class="vp-muted">状态</div><div class="vp-stat">{{ t['status'] }}</div></div>
+  <div class="vp-kpi"><div class="vp-muted">容量 / 已装</div><div class="vp-stat">{{ '%g'|format(used) }} / {{ '%g'|format(t['capacity']) }} 人日</div></div>
+  <div class="vp-kpi"><div class="vp-muted">装载率</div><div class="vp-stat">{{ pct }}%（{{ cnt }} 条）</div></div>
+</div>
+<div style="height:12px;background:#e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:16px">
+  <div style="height:100%;width:{{ pct }}%;background:{{ '#dc2626' if pct>=95 else ('#f59e0b' if pct>=70 else '#2563eb') }}"></div>
+</div>
+
+{% if t['status'] == '停发' %}
+<div class="vp-warnbox" style="margin-bottom:14px">该车次已停发：{{ t['skip_reason'] }}　已装需求已转候补，恢复发车后按容量回装。</div>
+{% endif %}
+{% if t['status'] == '已转版本' %}
+<div class="vp-warnbox" style="margin-bottom:14px">该车次已转成版本，装载清单已固化，不能再增删。</div>
+{% endif %}
+
+<div class="vp-board" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div class="vp-card">
+    <div class="vp-card-hd"><h3>待装需求池（规划池）</h3><span class="vp-muted">{{ pool|length }} 条</span></div>
+    <div class="vp-table-wrap">
+      <table class="vp-table">
+        <thead><tr><th>需求</th><th>内容</th><th>人日</th><th>评分</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for d in pool %}
+        <tr>
+          <td><span class="vp-code">{{ d['code'] }}</span></td>
+          <td>{{ d['description'][:28] }}{% if d['description']|length > 28 %}…{% endif %}</td>
+          <td>{{ '%g'|format(d['estimate'] or 0) }}</td>
+          <td>{{ d['score'] or '-' }}</td>
+          <td>
+            {% if can_manage and t['status'] == '计划' %}
+            <form method="post" action="{{ url_for('version_plan.board_load') }}" style="display:inline">
+              <input type="hidden" name="code" value="{{ t['code'] }}">
+              <input type="hidden" name="demand" value="{{ d['code'] }}">
+              <button class="vp-btn vp-btn-sm vp-btn-primary" type="submit">装车</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="vp-muted">规划池空了，先去需求评估把需求放进规划池。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="vp-card">
+    <div class="vp-card-hd"><h3>装载槽（已装 {{ cnt }} 条）</h3><span class="vp-muted">{{ '%g'|format(used) }} 人日</span></div>
+    <div class="vp-table-wrap">
+      <table class="vp-table">
+        <thead><tr><th>需求</th><th>内容</th><th>人日</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for d in loaded %}
+        <tr>
+          <td><span class="vp-code">{{ d['demand_code'] }}</span></td>
+          <td>{{ d['description'][:24] }}{% if d['description']|length > 24 %}…{% endif %}</td>
+          <td>{{ '%g'|format(d['estimate'] or 0) }}</td>
+          <td>
+            {% if can_manage and t['status'] == '计划' %}
+            <form method="post" action="{{ url_for('version_plan.board_unload') }}" style="display:inline">
+              <input type="hidden" name="code" value="{{ t['code'] }}">
+              <input type="hidden" name="demand" value="{{ d['demand_code'] }}">
+              <button class="vp-btn vp-btn-sm vp-btn-danger" type="submit">移出</button>
+            </form>
+            {% if open_trains %}
+            <form method="post" action="{{ url_for('version_plan.board_move') }}" style="display:inline">
+              <input type="hidden" name="from_train" value="{{ t['code'] }}">
+              <input type="hidden" name="demand" value="{{ d['demand_code'] }}">
+              <select class="vp-select" name="to_train" style="width:120px;display:inline-block">
+                {% for o in open_trains %}<option value="{{ o['code'] }}">{{ o['code'] }}</option>{% endfor %}
+              </select>
+              <button class="vp-btn vp-btn-sm vp-btn-warn" type="submit">改挂</button>
+            </form>
+            {% endif %}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="vp-muted">还没装需求。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if waiting %}
+    <div class="vp-muted" style="margin-top:10px">候补 {{ waiting|length }} 条（停发/容量不足时自动转候补）</div>
+    {% endif %}
+  </div>
+</div>
+
+{% if can_manage and t['status'] == '计划' %}
+<div class="vp-card" style="margin-top:16px">
+  <div class="vp-card-hd"><h3>把这列车转成版本</h3></div>
+  <form method="post" action="{{ url_for('version_plan.train_to_version', code=t['code']) }}" class="vp-inline">
+    <input class="vp-input" name="version_no" placeholder="版本号，如 1.1.0" required style="max-width:220px">
+    <button class="vp-btn vp-btn-green" type="submit">生成版本</button>
+    <span class="vp-muted">转版本后装载清单固化，进入冻结 → 签核 → 发布流程</span>
+  </form>
+</div>
+{% endif %}
+
+<div class="vp-card" style="margin-top:16px">
+  <div class="vp-card-hd"><h3>装车留痕（最近 30 条）</h3></div>
+  <div class="vp-table-wrap">
+    <table class="vp-table">
+      <thead><tr><th>时间</th><th>需求</th><th>动作</th><th>从</th><th>到</th><th>操作人</th></tr></thead>
+      <tbody>
+      {% for c in changes %}
+      <tr>
+        <td class="vp-muted">{{ c['created_at'] }}</td>
+        <td><span class="vp-code">{{ c['demand_code'] }}</span></td>
+        <td>{{ c['action'] }}</td>
+        <td>{{ c['from_train'] or '—' }}</td>
+        <td>{{ c['to_train'] or '—' }}</td>
+        <td>{{ c['operator'] }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="vp-muted">暂无装车动作。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

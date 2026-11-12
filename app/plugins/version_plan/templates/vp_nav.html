@@ -4,6 +4,9 @@
   <a class="vp-nav-item {{ 'on' if active == 'index' }}" href="{{ url_for('version_plan.index') }}">🏠 工作台</a>
   <a class="vp-nav-item {{ 'on' if active == 'products' }}" href="{{ url_for('version_plan.products') }}">📦 产品管理</a>
   <a class="vp-nav-item {{ 'on' if active == 'demands' }}" href="{{ url_for('version_plan.demands', **qp) }}">🧹 需求与过滤</a>
+  <a class="vp-nav-item {{ 'on' if active == 'assess' }}" href="{{ url_for('version_plan.assess', **qp) }}">⚖️ 需求评估</a>
+  <a class="vp-nav-item {{ 'on' if active == 'trains' }}" href="{{ url_for('version_plan.trains', **qp) }}">🚂 车次日历</a>
+  <a class="vp-nav-item {{ 'on' if active == 'train_board' }}" href="{{ url_for('version_plan.train_board', **qp) }}">🏗️ 装车工作台</a>
   <a class="vp-nav-item {{ 'on' if active == 'versions' }}" href="{{ url_for('version_plan.versions', **qp) }}">🗓️ 版本规划</a>
   <a class="vp-nav-item {{ 'on' if active == 'customers' }}" href="{{ url_for('version_plan.customers', **qp) }}">🏢 客户矩阵</a>
   <a class="vp-nav-item {{ 'on' if active == 'report' }}" href="{{ url_for('version_plan.report', **qp) }}">✉️ 客户回告</a>

@@ -84,7 +84,7 @@
         <b>{{ v['version_no'] }}</b>
         {% set st_cls = {'规划中':'t-wait','已冻结':'t-pool','开发中':'t-plan','测试中':'t-plan','已发布':'t-done','已归档':'t-no'} %}
         <span class="vp-tag {{ st_cls.get(v['status'],'t-no') }}">{{ v['status'] }}{% if v['vtype'] == '客户定制' %} · 定制{% endif %}</span>
-        <a href="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">查看详情</a>
+        <a href="{{ url_for('version_plan.version_detail', no=v['version_no'], product=v['product_code']) }}">查看详情</a>
       </div>
       <div>
         <div class="vp-stage">

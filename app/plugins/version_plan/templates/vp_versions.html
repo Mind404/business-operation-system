@@ -123,7 +123,7 @@
         {% if v['merge_target_no'] %}<span class="vp-tag t-red">合回 {{ v['merge_target_no'] }}</span>{% endif %}
       </div>
       {% if v['target_customers'] %}<div class="vp-muted" style="margin-top:6px">交付给：{{ v['target_customers'][:28] }}{% if v['target_customers']|length > 28 %}…{% endif %}</div>{% endif %}
-      <div style="margin-top:10px"><a class="vp-btn vp-btn-sm vp-btn-primary" href="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">打开版本 →</a></div>
+      <div style="margin-top:10px"><a class="vp-btn vp-btn-sm vp-btn-primary" href="{{ url_for('version_plan.version_detail', no=v['version_no'], product=v['product_code']) }}">打开版本 →</a></div>
     </div>
     {% endfor %}
   </div>

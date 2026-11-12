@@ -137,7 +137,7 @@
         {% endif %}
         <div class="vp-inline" style="margin-top:5px">
           <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan.demand_edit', code=d['code']) }}">编辑</a>
-          {% if d['version_no'] %}<a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan.version_detail', no=d['version_no']) }}">看版本</a>{% endif %}
+          {% if d['version_no'] %}<a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan.version_detail', no=d['version_no'], product=d['product_code']) }}">看版本</a>{% endif %}
         </div>
       </td>
     </tr>

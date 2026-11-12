@@ -44,6 +44,7 @@
   {% if can_manage %}
     {% for nxt in flow %}
     <form method="post" action="{{ url_for('version_plan.version_status', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="to" value="{{ nxt }}">
       <button class="vp-btn {{ 'vp-btn-green' if nxt in ('已发布','开发中') else 'vp-btn-primary' }}" type="submit"
         onclick="return confirm('把 {{ v['version_no'] }} 推进到「{{ nxt }}」？')">
@@ -53,6 +54,7 @@
     {% endfor %}
     {% if v['status'] == '已冻结' and is_platform %}
     <form method="post" action="{{ url_for('version_plan.version_status', no=v['version_no']) }}" class="vp-inline" style="margin:0" onsubmit="return confirm('强制解冻会打开需求增删闸门，确定？')">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="to" value="规划中">
       <input class="vp-input" name="reason" required placeholder="解冻原因（必填，会留痕）" style="max-width:220px">
       <button class="vp-btn vp-btn-danger" type="submit">🔓 强制解冻</button>
@@ -77,9 +79,11 @@
 <div class="vp-card">
   <h3>📌 里程碑与版本元数据</h3>
   <form method="post" action="{{ url_for('version_plan.version_detail', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
     <div class="vp-row3">
       <div class="vp-field"><label class="vp-label">需求冻结日</label><input class="vp-input" type="date" name="freeze_date" value="{{ v['freeze_date'] }}" {{ 'disabled' if not can_edit }}></div>
-      <div class="vp-field"><label class="vp-label">提测日</label><input class="vp-input" type="date" name="test_date" value="{{ v['test_date'] }}" {{ 'disabled' if not can_edit }}></div>
+  
+<div class="vp-field"><label class="vp-label">提测日</label><input class="vp-input" type="date" name="test_date" value="{{ v['test_date'] }}" {{ 'disabled' if not can_edit }}></div>
       <div class="vp-field"><label class="vp-label">发布日</label><input class="vp-input" type="date" name="release_date" value="{{ v['release_date'] }}" {{ 'disabled' if not can_edit }}></div>
     </div>
     <div class="vp-row2">
@@ -131,6 +135,7 @@
       <td>
         {% if v['status'] == '规划中' %}
         <form method="post" action="{{ url_for('version_plan.version_remove', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
           <input type="hidden" name="code" value="{{ d['code'] }}">
           <button class="vp-btn vp-btn-sm vp-btn-danger" type="submit" onclick="return confirm('把 {{ d['code'] }} 移出本版本？')">移出</button>
         </form>
@@ -150,6 +155,7 @@
   <h3>➕ 从规划池拉入需求（{{ pool|length }} 条可选）</h3>
   {% if pool %}
   <form method="post" action="{{ url_for('version_plan.version_add', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
     <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
       {% for d in pool %}
       <label class="vp-inline" style="font-size:13px;align-items:flex-start">
@@ -167,22 +173,113 @@
 {% endif %}
 
 <div class="vp-card">
+  <h3>🚦 发布门禁
+    {% if gate['ok'] %}<span class="vp-tag t-done">可发布</span>
+    {% else %}<span class="vp-tag t-red">不可发布</span>{% endif %}
+  </h3>
+  <p class="vp-muted" style="margin-bottom:8px">7 项确认清单全部「通过」+ 应签角色全部「同意」才可发布；定制版客户代表必签。清单与签核均按「产品 + 版本号」双键隔离，不会与同号的其它产品串号。</p>
+  {% if not gate['ok'] %}
+  <div class="vp-warnbox">{% for r in gate['reasons'] %}<div>· {{ r }}</div>{% endfor %}</div>
+  {% endif %}
+</div>
+
+<div class="vp-card">
+  <h3>✅ 确认清单（7 项硬门禁）
+    <span class="vp-tag {{ 't-done' if checks | selectattr('result','equalto','通过') | list | length == 7 else 't-wait' }}">
+      {{ checks | selectattr('result','equalto','通过') | list | length }}/7
+    </span>
+  </h3>
+  <div class="vp-table-wrap">
+    <table class="vp-table">
+      <thead><tr><th style="width:44px">#</th><th>检查项</th><th style="width:300px">结论 / 证据</th></tr></thead>
+      <tbody>
+      {% for c in checks %}
+      <tr>
+        <td>{{ c['item_no'] }}</td>
+        <td>{{ check_items[c['item_no'] - 1] if c['item_no'] <= 7 else '' }}</td>
+        <td>
+          {% if can_manage and v['status'] != '已发布' %}
+          <form method="post" action="{{ url_for('version_plan.version_check', no=v['version_no']) }}"
+                style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+            <input type="hidden" name="item_no" value="{{ c['item_no'] }}">
+            <select class="vp-select" name="result" style="width:96px">
+              {% for r in ['pending','通过','不通过'] %}
+              <option value="{{ r }}" {{ 'selected' if (c['result'] or 'pending') == r }}>{{ r }}</option>
+              {% endfor %}
+            </select>
+            <input class="vp-input" name="evidence" value="{{ c['evidence'] or '' }}" placeholder="证据/说明" style="width:110px">
+            <button class="vp-btn vp-btn-sm" type="submit">保存</button>
+          </form>
+          {% else %}
+            <span class="vp-tag {{ 't-done' if c['result']=='通过' else 't-wait' }}">{{ c['result'] }}</span>
+            <span class="vp-muted">{{ c['evidence'] }}{% if c['checked_by'] %} · {{ c['checked_by'] }}{% endif %}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="vp-card">
+  <h3>🖋️ 发布签核（{{ sign_roles | length }} 方）
+    <span class="vp-tag {{ 't-done' if signs.values() | selectattr('verdict','equalto','同意') | list | length == sign_roles | length else 't-wait' }}">
+      {{ signs.values() | selectattr('verdict','equalto','同意') | list | length }}/{{ sign_roles | length }}
+    </span>
+  </h3>
+  <p class="vp-muted" style="margin-bottom:10px">产品负责人 · 测试负责人 · 发布经理{% if v['vtype'] == '客户定制' %} · 客户代表（定制版必签）{% endif %}</p>
+  <div class="vp-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+    {% for role in sign_roles %}
+    {% set sg = signs.get(role, {}) %}
+    <div class="vp-prod-card">
+      <div class="vp-prod-top">
+        <div class="vp-prod-name" style="font-size:14px">{{ role }}</div>
+        <span class="vp-tag {{ 't-done' if sg.get('verdict') == '同意' else ('t-red' if sg.get('verdict') == '驳回' else 't-wait') }}">
+          {{ sg.get('verdict') or '待签' }}
+        </span>
+      </div>
+      {% if sg.get('comment') %}<div class="vp-muted" style="margin:6px 0">意见：{{ sg['comment'] }}</div>{% endif %}
+      {% if sg.get('signed_at') %}<div class="vp-muted" style="font-size:12px">签于 {{ sg['signed_at'] }}</div>{% endif %}
+      {% if can_manage and v['status'] != '已发布' %}
+      <form method="post" action="{{ url_for('version_plan.version_sign', no=v['version_no']) }}" style="margin-top:8px">
+        <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+        <input type="hidden" name="role" value="{{ role }}">
+        <div class="vp-inline" style="gap:6px">
+          <input class="vp-input" name="comment" placeholder="签核意见" style="flex:1" value="">
+          <button class="vp-btn vp-btn-sm vp-btn-green" name="verdict" value="同意" type="submit">同意</button>
+          <button class="vp-btn vp-btn-sm vp-btn-danger" name="verdict" value="驳回" type="submit">驳回</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="vp-card">
   <h3>📄 发布说明（Release Note）{% if release %} · <span class="vp-tag {{ 't-done' if release['status']=='定稿' else 't-wait' }}">{{ release['status'] }}</span>{% endif %}</h3>
   {% if can_manage %}
   <div class="vp-toolbar" style="box-shadow:none;margin-bottom:10px">
     <form method="post" action="{{ url_for('version_plan.version_release', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="act" value="regen">
       <button class="vp-btn" type="submit">🔄 按版本数据重生成草稿</button>
     </form>
     {% if release %}
-    <a class="vp-btn" href="{{ url_for('version_plan.release_md', no=v['version_no']) }}">⬇ 导出 Markdown</a>
+    <a class="vp-btn" href="{{ url_for('version_plan.release_md', no
+=v['version_no']) }}">⬇ 导出 Markdown</a>
     {% if release['status'] == '草稿' %}
     <form method="post" action="{{ url_for('version_plan.version_release', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="act" value="finalize">
       <button class="vp-btn vp-btn-green" type="submit">✅ 定稿</button>
     </form>
     {% else %}
-    <form method="post" action="{{ url_for('version_plan.version_release', no=v['version_no']) }}" style="margin:0">
+    <form method="post" action="{{ url_for('version_plan.version_r
+elease', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="act" value="unfinalize">
       <button class="vp-btn" type="submit">↩ 取消定稿</button>
     </form>
@@ -196,6 +293,7 @@
     <pre class="vp-pre">{{ release['content'] }}</pre>
     {% else %}
     <form method="post" action="{{ url_for('version_plan.version_release', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="act" value="save">
       <textarea class="vp-textarea" name="content" style="min-height:420px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px">{{ release['content'] }}</textarea>
       <div style="margin-top:8px"><button class="vp-btn vp-btn-primary" type="submit">保存草稿</button>
