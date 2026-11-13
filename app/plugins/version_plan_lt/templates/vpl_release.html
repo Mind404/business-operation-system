@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}发布受控 · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+{% set active = 'release' %}
+{% set qp = {'product': product} if product else {} %}
+{% include 'vpl_shell_top.html' with context %}
+
+<div class="vp-page-head">
+  <div class="vp-ph">
+    <div class="vp-ph-ico">▲</div>
+    <div>
+      <h1>发布受控</h1>
+      <p>发布门禁一屏总览：清单进度、签核缺口、可发布 / 锁定；发布后自动落发布记录</p>
+    </div>
+  </div>
+</div>
+
+{% include 'vpl_pills.html' with context %}
+
+<div class="vp-card" style="margin-bottom:14px">
+  <div class="vp-card-hd"><h3>发布门禁一览</h3></div>
+  {% if rows|length == 0 %}
+    <div class="vp-empty"><p>还没有版本，先去「版本规划」生成版本。</p></div>
+  {% else %}
+  <table class="vp-table">
+    <thead>
+      <tr><th style="width:96px">版本号</th><th style="width:72px">产品</th><th style="width:80px">类型</th>
+        <th style="width:88px">状态</th><th style="width:64px">清单</th><th>签核缺口</th>
+        <th style="width:76px;text-align:center">门禁</th><th style="width:100px;text-align:right">操作</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      {% set g = gates.get(r.version_no ~ '|' ~ (r.product_code or '')) %}
+      <tr>
+        <td><b class="vp-num">{{ r.version_no }}</b></td>
+        <td>{{ r.product_code or '—' }}</td>
+        <td>{{ r.vtype }}</td>
+        <td>
+          {% if r.status == '已发布' %}<span class="vp-tag t-done">已发布</span>
+          {% elif r.status == '测试中' %}<span class="vp-tag t-pool">测试中</span>
+          {% else %}<span class="vp-tag">{{ r.status }}</span>{% endif %}
+        </td>
+        <td class="vp-num">{{ g.checks_label if g else '0/7' }}</td>
+        <td class="vp-mini">{{ (g.missing|join('、')) if g and g.missing|length else '无' }}</td>
+        <td style="text-align:center">
+          {% if g and g.ok %}<span class="vp-tag t-done">可发布</span>
+          {% else %}<span class="vp-tag t-red">锁定</span>{% endif %}
+        </td>
+        <td style="text-align:right">
+          {% if r.status == '已发布' %}
+            <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.release_md', no=r.version_no, product=r.product_code or '') }}">发布说明</a>
+          {% else %}
+            <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.version_detail', no=r.version_no, product=r.product_code or '') }}">去确认</a>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="vp-card">
+  <div class="vp-card-hd"><h3>发布记录（{{ releases|length }}）</h3></div>
+  {% if releases|length == 0 %}
+    <div class="vp-empty">暂无发布记录。</div>
+  {% else %}
+  <table class="vp-table">
+    <thead>
+      <tr><th style="width:96px">版本号</th><th style="width:90px">产品</th><th>内容</th>
+        <th style="width:80px">状态</th><th style="width:180px">回滚方案</th><th style="width:140px">发布时间</th></tr>
+    </thead>
+    <tbody>
+    {% for rel in releases %}
+      <tr>
+        <td><b class="vp-num">{{ rel.version_no }}</b></td>
+        <td>{{ rel.product_code or '—' }}</td>
+        <td class="vp-mini">{{ (rel.content or '')[:120] }}{% if (rel.content or '')|length > 120 %}…{% endif %}</td>
+        <td><span class="vp-tag {{ 't-done' if rel.status == '定稿' else '' }}">{{ rel.status }}</span></td>
+        <td class="vp-mini">{{ rel.rollback_plan or '—' }}</td>
+        <td class="vp-mini vp-num">{{ rel.updated_at or rel.created_at or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+{% include 'vpl_shell_bottom.html' %}
+{% endblock %}

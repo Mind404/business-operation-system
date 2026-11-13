@@ -1,25 +1,83 @@
 {% extends "base.html" %}
-{% block title %}模块字典 · 版本规划{% endblock %}
+{% block title %}规则字典 · 版本规划{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+{% set active = 'settings' %}
+{% include 'vpl_shell_top.html' with context %}
+
 <div class="vp-page-head">
-  <div>
-    <h1>⚙️ 模块字典</h1>
-    <p>版本里「涉及模块」的多选项来自这里，改完保存即生效，不写死在代码里。</p>
+  <div class="vp-ph">
+    <div class="vp-ph-ico">⚙</div>
+    <div>
+      <h1>规则字典</h1>
+      <p>R1~R16 硬规则、容量单位、产品模块字典；规则由系统强制执行，图纸即代码</p>
+    </div>
   </div>
 </div>
 
-{% set active = 'settings' %}{% set product = '' %}
-{% include 'vpl_shell_top.html' with context %}
+{% include 'vpl_pills.html' with context %}
 
-<div class="vp-card">
-  <form method="post" action="{{ url_for('version_plan_lt.settings') }}">
-    <div class="vp-field">
-      <label class="vp-label">模块清单（一行一个，或用逗号分隔）</label>
-      <textarea class="vp-textarea" name="modules" style="min-height:220px" {{ 'disabled' if not can_manage }}>{{ mods|join('\n') }}</textarea>
+<div class="vp-2col">
+  <div class="vp-card">
+    <div class="vp-card-hd"><h3>规则 R1 ~ R16</h3></div>
+    <table class="vp-table">
+      <thead><tr><th style="width:64px">编号</th><th>规则</th></tr></thead>
+      <tbody>
+      {% set RULES = [
+        ('R1','需求必须归属一个产品，跨产品需求拆分为独立需求'),
+        ('R2','需求来源五入口：客户提报 / 内部提报 / 售后缺陷 / 竞品对标 / 战略输入'),
+        ('R3','评分权重：业务价值 35%、客户影响 25%、紧急度 20%、成本反向 20%'),
+        ('R4','容量单位为人日（可在字典切换故事点，默认人日）'),
+        ('R5','车次编号 = 产品-年月（如 P1-2611），临时加车后缀 H'),
+        ('R6','按月发车，某月可停发；停发不占版本号'),
+        ('R7','只有「规划池」状态的需求可以装车'),
+        ('R8','装车总量不得超过车次容量，超出即拦截'),
+        ('R9','版本号 主.次.补丁，全局唯一且不可修改；定制版后缀 -B'),
+        ('R10','版本类型：迭代 / 热修复 / 客户定制'),
+        ('R11','确认清单 7 项全部通过才允许发布'),
+        ('R12','四方签核：产品负责人、测试负责人、发布经理、客户代表'),
+        ('R13','一个需求同一时间只能挂在一个未发布车次'),
+        ('R14','停发必须填写原因，已装需求自动转候补'),
+        ('R15','版本冻结后装车工作台只读，变更需走变更单'),
+        ('R16','同一需求顺延 2 次以上必须进入评审'),
+      ] %}
+      {% for no, txt in RULES %}
+        <tr><td><b class="vp-num" style="color:#2563eb">{{ no }}</b></td><td>{{ txt }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="vp-form-col" style="display:flex;flex-direction:column;gap:14px">
+    <div class="vp-card">
+      <div class="vp-card-hd"><h3>容量单位</h3></div>
+      <div style="font-size:30px;font-weight:750;color:#2563eb;letter-spacing:.5px">人日</div>
+      <p class="vp-mini" style="margin-top:6px">默认容量单位，1 人日 = 1 名工程师 1 个工作日。当前不支持切换故事点（R4 预留）。</p>
     </div>
-    {% if can_manage %}<button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>{% else %}<span class="vp-muted">仅管理员可修改</span>{% endif %}
-  </form>
+
+    <div class="vp-card">
+      <div class="vp-card-hd"><h3>模块开关</h3></div>
+      {% for m in mods %}
+        <div class="vp-gate-item" style="padding:10px 12px">
+          <div class="vp-gate-hd" style="margin:0">
+            <div><b>{{ m }}</b><div class="vp-mini vp-num">{{ m|lower|replace(' ','-') }}</div></div>
+            <span class="vp-tag t-done">启用</span>
+          </div>
+        </div>
+      {% endfor %}
+      {% if can_manage %}
+      <details style="margin-top:10px">
+        <summary class="vp-mini" style="cursor:pointer">编辑模块字典</summary>
+        <form method="post" action="{{ url_for('version_plan_lt.settings') }}" class="vp-form-col" style="margin-top:10px">
+          <textarea class="vp-input" name="modules" rows="5" style="font-family:inherit">{% for m in mods %}{{ m }}
+{% endfor %}</textarea>
+          <button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+  </div>
 </div>
-{% include 'vpl_shell_bottom.html' with context %}
+
+{% include 'vpl_shell_bottom.html' %}
 {% endblock %}

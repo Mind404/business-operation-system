@@ -1,163 +1,95 @@
 {% extends "base.html" %}
-{% block title %}版本规划 · 原版风格{% endblock %}
+{% block title %}版本规划{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+{% set active = 'versions' %}
 {% set qp = {'product': product} if product else {} %}
+{% include 'vpl_shell_top.html' with context %}
+
 <div class="vp-page-head">
-  <div>
-    <h1>🗓️ 版本规划</h1>
-    <p>版本规划单 = 开发任务书 + 测试输入 + 客户承诺。只有同产品「规划池」的需求能拉进版本，冻结后不可增删。</p>
+  <div class="vp-ph">
+    <div class="vp-ph-ico">◈</div>
+    <div>
+      <h1>版本规划</h1>
+      <p>车次转版本：版本号全局唯一不可改，定制版后缀 -A；冻结后装车清单只读</p>
+    </div>
   </div>
 </div>
 
-{% set active = 'versions' %}
-{% include 'vpl_shell_top.html' with context %}
-
-<form method="get" class="vp-toolbar" style="margin-bottom:12px">
-  <select class="vp-select" name="product" style="max-width:200px" onchange="this.form.submit()">
-    <option value="">全部产品</option>
-    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
-  </select>
-  <span class="vp-muted" style="margin-left:auto">当前视图：{% if product %}{{ prod_map.get(product, {}).get('name', product) }}{% else %}全部产品{% endif %}</span>
-</form>
+{% include 'vpl_pills.html' with context %}
 
 {% if can_manage %}
-<div class="vp-card">
-  <h3>＋ 创建版本</h3>
-  <form method="post" action="{{ url_for('version_plan_lt.version_new') }}">
-    <div class="vp-row3">
-      <div class="vp-field">
-        <label class="vp-label">所属产品 <span class="vp-req">*</span></label>
-        <select class="vp-select" name="product_code" required>
-          {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="vp-field">
-        <label class="vp-label">版本号 <span class="vp-req">*</span>（主.次.修订，定制版加客户后缀；全局唯一，创建后不可改）</label>
-        <input class="vp-input" name="version_no" required placeholder="1.2.0 或 1.2.0-A">
-      </div>
-      <div class="vp-field">
-        <label class="vp-label">版本类型</label>
-        <select class="vp-select" name="vtype" id="vp-vtype">
-          {% for t in vtypes %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
-        </select>
-      </div>
-    </div>
-    <div class="vp-row3">
-      <div class="vp-field"><label class="vp-label">基线版本（从哪个版本拉出）</label><input class="vp-input" name="base_version_no" placeholder="如 1.1.0"></div>
-      <div class="vp-field"><label class="vp-label">需求冻结日</label><input class="vp-input" type="date" name="freeze_date"></div>
-      <div class="vp-field"><label class="vp-label">提测日</label><input class="vp-input" type="date" name="test_date"></div>
-    </div>
-    <div class="vp-row2">
-      <div class="vp-field"><label class="vp-label">发布日</label><input class="vp-input" type="date" name="release_date"></div>
-      <div class="vp-field" id="vp-custom-row" style="background:#fffbeb;border:1px solid #f5d08a;border-radius:8px;padding:10px">
-        <div class="vp-inline" style="gap:10px">
-          <div class="vp-field" style="margin:0;flex:1"><label class="vp-label">合回目标版本 <span class="vp-req">*</span>（定制版必填，R2）</label><input class="vp-input" name="merge_target_no" placeholder="如 1.3.0"></div>
-          <div class="vp-field" style="margin:0;flex:1"><label class="vp-label">合回期限 <span class="vp-req">*</span>（定制版必填，R2）</label><input class="vp-input" type="date" name="merge_deadline"></div>
-        </div>
-      </div>
-    </div>
-    <div class="vp-row2">
-      <div class="vp-field">
-        <label class="vp-label">涉及模块（可多选）</label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
-          {% for m in modules %}
-          <label class="vp-inline"><input type="checkbox" name="modules" value="{{ m }}"> {{ m }}</label>
-          {% endfor %}
-        </div>
-      </div>
-      <div class="vp-field">
-        <label class="vp-label">目标客户（本版计划交付给谁，同产品内）</label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
-          {% for c in customers %}
-          <label class="vp-inline"><input type="checkbox" name="customers" value="{{ c['name'] }}"> {{ c['name'] }}</label>
-          {% else %}
-          <span class="vp-muted">还没建客户，去「客户矩阵」先建</span>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
-    <div class="vp-field"><label class="vp-label">接口变更说明（新增/修改/废弃的 AT 命令、API）</label><textarea class="vp-textarea" name="interface_change" style="min-height:56px"></textarea></div>
-    <div class="vp-field"><label class="vp-label">回归范围（测试输入）</label><textarea class="vp-textarea" name="regression_scope" style="min-height:56px"></textarea></div>
-    <div class="vp-row2">
-      <div class="vp-field"><label class="vp-label">已知遗留问题（会进入 Release Notes）</label><textarea class="vp-textarea" name="known_issues" style="min-height:56px"></textarea></div>
-      <div class="vp-field"><label class="vp-label">升级路径说明（支持从哪些旧版 FOTA 升级、可否回退）</label><textarea class="vp-textarea" name="upgrade_path" style="min-height:56px"></textarea></div>
-    </div>
-    <button class="vp-btn vp-btn-primary" type="submit">创建版本</button>
+<div class="vp-card" style="margin-bottom:14px">
+  <div class="vp-card-hd"><h3>从车次生成版本</h3></div>
+  <form method="post" action="{{ url_for('version_plan_lt.version_from_train') }}"
+        style="display:grid;grid-template-columns:1.4fr 1fr 130px 150px 150px 130px;gap:10px;align-items:center">
+    <select class="vp-select" name="train_code" required>
+      <option value="">选择车次</option>
+      {% for t in trains %}
+      <option value="{{ t.code }}" {{ 'disabled' if t.status in ('已转版本','已发布') }}>
+        {{ t.code }} · {{ t.product_code }} · 装 {{ '%g'|format(t.used) }}/{{ '%g'|format(t.capacity) }}{{ '（已转版本）' if t.status in ('已转版本','已发布') }}
+      </option>
+      {% endfor %}
+    </select>
+    <input class="vp-input" type="text" name="version_no" required placeholder="版本号 如 1.0.0">
+    <select class="vp-select" name="vtype">
+      <option value="迭代">迭代</option>
+      <option value="热修复">热修复</option>
+      <option value="客户定制">客户定制</option>
+    </select>
+    <input class="vp-input" type="date" name="freeze_date" title="冻结日">
+    <input class="vp-input" type="date" name="release_date" title="发布日">
+    <button class="vp-btn vp-btn-primary" type="submit">生成版本</button>
   </form>
+  <p class="vp-mini" style="margin:8px 0 0">车次里已装的需求会整列带进版本；客户定制版本需在版本详情补「合回目标 / 合回期限」（R2）。</p>
 </div>
 {% endif %}
 
 <div class="vp-card">
   <div class="vp-card-hd">
     <h3>版本列表（{{ rows|length }}）</h3>
-    <span class="vp-muted">阶段条：规划 → 冻结 → 开发/测试 → 发布</span>
+    <form method="get" action="{{ url_for('version_plan_lt.versions') }}" style="margin:0">
+      <select class="vp-select" name="product" onchange="this.form.submit()" style="min-width:150px">
+        <option value="">全部产品</option>
+        {% for p in products %}<option value="{{ p.code }}" {{ 'selected' if product == p.code }}>{{ p.code }} · {{ p.name }}</option>{% endfor %}
+      </select>
+    </form>
   </div>
-  {% if rows %}
-  <div class="vp-row3">
-    {% for v in rows %}
-    <div class="vp-card" style="margin:0;background:#fcfdff">
-      <div class="vp-card-hd" style="margin-bottom:8px">
-        <b style="font-size:15px">{{ v['version_no'] }}</b>
-        {% set cls = {'规划中':'t-wait','已冻结':'t-pool','开发中':'t-plan','测试中':'t-plan','已发布':'t-done','已归档':'t-no'} %}
-        <span class="vp-tag {{ cls.get(v['status'],'t-no') }}">{{ v['status'] }}</span>
-      </div>
-      <div class="vp-muted" style="margin-bottom:6px">📦 {{ prod_map.get(v['product_code'], {}).get('name', '未分配') }}</div>
-      <div class="vp-stage">
-        {% for i in range(4) %}
-        <i class="{% if i < v['stage'] %}done{% elif i == v['stage'] %}{% if v['status'] in ('已发布','已归档') %}done{% else %}cur{% endif %}{% endif %}"></i>
-        {% endfor %}
-      </div>
-      <div class="vp-stage-labels" style="margin-bottom:8px"><span>规划</span><span>冻结</span><span>开发/测试</span><span>发布</span></div>
-      <div class="vp-road-dates">
-        {% if v['freeze_date'] %}冻结 <b>{{ v['freeze_date'] }}</b>{% else %}<span style="color:#b9c3d1">冻结 未定</span>{% endif %}
-        {% if v['test_date'] %}　提测 <b>{{ v['test_date'] }}</b>{% endif %}
-        {% if v['release_date'] %}　发布 <b>{{ v['release_date'] }}</b>
-          {% if v['release_date'] < today and v['status'] not in ('已发布','已归档') %}<span class="vp-tag t-red">超期</span>{% endif %}
-        {% endif %}
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap">
-        <span class="vp-tag t-no">{{ v['vtype'] }}</span>
-        <span class="vp-tag t-plan">{{ counts[v['version_no']] }} 条需求</span>
-        {% if v['base_version_no'] %}<span class="vp-muted">基线 {{ v['base_version_no'] }}</span>{% endif %}
-        {% if v['merge_target_no'] %}<span class="vp-tag t-red">合回 {{ v['merge_target_no'] }}</span>{% endif %}
-      </div>
-      {% if v['target_customers'] %}<div class="vp-muted" style="margin-top:6px">交付给：{{ v['target_customers'][:28] }}{% if v['target_customers']|length > 28 %}…{% endif %}</div>{% endif %}
-      <div style="margin-top:10px"><a class="vp-btn vp-btn-sm vp-btn-primary" href="{{ url_for('version_plan_lt.version_detail', no=v['version_no'], product=v['product_code']) }}">打开版本 →</a></div>
-    </div>
-    {% endfor %}
-  </div>
+
+  {% if rows|length == 0 %}
+    <div class="vp-empty"><p>还没有版本。先在上面选择一个已装车的车次，生成版本。</p></div>
   {% else %}
-  <div class="vp-empty"><div class="big">🗓️</div><p>还没有版本，用上面的表单建第一个。</p></div>
+  <table class="vp-table">
+    <thead>
+      <tr><th style="width:90px">版本号</th><th style="width:72px">产品</th><th style="width:110px">来源车次</th>
+        <th style="width:80px">类型</th><th style="width:80px">状态</th>
+        <th style="width:130px;text-align:right">容量/负载</th><th style="width:150px">冻结 / 发布</th>
+        <th style="width:110px;text-align:right">操作</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><b class="vp-num">{{ r.version_no }}</b></td>
+        <td>{{ r.product_code or '—' }}</td>
+        <td class="vp-mini vp-num">{{ r.train_code or '—' }}</td>
+        <td>{{ r.vtype }}</td>
+        <td>
+          {% if r.status == '已发布' %}<span class="vp-tag t-done">已发布</span>
+          {% elif r.status == '已冻结' %}<span class="vp-tag t-wait">已冻结</span>
+          {% elif r.status == '测试中' %}<span class="vp-tag t-pool">测试中</span>
+          {% else %}<span class="vp-tag t-pool">{{ r.status }}</span>{% endif %}
+        </td>
+        <td style="text-align:right" class="vp-num">{{ '%g'|format(r.load) }} / {{ '%g'|format(r.capacity) }} 人日</td>
+        <td class="vp-mini vp-num">{{ r.freeze_date or '—' }} / {{ r.release_date or '—' }}</td>
+        <td style="text-align:right">
+          <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.version_detail', no=r.version_no, product=r.product_code or '') }}">确认与签核</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
   {% endif %}
 </div>
 
-<div class="vp-card">
-  <h3>📋 规划池待排期（{{ pool|length }} 条，同产品）</h3>
-  {% if pool %}
-  <table class="vp-table">
-    <tr><th>编号</th><th>产品</th><th>客户</th><th>描述</th><th>业务价值</th><th></th></tr>
-    {% for d in pool %}
-    <tr><td><span class="vp-code">{{ d['code'] }}</span></td>
-      <td><span class="vp-tag t-pool">{{ prod_map.get(d['product_code'], {}).get('name', '未分配') }}</span></td>
-      <td>{{ d['customer_name'] or '—' }}</td>
-      <td style="max-width:360px">{{ d['description'][:80] }}</td>
-      <td class="vp-muted" style="max-width:220px">{{ d['business_value'][:50] }}</td>
-      <td><a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demand_edit', code=d['code']) }}">看</a></td></tr>
-    {% endfor %}
-  </table>
-  <p class="vp-muted" style="margin:8px 0 0">排期在版本详情页勾选「拉入」完成；只能拉入同产品的版本。</p>
-  {% else %}<div class="vp-empty">规划池是空的，先去过滤工作台把需求判进规划池</div>{% endif %}
-</div>
-
-<script>
-(function(){
-  var sel = document.getElementById('vp-vtype');
-  var row = document.getElementById('vp-custom-row');
-  if(!sel || !row) return;
-  function sync(){ row.style.display = (sel.value === '客户定制') ? 'block' : 'none'; }
-  sel.addEventListener('change', sync); sync();
-})();
-</script>
-{% include 'vpl_shell_bottom.html' with context %}
+{% include 'vpl_shell_bottom.html' %}
 {% endblock %}

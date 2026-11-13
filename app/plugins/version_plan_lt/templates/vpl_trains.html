@@ -1,109 +1,105 @@
 {% extends "base.html" %}
-{% block title %}车次日历 · 原版风格{% endblock %}
+{% block title %}车次日历 · 版本规划{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
-<div class="vp-page-head">
-  <div>
-    <h1>🚂 车次日历</h1>
-    <p>按产品、按月发车。容量单位人日；停发必须写原因，已装需求自动转候补、不占版本号，可随时恢复。</p>
-  </div>
-</div>
-
 {% set active = 'trains' %}
+{% set qp = {'product': product} if product else {} %}
 {% include 'vpl_shell_top.html' with context %}
 
-<form method="get" class="vp-toolbar" style="margin-bottom:14px">
-  <select class="vp-select" name="product" style="max-width:200px" onchange="this.form.submit()">
-    <option value="">全部产品</option>
-    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
-  </select>
-  <select class="vp-select" name="month" style="max-width:160px" onchange="this.form.submit()">
-    <option value="">全部月份</option>
-    {% for m in months %}<option value="{{ m }}" {{ 'selected' if month == m }}>{{ m }}</option>{% endfor %}
-  </select>
-  {% set ns = namespace(n=0) %}{% for l in groups.values() %}{% set ns.n = ns.n + (l|length) %}{% endfor %}
-  <span class="vp-muted" style="margin-left:auto">共 {{ ns.n }} 个车次</span>
-</form>
+<div class="vp-page-head">
+  <div class="vp-ph">
+    <div class="vp-ph-ico">▷</div>
+    <div>
+      <h1>车次日历</h1>
+      <p>按产品拟开车次，容量按人日计；停发必须写原因，恢复发车可逆</p>
+    </div>
+  </div>
+</div>
+
+{% include 'vpl_pills.html' with context %}
 
 {% if can_manage %}
-<div class="vp-card">
-  <div class="vp-card-hd"><h3>＋ 加开车次</h3></div>
-  <form method="post" action="{{ url_for('version_plan_lt.train_new') }}">
-    <div class="vp-row3">
-      <div class="vp-field">
-        <label class="vp-label">所属产品 <span class="vp-req">*</span></label>
-        <select class="vp-select" name="product_code" required>
-          {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="vp-field">
-        <label class="vp-label">发车月份 <span class="vp-req">*</span></label>
-        <input class="vp-input" name="month" value="{{ today[:7] }}" placeholder="2026-11" required>
-      </div>
-      <div class="vp-field">
-        <label class="vp-label">容量（人日）</label>
-        <input class="vp-input" name="capacity" type="number" min="1" step="1" value="40">
-      </div>
+<div class="vp-card" style="margin-bottom:14px">
+  <div class="vp-card-hd"><h3>开一个车次</h3></div>
+  <form method="post" action="{{ url_for('version_plan_lt.train_new') }}"
+        style="display:grid;grid-template-columns:1fr 160px 130px 170px 1fr;gap:10px;align-items:center">
+    <select class="vp-select" name="product_code" required>
+      <option value="">选择产品</option>
+      {% for p in products %}<option value="{{ p.code }}" {{ 'selected' if product == p.code }}>{{ p.code }} · {{ p.name }}</option>{% endfor %}
+    </select>
+    <input class="vp-input" type="month" name="month" value="{{ month or today[:7] }}">
+    <input class="vp-input" type="number" name="capacity" value="40" min="0" max="9999" step="1" title="容量（人日）">
+    <input class="vp-input" type="date" name="release_day" title="发车日">
+    <div class="vp-inline">
+      <button class="vp-btn vp-btn-primary" type="submit" name="action" value="generate">拟开车次</button>
+      <button class="vp-btn vp-btn-warn" type="submit" name="action" value="extra">临时加车（热修复）</button>
     </div>
-    <div class="vp-field">
-      <label class="vp-label">车次编号（留空自动生成，如 P1-2611-01）</label>
-      <input class="vp-input" name="code" placeholder="留空自动生成">
-    </div>
-    <button class="vp-btn vp-btn-primary" type="submit">加车</button>
   </form>
+  <p class="vp-mini" style="margin:8px 0 0">车次编号规则：产品-年月-序号（如 P1-2611-01）；临时加车带 H 后缀。容量默认 40 人日，装超了会被拒绝。</p>
 </div>
 {% endif %}
 
-{% if not groups %}
-<div class="vp-empty">还没有车次。先加开一个车次，再往里面装需求。</div>
-{% endif %}
-
-{% for m, list in groups.items() %}
-<div class="vp-card">
-  <div class="vp-card-hd">
-    <h3>{{ m }}</h3>
-    <span class="vp-muted">{{ list | length }} 个车次</span>
-  </div>
-  <div class="vp-grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
-    {% for t in list %}
-    <div class="vp-prod-card" style="border-left:4px solid {{ '#f59e0b' if t['status']=='停发' else ('#10b981' if t['status']=='已转版本' else '#2563eb') }}">
-      <div class="vp-prod-top">
-        <div>
-          <div class="vp-prod-name">{{ t['code'] }}</div>
-          <div class="vp-muted">{{ prod_map.get(t['product_code'], {}).get('name', t['product_code'] or '未归属产品') }}</div>
-        </div>
-        <span class="vp-tag {{ 't-hold' if t['status']=='停发' else ('t-done' if t['status']=='已转版本' else 't-pool') }}">{{ t['status'] }}</span>
-      </div>
-      <div style="margin:10px 0 6px">
-        <div style="height:10px;background:#e5e7eb;border-radius:6px;overflow:hidden">
-          <div style="height:100%;width:{{ t['pct'] }}%;background:{{ '#dc2626' if t['pct']>=95 else ('#f59e0b' if t['pct']>=70 else '#2563eb') }}"></div>
-        </div>
-        <div class="vp-muted" style="margin-top:6px">
-          {{ '%g'|format(t['used']) }} / {{ '%g'|format(t['capacity']) }} 人日 · {{ t['cnt'] }} 条 · 装载率 {{ t['pct'] }}%
-        </div>
-      </div>
-      {% if t['skip_reason'] %}<div class="vp-warnbox" style="margin:8px 0">停发原因：{{ t['skip_reason'] }}</div>{% endif %}
-      {% if t['merged_into'] %}<div class="vp-muted">已转为版本 {{ t['merged_into'] }}</div>{% endif %}
-      <div class="vp-inline" style="margin-top:10px;flex-wrap:wrap;gap:6px">
-        <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.train_board', code=t['code']) }}">装车台</a>
-        {% if can_manage and t['status'] != '已转版本' %}
-          {% if t['status'] == '停发' %}
-          <form method="post" action="{{ url_for('version_plan_lt.train_resume', code=t['code']) }}" style="display:inline">
-            <button class="vp-btn vp-btn-sm vp-btn-green" type="submit">恢复发车</button>
-          </form>
-          {% else %}
-          <form method="post" action="{{ url_for('version_plan_lt.train_skip', code=t['code']) }}" style="display:inline"
-                onsubmit="return confirm('停发后已装需求转候补，确定停发？')">
-            <input class="vp-input" name="reason" placeholder="停发原因（必填）" required style="width:150px;display:inline-block">
-            <button class="vp-btn vp-btn-sm vp-btn-warn" type="submit">停发</button>
-          </form>
-          {% endif %}
-        {% endif %}
-      </div>
-    </div>
+<div class="vp-card" style="margin-bottom:12px;padding:10px 14px">
+  <div class="vp-chip-row">
+    <a class="vp-chip {{ 'on' if not month else '' }}" href="{{ url_for('version_plan_lt.trains', product=product or '') }}">全部月份</a>
+    {% for m in months %}
+    <a class="vp-chip {{ 'on' if month == m else '' }}" href="{{ url_for('version_plan_lt.trains', month=m, product=product or '') }}">{{ m }}</a>
     {% endfor %}
   </div>
 </div>
+
+<div class="vp-cardgrid">
+{% for m, items in groups.items() %}
+  {% for t in items %}
+  <div class="vp-card" style="margin:0">
+    <div class="vp-tilehead">
+      <div>
+        <div class="code">{{ t.code }}</div>
+        <div class="sub">{{ t.product_code }} · {{ t.month }} · 发车日 {{ t.release_day or '未定' }}</div>
+      </div>
+      {% if t.status == '停发' %}<span class="vp-tag t-red">停发</span>
+      {% elif t.status == '已转版本' %}<span class="vp-tag t-done">已转版本</span>
+      {% elif t.status == '已发布' %}<span class="vp-tag t-done">已发布</span>
+      {% else %}<span class="vp-tag t-pool">{{ t.status }}</span>{% endif %}
+    </div>
+
+    <div class="vp-cap-line">
+      <span>装载 {{ '%g'|format(t.used) }} / {{ '%g'|format(t.capacity) }} 人日</span>
+      <span>余 {{ '%g'|format(t.capacity - t.used) }}</span>
+    </div>
+    <div class="vp-bar {{ 'over' if t.pct >= 100 else ('warn' if t.pct >= 80 else '') }}">
+      <i style="width:{{ t.pct }}%"></i>
+    </div>
+
+    {% if t.skip_reason %}
+    <div class="vp-mini" style="color:#b91c1c;margin-bottom:8px">停发原因：{{ t.skip_reason }}</div>
+    {% endif %}
+
+    <div class="vp-inline">
+      {% if t.status != '停发' %}
+      <a class="vp-btn vp-btn-primary vp-btn-sm" href="{{ url_for('version_plan_lt.train_board', code=t.code, product=t.product_code or '') }}">装车工作台</a>
+      {% endif %}
+      {% if can_manage %}
+        {% if t.status == '停发' %}
+        <form method="post" action="{{ url_for('version_plan_lt.train_resume', code=t.code) }}" style="margin:0">
+          <button class="vp-btn vp-btn-sm">恢复发车</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('version_plan_lt.train_skip', code=t.code) }}" style="margin:6px 0 0">
+          <div class="vp-inline" style="gap:6px">
+            <input class="vp-input" type="text" name="reason" required maxlength="200" placeholder="停发原因（必填）" style="flex:1;min-width:0;padding:4px 8px;font-size:12px">
+            <button class="vp-btn vp-btn-sm vp-btn-danger">停发</button>
+          </div>
+        </form>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="vp-card" style="grid-column:1/-1"><div class="vp-empty"><p>还没有车次，先在上方拟开一个</p></div></div>
 {% endfor %}
-{% include 'vpl_shell_bottom.html' with context %}
+</div>
+
+{% include 'vpl_shell_bottom.html' %}
 {% endblock %}

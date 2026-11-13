@@ -1,69 +1,95 @@
 {% extends "base.html" %}
-{% block title %}需求评估 · 原版风格{% endblock %}
+{% block title %}需求评估 · 版本规划{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
-<div class="vp-page-head">
-  <div>
-    <h1>⚖️ 需求评估</h1>
-    <p>四维打分（价值 / 客户权重 / 紧急度 / 实现成本），自动加权排序：≥70 进规划池、40-69 挂起、&lt;40 不做。每轮评估都留痕。</p>
-  </div>
-</div>
-
 {% set active = 'assess' %}
+{% set qp = {'product': product} if product else {} %}
 {% include 'vpl_shell_top.html' with context %}
 
-<form method="get" class="vp-toolbar" style="margin-bottom:12px">
-  <select class="vp-select" name="product" style="max-width:200px" onchange="this.form.submit()">
-    <option value="">全部产品</option>
-    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
-  </select>
-  <span class="vp-muted" style="margin-left:auto">待评估 {{ cnt }} 条 · 已评分 {{ scored }} 条 · 平均 {{ avg }} 分</span>
-</form>
-
-{% if not rows %}
-<div class="vp-empty">没有待评估需求。新需求登记后会先进这里。</div>
-{% endif %}
-
-{% for d in rows %}
-<div class="vp-card">
-  <div class="vp-card-hd">
-    <h3><span class="vp-code">{{ d['code'] }}</span> {{ d['description'][:50] }}{% if d['description']|length > 50 %}…{% endif %}</h3>
-    <span class="vp-tag t-wait">{{ d['status'] }}</span>
-  </div>
-  <div class="vp-muted" style="margin-bottom:8px">
-    来源 {{ d['source_type'] or d['doc_ref'] or '—' }}
-    {% if d['customer_name'] %} · 客户 {{ d['customer_name'] }}{% endif %}
-    · 类型 {{ d['demand_type'] or '—' }}
-    {% if hist.get(d['code']) %} · 上轮 {{ hist[d['code']]['score'] }} 分（{{ hist[d['code']]['verdict'] }}）{% endif %}
-  </div>
-  {% if d['business_value'] or d['acceptance'] %}
-  <div class="vp-muted" style="margin-bottom:10px">
-    {% if d['business_value'] %}业务价值：{{ d['business_value'][:80] }}{% endif %}
-    {% if d['acceptance'] %}　验收：{{ d['acceptance'][:60] }}{% endif %}
-  </div>
-  {% endif %}
-  {% if can_manage %}
-  <form method="post" action="{{ url_for('version_plan_lt.assess_submit', code=d['code']) }}">
-    <input type="hidden" name="product" value="{{ product }}">
-    <div class="vp-row3" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-      {% for key, label in [('value','业务价值'),('client','客户权重'),('urgent','紧急度'),('cost','实现成本')] %}
-      <div class="vp-field">
-        <label class="vp-label">{{ label }}</label>
-        <select class="vp-select" name="{{ key }}">
-          {% for n in [1,2,3,4,5] %}
-          <option value="{{ n }}" {{ 'selected' if n == 3 }}>{{ n }}{% if loop.last %}（最高）{% endif %}{% if loop.first %}（最低）{% endif %}</option>
-          {% endfor %}
-        </select>
-      </div>
-      {% endfor %}
+<div class="vp-page-head">
+  <div class="vp-ph">
+    <div class="vp-ph-ico">◫</div>
+    <div>
+      <h1>需求评估</h1>
+      <p>四维 1-5 分打分（业务价值 35% / 客户影响 25% / 紧急度 20% / 成本反向 20%），评估结论决定需求去向</p>
     </div>
-    <div class="vp-inline">
-      <input class="vp-input" name="comment" placeholder="评估结论/口径说明（可选）" style="flex:1">
-      <button class="vp-btn vp-btn-primary" type="submit">提交评估</button>
-    </div>
-  </form>
-  {% endif %}
+  </div>
 </div>
-{% endfor %}
-{% include 'vpl_shell_bottom.html' with context %}
+
+{% include 'vpl_pills.html' with context %}
+
+<div class="vp-main-side">
+  <div class="vp-card">
+    <div class="vp-card-hd">
+      <h3>待评估需求（{{ cnt }}）</h3>
+      <form method="get" action="{{ url_for('version_plan_lt.assess') }}" style="margin:0">
+        <select class="vp-select" name="product" onchange="this.form.submit()" style="min-width:140px">
+          <option value="">全部产品</option>
+          {% for p in products %}<option value="{{ p.code }}" {{ 'selected' if product == p.code }}>{{ p.code }}</option>{% endfor %}
+        </select>
+      </form>
+    </div>
+    {% if cnt == 0 %}
+      <div class="vp-empty">
+        <p>当前没有待评估需求，先去「需求归集」登记。</p>
+        <a class="vp-btn" href="{{ url_for('version_plan_lt.demands', **qp) }}">去需求归集</a>
+      </div>
+    {% else %}
+    <table class="vp-table">
+      <thead>
+        <tr><th style="width:96px">编号</th><th>标题</th><th style="width:86px">来源</th>
+          <th style="width:64px;text-align:right">预估</th><th style="width:64px;text-align:right">当前分</th>
+          <th style="width:110px">最近结论</th></tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td><b class="vp-num">{{ r.code }}</b></td>
+          <td><a href="{{ url_for('version_plan_lt.demand_edit', code=r.code) }}">{{ r.description }}</a></td>
+          <td class="vp-mini">{{ r.source_type or '—' }}</td>
+          <td style="text-align:right" class="vp-num">{{ '%g'|format(r.estimate or 0) }} 人日</td>
+          <td style="text-align:right" class="vp-num">{{ '%.1f'|format(r.score or 0) }}</td>
+          <td class="vp-mini">
+            {% set h = hist.get(r.code) %}
+            {{ (h.verdict ~ ' / ' ~ '%.1f'|format(h.score)) if h else '未评估' }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <p class="vp-mini" style="margin-top:10px">已评估需求 {{ scored }} 条，平均分 {{ avg }}。</p>
+  </div>
+
+  <div class="vp-card">
+    <div class="vp-card-hd"><h3>打分</h3></div>
+    {% if cnt == 0 %}
+      <div class="vp-empty">没有待评估需求可打分</div>
+    {% else %}
+    <form method="post" action="{{ url_for('version_plan_lt.assess_apply') }}" class="vp-form-col">
+      <select class="vp-select" name="code" required>
+        <option value="">选择需求</option>
+        {% for r in rows %}<option value="{{ r.code }}">{{ r.code }} · {{ r.description }}</option>{% endfor %}
+      </select>
+      <label class="vp-mini">业务价值（1-5 分）
+        <input class="vp-input" type="number" name="value" min="1" max="5" value="4" style="margin-top:4px" required>
+      </label>
+      <label class="vp-mini">客户影响（1-5 分）
+        <input class="vp-input" type="number" name="client" min="1" max="5" value="4" style="margin-top:4px" required>
+      </label>
+      <label class="vp-mini">紧急度（1-5 分）
+        <input class="vp-input" type="number" name="urgent" min="1" max="5" value="3" style="margin-top:4px" required>
+      </label>
+      <label class="vp-mini">成本反向（1-5 分，成本越低分越高）
+        <input class="vp-input" type="number" name="cost" min="1" max="5" value="3" style="margin-top:4px" required>
+      </label>
+      <input class="vp-input" type="text" name="comment" placeholder="评估意见（可空）">
+      <p class="vp-mini">结论自动按分判定：≥70 进规划池（可装车） / 40-69 挂起待观察 / &lt;40 不做。</p>
+      <button class="vp-btn vp-btn-primary" type="submit">保存评估</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% include 'vpl_shell_bottom.html' %}
 {% endblock %}

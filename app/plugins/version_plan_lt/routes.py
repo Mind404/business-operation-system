@@ -592,8 +592,10 @@ def index():
         prod_cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
                            'pool': dstat['规划池'], 'versions': len(vrows), 'active': active,
                            'released': dstat['已发布']})
-    return render_template('vpl_index.html', products=prod_cards, **ov,
-                           can_manage=_can_manage(), today=_today())
+    trains_total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_TRAINS)}').fetchone()['c']
+    pool_total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE status="规划池"').fetchone()['c']
+    return render_template('vpl_index.html', products=prod_cards, **ov, trains_total=trains_total,
+                           pool_total=pool_total, can_manage=_can_manage(), today=_today())
 
 
 @blueprint.route('/version_plan_lt/products/<code>')
@@ -729,7 +731,7 @@ def demands():
         args.append(cust)
     wsql = ('WHERE ' + ' AND '.join(where)) if where else ''
     total = db.execute(f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} {wsql}', args).fetchone()['c']
-    rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} {wsql} ORDER BY id DESC LIMIT ? OFFSET ?',
+    rows = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} {wsql} ORDER BY score DESC, id DESC LIMIT ? OFFSET ?',
                       args + [size, (page - 1) * size]).fetchall()
     # 下拉候选按当前产品收敛
     cwhere, cargs = _prod_where(prod)
@@ -779,26 +781,38 @@ def demand_new():
         return redirect(url_for('version_plan_lt.demand_new'))
     code = _next_code(db)
     now = _now()
+    # 归集即四维打分（Leantime 原版逻辑：业务价值 35% / 客户影响 25% / 紧急度 20% / 成本反向 20%）
+    try:
+        wv = int(f.get('w_value') or 3)
+        wc = int(f.get('w_client') or 3)
+        wu = int(f.get('w_urgent') or 3)
+        wcost = int(f.get('w_cost') or 3)
+    except ValueError:
+        wv = wc = wu = wcost = 3
+    wv, wc, wu, wcost = [min(5, max(1, x)) for x in (wv, wc, wu, wcost)]
+    score = round((wv * 0.35 + wc * 0.25 + wu * 0.20 + (6 - wcost) * 0.20) / 5 * 100, 1)
     db.execute(
         f'''INSERT INTO {_t(L_DEMANDS)}
         (code, doc_ref, raised_at, customer_name, description, business_value, acceptance, demand_type,
          filter_result, filter_note, version_no, is_custom, custom_customer, status, note, product_code,
-         created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+         source_type, source_ref, score, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (code, doc_ref, (f.get('raised_at') or _today()), (f.get('customer_name') or '').strip(),
          desc, (f.get('business_value') or '').strip(), (f.get('acceptance') or '').strip(),
          (f.get('demand_type') or '新增功能'), '', '', (f.get('version_no') or ''),
          1 if f.get('is_custom') else 0, (f.get('custom_customer') or '').strip(),
-         '待过滤', (f.get('note') or '').strip(), prod, now, now))
+         '待过滤', (f.get('note') or '').strip(), prod,
+         (f.get('source_type') or '客户提报').strip(), (f.get('source_ref') or '').strip(),
+         score, now, now))
     _safe_estimate(db, code, f.get('estimate'))
     db.commit()
     sims = _similar(db, desc, product=prod)
     _log('新增需求', f'{code} {desc[:30]}')
-    tip = f'已录入需求 {code}，当前状态「待过滤」。'
+    tip = f'已录入需求 {code}，评分 {score}，当前状态「待过滤」。'
     if sims:
         tip += ' 疑似重复：' + '、'.join(f'{s[0]}({s[2]})' for s in sims) + '，请在过滤时确认。'
     flash(tip, 'warning' if sims else 'success')
-    return redirect(url_for('version_plan_lt.demands', status='待过滤', product=prod))
+    return redirect(url_for('version_plan_lt.demands', product=prod))
 
 
 @blueprint.route('/version_plan_lt/demands/<code>', methods=['GET', 'POST'])
@@ -823,7 +837,7 @@ def demand_edit(code):
                                dtypes=DEMAND_TYPE, statuses=DEMAND_STATUS,
                                sims=_similar(db, d['description'], exclude_id=d['id'],
                                              product=d['product_code'] or ''),
-                               logs=logs, today=_today())
+                               logs=logs, today=_today(), can_manage=_can_manage())
     f = request.form
     doc_ref = (f.get('doc_ref') or '').strip()
     if not doc_ref:
@@ -1090,9 +1104,18 @@ def versions():
         "WHEN '规划中' THEN 3 WHEN '已发布' THEN 4 ELSE 5 END, release_date ASC", args).fetchall()]
     counts = {}
     for r in rows:
-        counts[r['version_no']] = db.execute(
-            f'SELECT COUNT(*) c FROM {_t(L_DEMANDS)} WHERE version_no=? AND product_code=?',
-            (r['version_no'], r['product_code'] or '')).fetchone()['c']
+        g = db.execute(
+            f'SELECT COUNT(*) c, COALESCE(SUM(estimate),0) s FROM {_t(L_DEMANDS)} '
+            'WHERE version_no=? AND product_code=?',
+            (r['version_no'], r['product_code'] or '')).fetchone()
+        counts[r['version_no']] = g['c']
+        r['need_count'] = g['c']
+        r['load'] = float(g['s'] or 0)
+        # 版本容量：来源车次容量，找不到则按同产品车次均值兜底
+        tr = db.execute(f'SELECT * FROM {_t(L_TRAINS)} WHERE merged_into=? AND product_code=?',
+                        (r['version_no'], r['product_code'] or '')).fetchone()
+        r['train_code'] = tr['code'] if tr else ''
+        r['capacity'] = float(tr['capacity'] or 0) if tr else 40.0
         r['stage'] = STAGE_MAP.get(r['status'], 0)
     # 规划池只列同产品
     pool = db.execute(
@@ -1100,10 +1123,28 @@ def versions():
         [prod] if prod else []).fetchall()
     customers = db.execute(
         f'SELECT name, integrating_version_no FROM {_t(L_CUSTOMERS)} {wsql} ORDER BY name', args).fetchall()
+    from .trains import _used
+    trains = []
+    for t in db.execute(f'SELECT * FROM {_t(L_TRAINS)} {wsql} ORDER BY code', args).fetchall():
+        td = dict(t)
+        td['used'], td['cnt'] = _used(db, td['code'])
+        trains.append(td)
     return render_template('vpl_versions.html', rows=rows, counts=counts, pool=pool,
                            customers=customers, statuses=VERSION_STATUS, vtypes=VERSION_TYPE,
+                           trains=trains,
                            product=prod, products=_product_rows(db), prod_map=_product_map(db),
                            can_manage=_can_manage(), today=_today(), modules=_modules())
+
+
+@blueprint.route('/version_plan_lt/versions/from-train', methods=['POST'])
+def version_from_train():
+    """从车次生成版本：整列装载清单固化成版本（对齐 Leantime 原版 versions 页表单）。"""
+    code = (request.form.get('train_code') or '').strip()
+    if not code:
+        flash('请先选择一个车次', 'error')
+        return redirect(url_for('version_plan_lt.versions'))
+    from .trains import train_to_version
+    return train_to_version(code)
 
 
 @blueprint.route('/version_plan_lt/versions/new', methods=['POST'])
@@ -1194,6 +1235,11 @@ def version_detail(no):
         f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=? ORDER BY name',
         (v['product_code'] or '',)).fetchall()
     release = _rel_row(db, no, v['product_code'] or '')
+    # 容量：优先取来源车次容量，取不到按 40 人日兜底（用于 KPI「容量/负载」）
+    tr = db.execute(f'SELECT * FROM {_t(L_TRAINS)} WHERE merged_into=? AND product_code=?',
+                    (no, v['product_code'] or '')).fetchone()
+    capacity = float(tr['capacity']) if tr and tr['capacity'] else 40.0
+    load = sum(float(x['estimate'] or 0) for x in ds)
     logs = db.execute(f'SELECT * FROM {_t(L_LOGS)} WHERE obj_no=? ORDER BY id DESC LIMIT 20',
                       (no,)).fetchall()
     frozen = v['status'] == '已冻结'
@@ -1205,6 +1251,7 @@ def version_detail(no):
     return render_template('vpl_version_detail.html', v=v, ds=ds, pool=pool, customers=customers,
                            gate=gate, checks=gate['checks'], signs=gate['signs'],
                            sign_roles=roles, check_items=CHECK_ITEMS,
+                           capacity=capacity, load=load,
                            release=release, logs=logs, frozen=frozen, can_edit=can_edit,
                            prod_map=_product_map(db), prod_name=_product_name(db, v['product_code'] or ''),
                            can_manage=_can_manage(), is_platform=_is_platform(),
@@ -1333,6 +1380,13 @@ def version_status(no):
     elif target == '已发布':
         # v13.0.1：发布受控 —— 确认清单 7 项全通过 + 三方（定制版四方）签核，缺一不可
         from .trains import release_gate
+        rb_in = (request.form.get('rollback') or '').strip()
+        if rb_in:
+            db.execute(f'UPDATE {_t(L_VERSIONS)} SET rollback_plan=?, updated_at=? '
+                       'WHERE version_no=? AND product_code=?',
+                       (rb_in, _now(), no, v['product_code'] or ''))
+            v = dict(v)
+            v['rollback_plan'] = rb_in
         gate = release_gate(db, no, v['product_code'] or '', v['vtype'])
         if not gate['ok']:
             flash('发布门禁未通过：' + '；'.join(gate['reasons']), 'error')
@@ -1583,7 +1637,10 @@ def customers():
     edit_row = db.execute(
         f'SELECT * FROM {_t(L_CUSTOMERS)} WHERE name=?{" AND product_code=?" if prod else ""}',
         [edit_name] + ([prod] if prod else [])).fetchone() if edit_name else None
+    notices = db.execute(
+        f'SELECT * FROM {_t(L_NOTICES)} ORDER BY id DESC LIMIT 20').fetchall()
     return render_template('vpl_customers.html', rows=rows, versions=versions, warn=warn,
+                           notices=notices,
                            products=_product_rows(db), product=prod, prod_map=_product_map(db),
                            can_manage=_can_manage(), today=_today(), edit_row=edit_row)
 
@@ -1591,6 +1648,13 @@ def customers():
 # ---------------------------------------------------------------- 客户回告
 @blueprint.route('/version_plan_lt/report')
 def report():
+    # v13.0.0.4：对齐 Leantime 信息架构——不再单独占一页，「客户回告」页统一承载
+    prod = request.args.get('product')
+    return redirect(url_for('version_plan_lt.customers', **({'product': prod} if prod else {})))
+
+
+@blueprint.route('/version_plan_lt/report/legacy')
+def report_legacy():
     _ensure_tables()
     db = get_db()
     cust = (request.args.get('customer') or '').strip()
@@ -1707,6 +1771,44 @@ def _modules():
     except Exception:
         pass
     return ['MQTT', 'FOTA', '低功耗', 'AT 命令', '网络注册', 'SIM 管理', '定位']
+
+
+# ==================== 发布受控（对齐 Leantime 原版 release 页） ====================
+@blueprint.route('/version_plan_lt/release')
+def release():
+    _ensure_tables()
+    db = get_db()
+    prod = _req_product()
+    where, args = _prod_where(prod)
+    wsql = ('WHERE ' + where) if where else ''
+    versions = [dict(r) for r in db.execute(
+        f'SELECT * FROM {_t(L_VERSIONS)} {wsql} ORDER BY id DESC', args).fetchall()]
+    from .trains import release_gate
+    gates = {}
+    for v in versions:
+        g = release_gate(db, v['version_no'], v['product_code'] or '', v['vtype'] or '迭代')
+        missing = [r for r in g['roles'] if (g['signs'].get(r, {}).get('verdict') or '') != '同意']
+        passed = sum(1 for c in g['checks'] if (c['result'] or '') == '通过')
+        gates[f"{v['version_no']}|{v['product_code'] or ''}"] = {
+            'ok': g['ok'], 'reasons': g['reasons'], 'missing': missing,
+            'checks_label': f'{passed}/{len(g["checks"])}',
+        }
+    releases = db.execute(
+        f'SELECT * FROM {_t(L_RELEASES)} {wsql} ORDER BY id DESC', args).fetchall()
+    return render_template('vpl_release.html', rows=versions, gates=gates, releases=releases,
+                           product=prod, products=_product_rows(db), prod_map=_product_map(db),
+                           can_manage=_can_manage(), today=_today())
+
+
+# ============ 需求评估：整页单表单提交（对齐 Leantime 原版 assess 页） ============
+@blueprint.route('/version_plan_lt/assess/apply', methods=['POST'])
+def assess_apply():
+    from .trains import assess_submit
+    code = (request.form.get('code') or '').strip()
+    if not code:
+        flash('请先选择要打分的一条需求', 'error')
+        return redirect(url_for('version_plan_lt.assess'))
+    return assess_submit(code)
 
 
 # ==================== 数据开放接口 OpenAPI v1 ====================

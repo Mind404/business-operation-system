@@ -135,11 +135,19 @@ def train_new():
         cap = 40.0
     ym = month.replace('-', '')[2:]
     base = f'{prod}-{ym}'
-    n = 1
-    while db.execute(f'SELECT 1 FROM {_t("version_plan_lt_trains")} WHERE code=?',
-                     (f'{base}-{n:02d}',)).fetchone():
-        n += 1
-    code = (f.get('code') or '').strip() or f'{base}-{n:02d}'
+    # 临时加车（热修复）走 H 后缀编号，与常规月度车次区分（对齐 Leantime 原版规则）
+    if (f.get('action') or '').strip() == 'extra':
+        n = 1
+        code = f'{base}-H'
+        while db.execute(f'SELECT 1 FROM {_t("version_plan_lt_trains")} WHERE code=?', (code,)).fetchone():
+            n += 1
+            code = f'{base}-H{n}'
+    else:
+        n = 1
+        while db.execute(f'SELECT 1 FROM {_t("version_plan_lt_trains")} WHERE code=?',
+                         (f'{base}-{n:02d}',)).fetchone():
+            n += 1
+        code = (f.get('code') or '').strip() or f'{base}-{n:02d}'
     if db.execute(f'SELECT 1 FROM {_t("version_plan_lt_trains")} WHERE code=?', (code,)).fetchone():
         flash(f'车次 {code} 已存在', 'error')
         return redirect(url_for('version_plan_lt.trains', product=prod))
@@ -257,10 +265,13 @@ def train_to_version(code):
     with LOCK:
         try:
             now = _now()
+            vtype = (request.form.get('vtype') or '迭代').strip() or '迭代'
+            fdate = (request.form.get('freeze_date') or '').strip()
+            pdate = (request.form.get('release_date') or request.form.get('publish_date') or '').strip()
             db.execute(f'INSERT INTO {_t("version_plan_lt_versions")} '
-                       '(version_no, vtype, product_code, release_date, status, created_at, updated_at) '
-                       'VALUES (?,?,?,?,?,?,?)',
-                       (no, '迭代', t['product_code'], t['release_day'] or '', '规划中', now, now))
+                       '(version_no, vtype, product_code, freeze_date, release_date, status, created_at, updated_at) '
+                       'VALUES (?,?,?,?,?,?,?,?)',
+                       (no, vtype, t['product_code'], fdate, pdate or (t['release_day'] or ''), '规划中', now, now))
             for it in _items(db, code, '已装'):
                 db.execute(f'UPDATE {_t("version_plan_lt_demands")} SET version_no=?, updated_at=? WHERE code=?',
                            (no, now, it['demand_code']))
@@ -333,6 +344,10 @@ def board_load():
                 return redirect(url_for('version_plan_lt.train_board', code=code))
             if d['product_code'] and d['product_code'] != t['product_code']:
                 flash(f'{dcode} 属于其它产品，不能装进本车次', 'error')
+                return redirect(url_for('version_plan_lt.train_board', code=code))
+            # R7：只有「规划池」能装车
+            if d['status'] != '规划池':
+                flash(f'{dcode} 当前状态「{d["status"]}」，只有「规划池」能装车（R7）', 'error')
                 return redirect(url_for('version_plan_lt.train_board', code=code))
             dup = db.execute(f'SELECT 1 FROM {_t("version_plan_lt_items")} WHERE train_code=? AND demand_code=? '
                              'AND state=?', (code, dcode, '已装')).fetchone()

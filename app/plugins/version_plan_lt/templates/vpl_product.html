@@ -2,152 +2,96 @@
 {% block title %}{{ p['name'] }} · 产品空间{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+{% set active = 'products' %}
+{% set product = p['code'] %}
+{% set qp = {'product': p['code']} %}
+{% include 'vpl_shell_top.html' with context %}
 
 <div class="vp-page-head">
-  <div>
-    <h1>📦 {{ p['name'] }} <span class="vp-code" style="font-size:13px">{{ p['code'] }}</span></h1>
-    <p>{% if p['owner'] %}负责人：{{ p['owner'] }}　{% endif %}{{ p['description'] or '产品空间：需求过滤、版本规划与流转受控' }}</p>
+  <div class="vp-ph">
+    <div class="vp-ph-ico">◰</div>
+    <div>
+      <h1>{{ p['name'] }} <span class="vp-mini vp-num">{{ p['code'] }}</span></h1>
+      <p>{% if p['owner'] %}负责人 {{ p['owner'] }}{% endif %}　{{ p['description'] or '产品空间：需求归集 → 评估 → 装车 → 版本 → 发布' }}</p>
+    </div>
   </div>
   <div class="vp-head-actions">
-    <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>
-    <a class="vp-btn" href="{{ url_for('version_plan_lt.demands', product=p['code']) }}?status=待过滤">🧹 去过滤（{{ stat['待过滤'] }}）</a>
-    <a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan_lt.versions', product=p['code']) }}">🗓️ 版本规划</a>
+    <span class="vp-tag {{ 't-done' if p['status'] == '启用' else 't-red' }}">{{ p['status'] }}</span>
+    <a class="vp-btn" href="{{ url_for('version_plan_lt.demands', **qp) }}">去需求归集</a>
+    <a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan_lt.versions', **qp) }}">版本规划</a>
   </div>
 </div>
 
-{% set active = 'index' %}{% set product = p['code'] %}
-{% include 'vpl_shell_top.html' with context %}
+{% include 'vpl_pills.html' with context %}
 
 {% if overdue_branches %}
-<div class="vp-errbox">
-  <b>⚠️ 定制分支超期未合回（{{ overdue_branches|length }} 个客户）</b><br>
-  {% for b in overdue_branches %}
-  {{ b['name'] }} · 分支 {{ b['custom_branch_no'] }} → 计划合回 {{ b['merge_target_no'] }}，期限 <b>{{ b['merge_deadline'] }}</b>{% if not loop.last %}；{% endif %}
-  {% endfor %}
+<div class="vp-card" style="border-color:#f3c9c9;margin-bottom:12px">
+  <div class="vp-mini" style="color:#b91c1c">定制分支超期未合回 {{ overdue_branches|length }} 个客户：
+    {% for b in overdue_branches %}{{ b['name'] }}（{{ b['custom_branch_no'] }} → {{ b['merge_target_no'] }}，期限 {{ b['merge_deadline'] }}）{{ '、' if not loop.last }}{% endfor %}
+  </div>
 </div>
 {% endif %}
 
-<div class="vp-kpis">
-  <a class="vp-kpi amber" href="{{ url_for('version_plan_lt.demands', product=p['code']) }}&status=待过滤" style="text-decoration:none">
-    <div class="k-label">🧹 待过滤</div>
-    <div class="k-num">{{ stat['待过滤'] }}</div>
-    <div class="k-sub">需人工判定去留　近 30 天新增 <b>{{ week_new }}</b></div>
-  </a>
-  <a class="vp-kpi" href="{{ url_for('version_plan_lt.demands', product=p['code']) }}&status=规划池" style="text-decoration:none">
-    <div class="k-label">📋 规划池</div>
-    <div class="k-num">{{ stat['规划池'] }}</div>
-    <div class="k-sub">可排期　挂起 <b>{{ stat['挂起'] }}</b>　不做 <b>{{ stat['不做'] }}</b></div>
-  </a>
-  <a class="vp-kpi purple" href="{{ url_for('version_plan_lt.versions', product=p['code']) }}" style="text-decoration:none">
-    <div class="k-label">🗓️ 在建版本</div>
-    <div class="k-num">{{ vstat['规划中'] + vstat['已冻结'] + vstat['开发中'] + vstat['测试中'] }}</div>
-    <div class="k-sub">规划 {{ vstat['规划中'] }} · 冻结 {{ vstat['已冻结'] }} · 开发 {{ vstat['开发中'] }} · 测试 {{ vstat['测试中'] }}</div>
-  </a>
-  <a class="vp-kpi green" href="{{ url_for('version_plan_lt.versions', product=p['code']) }}" style="text-decoration:none">
-    <div class="k-label">🚀 本月发布</div>
-    <div class="k-num">{{ month_release }}</div>
-    <div class="k-sub">累计已发布 <b>{{ vstat['已发布'] }}</b>　已归档 <b>{{ vstat['已归档'] }}</b></div>
-  </a>
+<div class="vp-kpi4">
+  <div class="vp-kpi amber"><div class="k-label">待评估</div><div class="k-num">{{ stat['待过滤'] }}</div></div>
+  <div class="vp-kpi purple"><div class="k-label">规划池</div><div class="k-num">{{ stat['规划池'] }}</div></div>
+  <div class="vp-kpi"><div class="k-label">在建版本</div><div class="k-num">{{ vstat['规划中'] + vstat['已冻结'] + vstat['开发中'] + vstat['测试中'] }}</div></div>
+  <div class="vp-kpi green"><div class="k-label">累计已发布</div><div class="k-num">{{ vstat['已发布'] }}</div></div>
 </div>
 
-<div class="vp-card">
-  <div class="vp-card-hd">
-    <h3>需求流转</h3>
-    <span class="vp-muted">共 {{ total }} 条 · 过滤完成率 <b>{{ rate }}%</b>（已判定 {{ total - stat['待过滤'] }}/{{ total }}）</span>
-  </div>
-  <div class="vp-dist-bar">
-    {% if total == 0 %}
-      <div class="vp-dist-seg s-empty">还没有需求，先登记或导入 CSV</div>
-    {% else %}
-      {% for key, cls, label in [('待过滤','s-wait','待过滤'), ('规划池','s-pool','规划池'), ('挂起','s-hold','挂起'),
-                                ('已排期','s-plan','已排期'), ('已发布','s-done','已发布'), ('不做','s-no','不做')] %}
-        {% if stat[key] %}
-        <div class="vp-dist-seg {{ cls }}" style="flex-grow:{{ stat[key] }}" title="{{ label }} {{ stat[key] }} 条">
-          <span class="n">{{ stat[key] }}</span>{% if stat[key] * 100 >= total * 8 %} {{ label }}{% endif %}
-        </div>
-        {% endif %}
-      {% endfor %}
-    {% endif %}
-  </div>
-</div>
-
-<div class="vp-card">
-  <div class="vp-card-hd">
-    <h3>版本路线</h3>
-    <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.versions', product=p['code']) }}">全部版本 →</a>
-  </div>
-  {% if versions %}
-  <div class="vp-road">
-    {% for v in versions %}
-    <div class="vp-road-row">
-      <div class="vp-road-id">
-        <b>{{ v['version_no'] }}</b>
-        {% set st_cls = {'规划中':'t-wait','已冻结':'t-pool','开发中':'t-plan','测试中':'t-plan','已发布':'t-done','已归档':'t-no'} %}
-        <span class="vp-tag {{ st_cls.get(v['status'],'t-no') }}">{{ v['status'] }}{% if v['vtype'] == '客户定制' %} · 定制{% endif %}</span>
-        <a href="{{ url_for('version_plan_lt.version_detail', no=v['version_no'], product=v['product_code']) }}">查看详情</a>
-      </div>
-      <div>
-        <div class="vp-stage">
-          {% for i in range(4) %}
-          <i class="{% if i < v['stage'] %}done{% elif i == v['stage'] %}{% if v['status'] in ('已发布','已归档') %}done{% else %}cur{% endif %}{% endif %}"></i>
-          {% endfor %}
-        </div>
-        <div class="vp-stage-labels"><span>规划</span><span>冻结</span><span>开发/测试</span><span>发布</span></div>
-        <div class="vp-road-dates">
-          {% if v['freeze_date'] %}冻结 <b>{{ v['freeze_date'] }}</b>{% endif %}
-          {% if v['test_date'] %}　提测 <b>{{ v['test_date'] }}</b>{% endif %}
-          {% if v['release_date'] %}　发布 <b>{{ v['release_date'] }}</b>{% endif %}
-        </div>
-      </div>
-      <div class="vp-road-num"><b>{{ v['needs'] }}</b> 条需求
-        {% if v['needs'] %}<div class="vp-muted" style="white-space:nowrap">已交付 {{ v['needs_done'] }}</div>{% endif %}
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="vp-empty"><div class="big">🗓️</div><p>这个产品还没有版本。</p></div>
-  {% endif %}
-</div>
-
-<div class="vp-row2">
+<div class="vp-2col">
   <div class="vp-card">
-    <div class="vp-card-hd">
-      <h3>待过滤队列</h3>
-      <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demands', product=p['code']) }}&status=待过滤">全部 →</a>
-    </div>
-    {% if pending %}
-    <div class="vp-queue">
-      {% for d in pending %}
-      <a class="vp-queue-item" href="{{ url_for('version_plan_lt.demand_edit', code=d['code']) }}">
-        <span class="vp-tag t-wait">{{ d['code'] }}</span>
-        <div class="vp-queue-main"><p>{{ d['description'] }}</p></div>
-        <span class="vp-queue-meta">{{ d['customer_name'] or '未标客户' }}</span>
-      </a>
+    <div class="vp-card-hd"><h3>需求流转（共 {{ total }} 条）</h3><span class="vp-mini">过滤完成率 {{ rate }}%</span></div>
+    <table class="vp-table">
+      <thead><tr><th>状态</th><th style="width:70px;text-align:right">条数</th><th style="width:90px;text-align:right">占比</th></tr></thead>
+      <tbody>
+      {% for st in ['待过滤','规划池','挂起','已排期','已发布','不做'] %}
+        <tr><td>{{ st }}</td><td style="text-align:right" class="vp-num">{{ stat[st] }}</td>
+          <td style="text-align:right" class="vp-num">{{ (stat[st] * 100 / total)|round(1) if total else 0 }}%</td></tr>
       {% endfor %}
-    </div>
-    {% else %}
-    <div class="vp-empty"><div class="big">✅</div><p>队列已清空。</p></div>
-    {% endif %}
+      </tbody>
+    </table>
+    <p class="vp-mini" style="margin-top:8px">近 30 天新增 {{ week_new }} 条；本月发布 {{ month_release }} 个版本。</p>
   </div>
-  <div>
-    <div class="vp-card">
-      <div class="vp-card-hd"><h3>里程碑（未来 7 天及已逾期）</h3></div>
-      {% if milestones %}
-      <div class="vp-queue">
-        {% for m in milestones[:6] %}
-        <div class="vp-queue-item">
-          <span class="vp-tag {% if m['date'] < today %}t-red{% else %}t-plan{% endif %}">{{ m['date'][5:] }}</span>
-          <div class="vp-queue-main"><p><b style="color:#16233a">{{ m['version_no'] }}</b> · {{ m['label'] }}</p></div>
-          <span class="vp-queue-meta">{{ m['state'] }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="vp-empty"><p>近 7 天没有里程碑。</p></div>
-      {% endif %}
-    </div>
+
+  <div class="vp-card">
+    <div class="vp-card-hd"><h3>版本路线</h3>
+      <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.versions', **qp) }}">全部版本</a></div>
+    {% if versions %}
+    <table class="vp-table">
+      <thead><tr><th style="width:84px">版本号</th><th style="width:76px">状态</th><th>里程碑</th><th style="width:80px;text-align:right">需求</th></tr></thead>
+      <tbody>
+      {% for v in versions %}
+        <tr>
+          <td><a class="vp-num" href="{{ url_for('version_plan_lt.version_detail', no=v['version_no'], product=v['product_code']) }}">{{ v['version_no'] }}</a></td>
+          <td><span class="vp-tag {{ 't-done' if v['status'] == '已发布' else ('t-wait' if v['status'] == '已冻结' else 't-pool') }}">{{ v['status'] }}</span></td>
+          <td class="vp-mini">冻结 {{ v['freeze_date'] or '—' }}　发布 {{ v['release_date'] or '—' }}</td>
+          <td style="text-align:right" class="vp-num">{{ v['needs'] }} 条</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="vp-empty">这个产品还没有版本。</div>{% endif %}
   </div>
 </div>
-{% include 'vpl_shell_bottom.html' with context %}
+
+<div class="vp-card" style="margin-top:14px">
+  <div class="vp-card-hd"><h3>待评估队列</h3>
+    <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.assess', **qp) }}">去打分</a></div>
+  {% if pending %}
+  <table class="vp-table">
+    <thead><tr><th style="width:96px">编号</th><th>标题</th><th style="width:90px">来源</th><th style="width:70px;text-align:right">人日</th></tr></thead>
+    <tbody>
+    {% for d in pending %}
+      <tr><td><b class="vp-num">{{ d['code'] }}</b></td>
+        <td><a href="{{ url_for('version_plan_lt.demand_edit', code=d['code'], **qp) }}">{{ d['description'] }}</a></td>
+        <td class="vp-mini">{{ d['source_type'] or '—' }}</td>
+        <td style="text-align:right" class="vp-num">{{ '%g'|format(d['estimate'] or 0) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="vp-empty">队列已清空。</div>{% endif %}
+</div>
+
+{% include 'vpl_shell_bottom.html' %}
 {% endblock %}

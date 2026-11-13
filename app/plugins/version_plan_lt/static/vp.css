@@ -358,3 +358,44 @@
 .lt-main .vp-capbar > i{display:block;height:100%;background:#0f766e;transition:width .3s}
 .lt-main .vp-capbar.warn > i{background:#d97706}
 .lt-main .vp-capbar.over > i{background:#c0392b}
+
+/* ===== Leantime IA 复刻所需布局组件（v13.0.0.4） ===== */
+.vp-ph{display:flex;gap:12px;align-items:flex-start}
+.vp-ph-ico{width:34px;height:34px;border-radius:8px;background:#eef7f6;color:#0f766e;
+  display:grid;place-items:center;font-size:16px;flex:0 0 auto}
+.vp-2col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+.vp-main-side{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:14px;align-items:start}
+.vp-side-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:14px;align-items:start}
+.vp-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.vp-chip-row{display:flex;gap:8px;flex-wrap:wrap}
+.vp-chip{padding:5px 10px;border-radius:8px;border:1px solid #dbe4e4;background:#fff;color:#33504f;
+  font-size:12px;text-decoration:none;display:inline-flex;gap:6px;align-items:center}
+.vp-chip:hover{border-color:#b9d2ce;color:#0f5f58;text-decoration:none}
+.vp-chip.on{background:#0f766e;border-color:#0f766e;color:#fff}
+.vp-chip.off{background:#f1f4f4;color:#93a4a3;text-decoration:line-through}
+.vp-chip .n{opacity:.72;font-size:11px}
+.vp-gate-item{border:1px solid #e6ecec;border-radius:9px;padding:10px 12px;background:#fff;margin-bottom:8px}
+.vp-gate-item:last-child{margin-bottom:0}
+.vp-gate-hd{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;font-size:12.5px;color:#22403d}
+.vp-gate-hd .no{color:#93a4a3;margin-right:5px;font-variant-numeric:tabular-nums}
+.vp-gate-item form{margin:8px 0 0}
+.vp-inline{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.vp-form-col{display:flex;flex-direction:column;gap:10px}
+.vp-mini{font-size:11.5px;color:var(--vp-ink-3);line-height:1.5}
+.vp-num{font-variant-numeric:tabular-nums}
+.vp-bar{height:8px;background:#e6eded;border-radius:99px;overflow:hidden;margin:6px 0 10px}
+.vp-bar>i{display:block;height:100%;background:#0f766e}
+.vp-bar.warn>i{background:#d97706}
+.vp-bar.over>i{background:#c0392b}
+.vp-cap-line{display:flex;justify-content:space-between;font-size:12px;color:var(--vp-ink-2)}
+.vp-cardgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.vp-tilehead{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px}
+.vp-tilehead .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:16px;font-weight:700;color:#12403c}
+.vp-tilehead .sub{font-size:11.5px;color:var(--vp-ink-3);margin-top:2px}
+.vp-kpi4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.vp-kpi4 .vp-kpi{margin:0}
+.vp-kpi4 .vp-kpi .k-num{font-size:20px}
+@media(max-width:920px){
+  .vp-2col,.vp-main-side,.vp-side-main{grid-template-columns:minmax(0,1fr)}
+  .vp-kpi4{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
