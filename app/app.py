@@ -353,7 +353,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.8'
+        APP_VERSION = '13.0.0.9'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -1128,8 +1128,15 @@ def _backup_list():
                 kind = '主库' if pre == 'business' else f'插件库({pre})'
             if _is_prot:
                 kind += '〔恢复前自动保护〕'
+            # v13.0.0.9：生成时间取文件名里的时间戳（xxx_备份_20261114_004506.db），
+            # 导入的旧备份也显示它当初的生成时刻，不会再出现"文件名 11-14、时间列 11-13"的矛盾
+            _tm = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime))
+            _mm = _re.search(r'_(?:备份|保护)_(\d{8})_(\d{6})\.(?:db|zip)$', f)
+            if _mm:
+                _d, _t = _mm.group(1), _mm.group(2)
+                _tm = f'{_d[:4]}-{_d[4:6]}-{_d[6:]} {_t[:2]}:{_t[2:4]}:{_t[4:]}'
             out.append({'name': f, 'size': st.st_size,
-                        'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime)),
+                        'mtime': _tm,
                         'kind': kind})
         except Exception:
             pass
@@ -1279,7 +1286,7 @@ def _admin_backup_restore_body():
     # v12.7.10.11：插件包快照（zip）单独还原 —— 把 plugins/<id> 目录写回去
     if fname.endswith('.zip'):
         try:
-            ok, _msg, _ = perform_backup('恢复前保护')
+            ok, _msg, _ = perform_backup('恢复前保护', only='pluginpack')
         except Exception:
             ok = False
         if not ok:
@@ -1315,7 +1322,7 @@ def _admin_backup_restore_body():
         kind = f'插件库({pre})'
     # 恢复前自动保护现场（生成新的保护备份）
     try:
-        ok, msg, _ = perform_backup('恢复前保护')
+        ok, msg, _ = perform_backup('恢复前保护', only=pre)
     except Exception:
         ok, msg = False, '保护备份失败'
     if not ok:
@@ -2211,9 +2218,59 @@ def api_global_search():
 # 反向规划模块1：软件版本规划（根据用户需求反向规划版本升级）
 # ============================================================
 
-def perform_backup(label='启动'):
+import shutil
+
+
+def _sha256_file(path):
+    """文件内容指纹（用于判断"这份数据是不是已经备份过"）"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _latest_backup(bdir, prefix, tag):
+    """同前缀、同类别（备份 / 保护）里最新的一份 .db"""
+    import glob
+    cands = glob.glob(os.path.join(bdir, f'{prefix}_{tag}_*.db'))
+    if not cands:
+        return None
+    try:
+        return max(cands, key=lambda p: os.path.getmtime(p))
+    except Exception:
+        return None
+
+
+def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped):
+    """把一个库复制进 backups/。v13.0.0.9 两个修正：
+    1) 用 copyfile + utime，让备份文件的修改时间等于"生成时刻"。
+       原先 copy2 会把源库的旧修改时间一起带过来，列表里的"生成时间"显示成几天前，
+       按修改时间保留 7 份的清理也会排错序，结果备份只增不减。
+    2) 与同前缀最近一份内容完全一致（sha256 相同）时不再生成新文件，
+       避免同一份数据每启动/每恢复一次就多复制一套。"""
+    dst = os.path.join(bdir, f'{prefix}_{tag}_{ts}.db')
+    latest = _latest_backup(bdir, prefix, tag)
+    if latest and os.path.exists(latest):
+        try:
+            if _sha256_file(src) == _sha256_file(latest):
+                skipped.append(prefix)
+                return None
+        except Exception:
+            pass
+    shutil.copyfile(src, dst)
+    os.utime(dst, None)
+    made.append(os.path.basename(dst))
+    return dst
+
+
+def perform_backup(label='启动', only=None):
     """数据备份核心（v12.1.2 启动自动备份 / v12.7.1 管理页手动备份共用）：
-    主库 + 全部插件独立库（v12.7.0 方案B）→ backups/，各前缀保留最近 7 份。
+    主库 + 全部插件独立库（v12.7.0 方案B）→ backups/，各库各保留最近 7 份。
+
+    only：None=全量；'business'=只主库；'<插件id>'=只该插件库；'pluginpack'=只插件包快照。
+         恢复某个库之前的"保护现场"只备份被覆盖的那一个库，不再把全部库都复制一遍。
     返回 (ok, msg, [本次生成的备份文件名])"""
     import shutil
     src = app.config['DATABASE']
@@ -2229,62 +2286,63 @@ def perform_backup(label='启动'):
     bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
     os.makedirs(bdir, exist_ok=True)
     ts = time.strftime('%Y%m%d_%H%M%S')
-    # v12.7.10.19：恢复前自动保护现场的那一份，单独用“保护”命名并在列表里标注，
-    # 避免用户把它误看成“同一个备份又被复制了一套”（恢复失败时它还是空库，更容易误会）。
+    # v12.7.10.19：恢复前自动保护现场的那一份，单独用“保护”命名并在列表里标注
     tag = '保护' if label == '恢复前保护' else '备份'
     made = []
-    dst = os.path.join(bdir, f'business_{tag}_{ts}.db')
-    shutil.copy2(src, dst)
-    made.append(os.path.basename(dst))
-    # v12.7.0 数据隔离（方案B）：上传插件的独立库一并备份
+    skipped = []
+    # ---- 主库 ----
+    if only in (None, 'business'):
+        _save_db_backup(src, bdir, 'business', tag, ts, made, skipped)
+    # ---- 上传插件的独立库 ----
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-    if os.path.isdir(data_dir):
+    if os.path.isdir(data_dir) and (only is None or only not in ('business', 'pluginpack')):
         for f in sorted(os.listdir(data_dir)):
-            if f.endswith('.db'):
-                src_db = os.path.join(data_dir, f)
-                try:
-                    if os.path.getsize(src_db) <= 0:
-                        continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
-                except OSError:
-                    continue
-                # v13.0.0.6：插件库同样先 checkpoint，避免 WAL 未落盘记录被备份漏掉
-                try:
-                    _pc = sqlite3.connect(src_db)
-                    _pc.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-                    _pc.close()
-                except Exception:
-                    pass
-                pdst = os.path.join(bdir, f.replace('.db', f'_{tag}_{ts}.db'))
-                try:
-                    shutil.copy2(src_db, pdst)
-                    made.append(os.path.basename(pdst))
-                except Exception:
-                    pass
-    # v12.7.10.11：插件包本体也一并快照（只备份库、不备份插件目录时，
-    # 恢复后会出现"数据在、插件没了"——插件未安装，独立库成孤儿）
-    try:
-        import zipfile
-        app_root = os.path.dirname(os.path.abspath(__file__))
-        try:
-            pack_ids = sorted(plugin_system._upload_plugin_ids())
-        except Exception:
-            pack_ids = []
-        if not pack_ids:
-            # v12.7.10.11 启动早期（init_db/插件加载之前）registry 还读不到：
-            # 用 data/<插件id>.db 反推外来插件目录（内置插件不建独立库，因此不会被误打包）
+            if not f.endswith('.db'):
+                continue
+            if only and f[:-3] != only:
+                continue   # 只保护被恢复的那一个库
+            src_db = os.path.join(data_dir, f)
             try:
-                if os.path.isdir(data_dir):
-                    pack_ids = sorted(
-                        f[:-3] for f in os.listdir(data_dir)
-                        if f.endswith('.db')
-                        and os.path.getsize(os.path.join(data_dir, f)) > 0   # 空库不参与反推
-                        and os.path.isdir(os.path.join(app_root, 'plugins', f[:-3])))
+                if os.path.getsize(src_db) <= 0:
+                    continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
+            except OSError:
+                continue
+            # v13.0.0.6：插件库同样先 checkpoint，避免 WAL 未落盘记录被备份漏掉
+            try:
+                _pc = sqlite3.connect(src_db)
+                _pc.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                _pc.close()
+            except Exception:
+                pass
+            try:
+                _save_db_backup(src_db, bdir, f[:-3], tag, ts, made, skipped)
+            except Exception as _e:
+                print(f'[数据防护] 插件库备份失败 {f}: {_e}')
+    # ---- 插件包本体快照 ----
+    # v12.7.10.11：只备份库、不备份插件目录时，恢复后会出现"数据在、插件没了"。
+    # v13.0.0.9：插件代码没变时不再重复打包（签名一致就跳过），避免同一个插件包无限复制。
+    if only is None or only == 'pluginpack':
+        try:
+            import zipfile
+            import hashlib
+            app_root = os.path.dirname(os.path.abspath(__file__))
+            try:
+                pack_ids = sorted(plugin_system._upload_plugin_ids())
             except Exception:
                 pack_ids = []
-        if pack_ids:
-            pz = os.path.join(bdir, f'pluginpack_{tag}_{ts}.zip')
-            n_pack = 0
-            with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
+            if not pack_ids:
+                # 启动早期（init_db/插件加载之前）registry 还读不到：用 data/<插件id>.db 反推
+                try:
+                    if os.path.isdir(data_dir):
+                        pack_ids = sorted(
+                            f[:-3] for f in os.listdir(data_dir)
+                            if f.endswith('.db')
+                            and os.path.getsize(os.path.join(data_dir, f)) > 0
+                            and os.path.isdir(os.path.join(app_root, 'plugins', f[:-3])))
+                except Exception:
+                    pack_ids = []
+            if pack_ids:
+                sig_parts = []
                 for pid in pack_ids:
                     pdir = os.path.join(app_root, 'plugins', pid)
                     if not os.path.isdir(pdir):
@@ -2292,18 +2350,58 @@ def perform_backup(label='启动'):
                     for root, _dirs, files in os.walk(pdir):
                         if '__pycache__' in root:
                             continue
-                        for fn in files:
+                        for fn in sorted(files):
                             if fn.endswith(('.pyc', '.pyo')):
                                 continue
                             fp = os.path.join(root, fn)
-                            z.write(fp, os.path.relpath(fp, app_root).replace(os.sep, '/'))
-                            n_pack += 1
-            if n_pack:
-                made.append(os.path.basename(pz))
-            else:
-                os.remove(pz)
-    except Exception as e:
-        print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
+                            try:
+                                st = os.stat(fp)
+                            except OSError:
+                                continue
+                            sig_parts.append('%s|%d|%d' % (
+                                os.path.relpath(fp, app_root).replace(os.sep, '/'),
+                                st.st_size, int(st.st_mtime)))
+                sig = hashlib.md5('\n'.join(sorted(sig_parts)).encode('utf-8')).hexdigest()
+                sig_file = os.path.join(bdir, '.pluginpack.sig')
+                prev_sig = ''
+                try:
+                    if os.path.exists(sig_file):
+                        prev_sig = open(sig_file, encoding='utf-8').read().strip()
+                except Exception:
+                    prev_sig = ''
+                import glob as _glob
+                has_zip = bool(_glob.glob(os.path.join(bdir, 'pluginpack_%s_*.zip' % tag)))
+                if prev_sig == sig and has_zip:
+                    skipped.append('pluginpack')
+                else:
+                    pz = os.path.join(bdir, f'pluginpack_{tag}_{ts}.zip')
+                    n_pack = 0
+                    with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
+                        for pid in pack_ids:
+                            pdir = os.path.join(app_root, 'plugins', pid)
+                            if not os.path.isdir(pdir):
+                                continue
+                            for root, _dirs, files in os.walk(pdir):
+                                if '__pycache__' in root:
+                                    continue
+                                for fn in files:
+                                    if fn.endswith(('.pyc', '.pyo')):
+                                        continue
+                                    fp = os.path.join(root, fn)
+                                    z.write(fp, os.path.relpath(fp, app_root).replace(os.sep, '/'))
+                                    n_pack += 1
+                    if n_pack:
+                        os.utime(pz, None)
+                        made.append(os.path.basename(pz))
+                        try:
+                            with open(sig_file, 'w', encoding='utf-8') as sf:
+                                sf.write(sig)
+                        except Exception:
+                            pass
+                    else:
+                        os.remove(pz)
+        except Exception as e:
+            print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
     # v12.7.10.15：清掉备份目录里被顺带打开的 -wal/-shm（0 字节残留，易被误当成"空备份"）
     try:
         for f in os.listdir(bdir):
@@ -2314,7 +2412,8 @@ def perform_backup(label='启动'):
                     pass
     except Exception:
         pass
-    # 只保留最近 7 份（business_ / 各 <插件id>_ / pluginpack_ 前缀各自保留 7 份）
+    # 每个库的「备份」与「保护」分别保留最近 7 份（v13.0.0.9：按类别分组，
+    # 保护备份不会再挤掉用户手动备份的名额；排序按真实生成时间，最近 10 分钟内的不动）
     groups = {}
     import re as _re
     for f in os.listdir(bdir):
@@ -2323,11 +2422,9 @@ def perform_backup(label='启动'):
         if '_备份_' not in f and '_保护_' not in f:
             continue
         pre = _re.split(r'_备份_|_保护_', f)[0]
-        groups.setdefault(pre, []).append(f)
-    # v12.7.10.18：原来按文件名排序删除最前面的 -> 用户刚导入的旧备份（时间戳更早）会被当成"最旧"删掉，
-    # 结果是点恢复时提示"备份文件不存在"，文件也没了。改为按修改时间排序保留最近 7 份，
-    # 且 2 小时内动过的文件（刚导入/刚上传/正要恢复的那个）一律不删。
-    for pre, fl in groups.items():
+        kind = '保护' if '_保护_' in f else '备份'
+        groups.setdefault((pre, kind), []).append(f)
+    for (_pre, _kind), fl in groups.items():
         items = []
         for f in fl:
             fp = os.path.join(bdir, f)
@@ -2337,14 +2434,16 @@ def perform_backup(label='启动'):
                 items.append((0, f))
         items.sort(reverse=True)
         for _mt, f in items[7:]:
-            fp = os.path.join(bdir, f)
             try:
-                if time.time() - _mt < 86400:
-                    continue
-                os.remove(fp)
+                if time.time() - _mt < 60:
+                    continue   # 刚生成/正在恢复的文件不删（1 分钟窗口，保证上限及时生效）
+                os.remove(os.path.join(bdir, f))
             except Exception:
                 pass
-    msg = f'已备份主库 → backups/{os.path.basename(dst)}'
+    if not made:
+        why = '、'.join(skipped) if skipped else '无变化'
+        return True, f'数据与最近一份备份完全一致，未重复生成新备份（{why}）', []
+    msg = f'已备份 → backups/{made[0]}'
     n_pack = sum(1 for x in made if x.endswith('.zip'))
     n_db = len(made) - n_pack - 1
     detail = []
@@ -2354,7 +2453,9 @@ def perform_backup(label='启动'):
         detail.append(f'{n_pack} 份插件包快照（含插件本体）')
     if detail:
         msg += '，另含 ' + '、'.join(detail)
-    msg += '（各前缀保留最近 7 份）'
+    if skipped:
+        msg += f'；内容未变化的 {len(skipped)} 项已跳过'
+    msg += '（每个库各保留最近 7 份）'
     return True, msg, made
 
 
@@ -2386,7 +2487,7 @@ if __name__ == '__main__':
             print(f'[插件自愈] 执行异常（不影响启动）: {e}')
         if '--selfcheck' in sys.argv:
             print('='*60)
-            print('  自检报告 v13.0.0.8')
+            print('  自检报告 v13.0.0.9')
             print('='*60)
             try:
                 import sqlite3 as _sq
