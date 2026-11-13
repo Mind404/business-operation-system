@@ -278,8 +278,7 @@
       <button class="vp-btn vp-btn-green" type="submit">✅ 定稿</button>
     </form>
     {% else %}
-    <form method="post" action="{{ url_for('version_plan.version_r
-elease', no=v['version_no']) }}" style="margin:0">
+    <form method="post" action="{{ url_for('version_plan.version_release', no=v['version_no']) }}" style="margin:0">
     <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="act" value="unfinalize">
       <button class="vp-btn" type="submit">↩ 取消定稿</button>
