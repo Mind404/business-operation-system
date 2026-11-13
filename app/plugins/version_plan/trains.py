@@ -290,9 +290,10 @@ def train_board():
     t = _train(db, code) if code else None
     loaded = _items(db, code, '已装') if t else []
     waiting = _items(db, code, '候补') if t else []
-    pool_sql = (f'SELECT * FROM {_t("version_plan_demands")} WHERE status="规划池"'
-                f'{"" if not t else " AND (product_code=? OR product_code=\'\' OR product_code IS NULL)"} '
-                'ORDER BY score DESC, id ASC')
+    pool_sql = 'SELECT * FROM ' + _t('version_plan_demands') + ' WHERE status="规划池"'
+    if t:
+        pool_sql += " AND (product_code=? OR product_code='' OR product_code IS NULL)"
+    pool_sql += ' ORDER BY score DESC, id ASC'
     pool = [dict(r) for r in db.execute(pool_sql, [t['product_code']] if t else []).fetchall()]
     changes = []
     if t:

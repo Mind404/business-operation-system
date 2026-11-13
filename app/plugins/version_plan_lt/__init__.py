@@ -13,7 +13,7 @@ manifest = {
     'icon': '🚆',
     'group': '业务插件',
     'core': False,
-    'version': '13.1.0.0',
+    'version': '13.1.0.1',
     'description': 'Leantime 原版风格平行版：需求归集→四维评估→车次日历→装车→版本清单+四方签核→发布→客户回告，与现有版本规划管理并存对照',
     'endpoint': 'version_plan_lt.index',
     'url_prefix': '/version_plan_lt',

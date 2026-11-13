@@ -26,7 +26,7 @@ if "%INZIP%"=="YES" (
 cd /d "%CUR%app"
 
 echo ============================================================
-echo   Business Operation System v13.0.0.1
+echo   Business Operation System v13.0.0.2
 echo   Starting... browser will open at http://127.0.0.1:5000
 echo   Default account: admin / admin123
 echo   Close this window to stop the system
