@@ -250,3 +250,7 @@
   .vp-road-row { grid-template-columns: 1fr; gap: 8px; }
   .vp-road-num { text-align: left; }
 }
+
+/* 需求表列宽收敛，保证描述列可读 */
+.vp-table-demands { table-layout: fixed; }
+.vp-table-demands td { overflow-wrap: anywhere; }

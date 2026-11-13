@@ -66,7 +66,7 @@
         <span class="vp-tag {{ cls.get(d['status'],'t-no') }}">{{ d['status'] }}</span>
       </td>
       <td>{% if d['version_no'] %}<span class="vp-code">{{ d['version_no'] }}</span>{% else %}—{% endif %}</td>
-      <td class="vp-muted">{% if d['version_no'] %}{{ release_map.get(d['version_no'], '—') }}{% else %}—{% endif %}</td>
+      <td class="vp-muted">{% if d['version_no'] %}{{ release_map.get((d['product_code'], d['version_no']), '—') }}{% else %}—{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

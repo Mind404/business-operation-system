@@ -592,7 +592,7 @@ def index():
         prod_cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
                            'pool': dstat['规划池'], 'versions': len(vrows), 'active': active,
                            'released': dstat['已发布']})
-    return render_template('vp_index.html', products=prod_cards, **ov,
+    return render_template('vp_index.html', products=prod_cards, prod_map=_product_map(db), **ov,
                            can_manage=_can_manage(), today=_today())
 
 
@@ -1136,6 +1136,15 @@ def version_new():
         if not (f.get('merge_target_no') or '').strip() or not (f.get('merge_deadline') or '').strip():
             flash('客户定制版本必须填写「计划合回主线的目标版本」和「合回期限」才能创建（R2）', 'error')
             return redirect(url_for('version_plan.versions', product=prod))
+    # 目标客户必须属于该产品：防止把别的产品线客户挂到本版本上
+    custs = [x.strip() for x in request.form.getlist('customers') if x.strip()]
+    if custs:
+        valid = {r['name'] for r in db.execute(
+            f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=?', (prod,))}
+        bad = [c for c in custs if c not in valid]
+        if bad:
+            flash(f'目标客户「{"、".join(bad)}」不属于产品 {_product_name(db, prod)}，请重新勾选', 'error')
+            return redirect(url_for('version_plan.versions', product=prod))
     now = _now()
     db.execute(
         f'''INSERT INTO {_t(L_VERSIONS)}
@@ -1147,7 +1156,7 @@ def version_new():
          (f.get('test_date') or '').strip(), (f.get('release_date') or '').strip(),
          ','.join(request.form.getlist('modules')), (f.get('interface_change') or '').strip(),
          (f.get('regression_scope') or '').strip(), (f.get('known_issues') or '').strip(),
-         ','.join(request.form.getlist('customers')), (f.get('upgrade_path') or '').strip(),
+         ','.join(custs), (f.get('upgrade_path') or '').strip(),
          (f.get('merge_target_no') or '').strip() if vtype == '客户定制' else '',
          (f.get('merge_deadline') or '').strip() if vtype == '客户定制' else '',
          '规划中', now, now))
@@ -1170,6 +1179,14 @@ def version_detail(no):
         if not _can_manage():
             return _deny()
         f = request.form
+        custs = [x.strip() for x in request.form.getlist('customers') if x.strip()]
+        if custs:
+            valid = {r['name'] for r in db.execute(
+                f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=?', (v['product_code'] or '',))}
+            bad = [c for c in custs if c not in valid]
+            if bad:
+                flash(f'目标客户「{"、".join(bad)}」不属于本版本产品，请重新勾选', 'error')
+                return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         db.execute(
             f'''UPDATE {_t(L_VERSIONS)} SET freeze_date=?, test_date=?, release_date=?, modules=?,
             interface_change=?, regression_scope=?, known_issues=?, target_customers=?, upgrade_path=?,
@@ -1177,7 +1194,7 @@ def version_detail(no):
             ((f.get('freeze_date') or '').strip(), (f.get('test_date') or '').strip(),
              (f.get('release_date') or '').strip(), ','.join(request.form.getlist('modules')),
              (f.get('interface_change') or '').strip(), (f.get('regression_scope') or '').strip(),
-             (f.get('known_issues') or '').strip(), ','.join(request.form.getlist('customers')),
+             (f.get('known_issues') or '').strip(), ','.join(custs),
              (f.get('upgrade_path') or '').strip(), (f.get('rollback_plan') or '').strip(),
              (f.get('base_version_no') or '').strip(),
              _now(), no, v['product_code'] or ''))
@@ -1610,8 +1627,8 @@ def report():
     for r in rows:
         summary[r['status']] = summary.get(r['status'], 0) + 1
     text = _report_text(db, cust, rows) if cust else ''
-    release_map = {r['version_no']: (r['release_date'] or '待定')
-                   for r in db.execute(f'SELECT version_no, release_date FROM {_t(L_VERSIONS)} {cwsql}', cargs).fetchall()}
+    release_map = {(r['product_code'], r['version_no']): (r['release_date'] or '待定')
+                   for r in db.execute(f'SELECT product_code, version_no, release_date FROM {_t(L_VERSIONS)} {cwsql}', cargs).fetchall()}
     return render_template('vp_report.html', customers=customers, cust=cust, rows=rows,
                            product=prod, products=_product_rows(db), prod_map=_product_map(db),
                            summary=summary, text=text, can_manage=_can_manage(), release_map=release_map)

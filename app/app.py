@@ -346,7 +346,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.4'
+        APP_VERSION = '13.0.0.5'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -2335,7 +2335,7 @@ if __name__ == '__main__':
             print(f'[插件自愈] 执行异常（不影响启动）: {e}')
         if '--selfcheck' in sys.argv:
             print('='*60)
-            print('  自检报告 v13.0.0.4')
+            print('  自检报告 v13.0.0.5')
             print('='*60)
             try:
                 import sqlite3 as _sq

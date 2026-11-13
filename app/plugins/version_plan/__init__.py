@@ -13,7 +13,7 @@ manifest = {
     'icon': '🗺️',
     'group': '业务插件',
     'core': False,
-    'version': '13.0.1.2',
+    'version': '13.0.1.3',
     'description': '多产品按月版本火车：需求评估→装车（人日容量/停发/加车/一步改挂）→版本→7项确认清单+四方签核门禁→发布→客户回告',
     'endpoint': 'version_plan.index',
     'url_prefix': '/version_plan',
