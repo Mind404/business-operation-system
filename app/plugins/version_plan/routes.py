@@ -397,6 +397,68 @@ def _ensure_product(db, code):
     return db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
 
 
+def _delete_product_data(db, code):
+    """级联删除某产品的全部业务数据。
+
+    只删归属该产品的数据；客户主档若仅挂在本产品下一并删除，
+    客户-产品关联表先解除，避免残留孤儿关联。
+    """
+    demands = [r['code'] for r in db.execute(
+        f'SELECT code FROM {_t(L_DEMANDS)} WHERE product_code=?', (code,)).fetchall()]
+    versions = [r['version_no'] for r in db.execute(
+        f'SELECT version_no FROM {_t(L_VERSIONS)} WHERE product_code=?', (code,)).fetchall()]
+    trains = [r['code'] for r in db.execute(
+        f'SELECT code FROM {_t(L_TRAINS)} WHERE product_code=?', (code,)).fetchall()]
+    cust_names = [r['name'] for r in db.execute(
+        f'SELECT name FROM {_t(L_CUSTOMERS)} WHERE product_code=?', (code,)).fetchall()]
+
+    def _del(table, col, values):
+        if not values:
+            return
+        ph = ','.join('?' for _ in values)
+        db.execute(f'DELETE FROM {_t(table)} WHERE {col} IN ({ph})', values)
+
+    _del(L_ITEMS, 'demand_code', demands)
+    _del(L_ITEMS, 'train_code', trains)
+    _del(L_LOADCHG, 'demand_code', demands)
+    _del(L_LOADCHG, 'from_train', trains)
+    _del(L_LOADCHG, 'to_train', trains)
+    _del(L_ASSESS, 'demand_code', demands)
+
+    for table in (L_CHECKS, L_SIGNOFFS, L_RELEASES):
+        if versions:
+            ph = ','.join('?' for _ in versions)
+            db.execute(
+                f'DELETE FROM {_t(table)} WHERE product_code=? AND version_no IN ({ph})',
+                [code, *versions])
+    _del(L_NOTICES, 'version_no', versions)
+    _del(L_NOTICES, 'customer_name', cust_names)
+
+    db.execute(f'DELETE FROM {_t(L_CUSTPROD)} WHERE product_code=?', (code,))
+    db.execute(f'DELETE FROM {_t(L_CUSTOMERS)} WHERE product_code=?', (code,))
+
+    _del(L_DEMANDS, 'product_code', [code])
+    _del(L_VERSIONS, 'product_code', [code])
+    _del(L_TRAINS, 'product_code', [code])
+    db.execute(f'DELETE FROM {_t(L_PRODUCTS)} WHERE code=?', (code,))
+
+    for obj_type, obj_col, values in (
+            ('需求', 'obj_no', demands), ('版本', 'obj_no', versions),
+            ('车次', 'obj_no', trains), ('客户', 'obj_no', cust_names)):
+        if values:
+            ph = ','.join('?' for _ in values)
+            db.execute(
+                f'DELETE FROM {_t(L_LOGS)} WHERE obj_type=? AND obj_no IN ({ph})',
+                [obj_type, *values])
+
+
+def _clear_business_data(db):
+    """清空业务过程数据，保留产品档案、模块字典与操作留痕。"""
+    for table in (L_ITEMS, L_LOADCHG, L_ASSESS, L_CHECKS, L_SIGNOFFS, L_RELEASES,
+                  L_NOTICES, L_CUSTPROD, L_DEMANDS, L_VERSIONS, L_TRAINS, L_CUSTOMERS):
+        db.execute(f'DELETE FROM {_t(table)}')
+
+
 def _rel_row(db, no, prod):
     """发布说明定位：优先取本产品记录；老库（改造前写入）只有 product_code='' 的全局记录，做一次兼容回退。"""
     rel = db.execute(f'SELECT * FROM {_t(L_RELEASES)} WHERE version_no=? AND product_code=?',
@@ -416,7 +478,13 @@ def _vrow(db, no, prod=''):
 
 
 def _can_manage():
-    return session.get('user_role') in ('platform_admin', 'admin')
+    """插件管理权限只认平台管理员。
+
+    插件内部的「产品负责人 / 测试负责人 / 发布经理 / 客户代表」只是业务签核角色，
+    不对应平台提升权限；这些账号在平台侧一律按普通用户处理。平台 `admin`
+    也不再自动获得本插件的管理权限，只有 `platform_admin` 可以新建、编辑、删除。
+    """
+    return _is_platform()
 
 
 def _is_platform():
@@ -424,7 +492,7 @@ def _is_platform():
 
 
 def _deny():
-    flash('无权限：该操作仅管理员可执行', 'error')
+    flash('无权限：该操作仅平台管理员可执行', 'error')
     return redirect(url_for('version_plan.index'))
 
 
@@ -693,6 +761,33 @@ def product_edit(code):
     db.commit()
     _ulog('产品', code, '编辑', f'{name} / {status}')
     flash(f'产品「{name}」已更新', 'success')
+    return redirect(url_for('version_plan.products'))
+
+
+@blueprint.route('/version_plan/products/<code>/delete', methods=['POST'])
+def product_delete(code):
+    """平台管理员删除产品及其归属数据（试验数据清理入口）。"""
+    _ensure_tables()
+    if not _can_manage():
+        return _deny()
+    db = get_db()
+    p = db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
+    if not p:
+        flash('产品不存在或已删除', 'error')
+        return redirect(url_for('version_plan.products'))
+    if (request.form.get('confirm') or '').strip() != code:
+        flash('删除前请在表单中填写/勾选产品编号确认', 'error')
+        return redirect(url_for('version_plan.products'))
+    try:
+        _delete_product_data(db, code)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f'删除失败：{e}', 'error')
+        return redirect(url_for('version_plan.products'))
+    _ulog('产品', code, '删除', f'{p["name"]} 及归属需求/版本/车次/客户关联已删除')
+    _log('删除产品', f'{code} {p["name"]}（含归属业务数据）')
+    flash(f'产品「{p["name"]}」及其归属数据已删除', 'success')
     return redirect(url_for('version_plan.products'))
 
 
@@ -1712,7 +1807,34 @@ def settings():
                                            'ORDER BY id').fetchall()]
     if not mods:
         mods = ['MQTT', 'FOTA', '低功耗', 'AT 命令', '网络注册', 'SIM 管理', '定位']
-    return render_template('vp_settings.html', mods=mods, can_manage=_can_manage())
+    counts = {}
+    for key, table in (('demands', L_DEMANDS), ('versions', L_VERSIONS), ('trains', L_TRAINS),
+                       ('customers', L_CUSTOMERS), ('releases', L_RELEASES), ('notices', L_NOTICES)):
+        counts[key] = db.execute(f'SELECT COUNT(*) c FROM {_t(table)}').fetchone()['c']
+    return render_template('vp_settings.html', mods=mods, can_manage=_can_manage(), counts=counts)
+
+
+@blueprint.route('/version_plan/admin/clear-business', methods=['POST'])
+def clear_business():
+    """平台管理员清空业务过程数据（保留产品档案与模块字典）。"""
+    _ensure_tables()
+    if not _can_manage():
+        return _deny()
+    db = get_db()
+    if (request.form.get('confirm') or '').strip() != 'CLEAR':
+        flash('清空前请在表单中输入 CLEAR 确认', 'error')
+        return redirect(url_for('version_plan.settings'))
+    try:
+        _clear_business_data(db)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f'清空失败：{e}', 'error')
+        return redirect(url_for('version_plan.settings'))
+    _ulog('系统', 'ALL', '清空业务数据', '平台管理员清空需求/版本/车次/客户/发布/回告等过程数据')
+    _log('清空业务数据', '保留产品档案与模块字典')
+    flash('业务过程数据已清空，产品档案与模块字典保留', 'success')
+    return redirect(url_for('version_plan.settings'))
 
 
 def _modules():

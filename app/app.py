@@ -14,6 +14,7 @@ import secrets
 import random
 import io
 import gzip
+import importlib
 from datetime import datetime, date, timedelta
 import time
 import threading
@@ -346,7 +347,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.5'
+        APP_VERSION = '13.0.0.6'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -1318,19 +1319,24 @@ def _admin_backup_restore_body():
         # v13.0.0：两种恢复方式。老备份（旧版本做的）请用「只恢复数据」，
         # 它只搬业务数据，当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变。
         mode = (request.form.get('mode') or 'full').strip().lower()
-        if pre == 'business' and mode == 'data':
+        if mode == 'data':
             try:
-                _ensure_all_tables()   # 先把懒创建的表建齐，否则备份里同名的数据会被整张跳过
-                # 判断当前是不是"刚装好还没人用"的空库：是的话把备份里的账号也一并搬回来
                 _fresh = False
-                try:
-                    _c = sqlite3.connect(target, timeout=30)
-                    _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
-                    _c.close()
-                    _fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
-                except Exception:
-                    _fresh = False
+                _names = []
+                if pre == 'business':
+                    _ensure_all_tables()   # 先把懒创建的表建齐，否则备份里同名的数据会被整张跳过
+                    # 判断当前是不是"刚装好还没人用"的空库：是的话把备份里的账号也一并搬回来
+                    try:
+                        _c = sqlite3.connect(target, timeout=30)
+                        _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                        _c.close()
+                        _fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
+                    except Exception:
+                        _fresh = False
                 moved, no_such, defaulted = _restore_data_only(src, target, include_users=_fresh)
+                if pre != 'business':
+                    # 插件库只搬数据，随后按当前代码补表/补列，避免旧备份结构影响新版
+                    _reinit_plugin_schema(pre)
             except Exception as e:
                 print(f'[数据恢复] 搬迁失败：{e}')
                 raise
@@ -1385,6 +1391,8 @@ def _admin_backup_restore_body():
         # 整库覆盖会把结构一起退回：覆盖完成后按当前版本补表 + 补列 + 补懒加载表，
         # 否则老库回来会缺表缺列（no such table / no such column）。
         _ensure_all_tables()
+        if pre != 'business':
+            _reinit_plugin_schema(pre)
 
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
@@ -1732,6 +1740,14 @@ def close_db(exception):
     db = g.pop('db', None)
     if db is not None:
         db.close()
+    # v13.0.0.6：插件独立库连接同样在请求结束后关闭，避免恢复/备份时残留打开句柄造成 WAL I/O 冲突
+    for key in [k for k in list(getattr(g, '__dict__', {}).keys()) if k.startswith('pdb_')]:
+        pdb_conn = g.pop(key, None)
+        if pdb_conn is not None:
+            try:
+                pdb_conn.close()
+            except Exception:
+                pass
 
 def init_db():
     """初始化数据库表结构（从schema.sql读取）"""
@@ -1914,6 +1930,28 @@ def _ensure_all_tables():
             _c.close()
     except Exception as e:
         print(f'[补建懒加载表] ai_routes 跳过：{e}')
+
+
+def _reinit_plugin_schema(pid):
+    """恢复插件库后，按当前代码补表、补列并跑插件自带迁移。
+
+    老备份整库覆盖后可能把插件表结构带回旧版本；这里在不覆盖业务数据的前提下
+    对齐当前版本结构，避免升级恢复后出现 no such table / no such column。
+    """
+    if not pid:
+        return
+    try:
+        mod = importlib.import_module(f'plugins.{pid}.routes')
+        pdb = plugin_system._db_for_plugin_id(pid)
+        setattr(g, f'pdb_{pid}', pdb)
+        if hasattr(mod, '_ensure_tables'):
+            mod._ensure_tables()
+        # 迁移必须显式传插件库连接：恢复上下文里没有插件 endpoint，get_db() 会误路由到主库
+        if hasattr(mod, '_migrate'):
+            mod._migrate(pdb)
+        plugin_system.invalidate_openapi_cache()
+    except Exception as e:
+        print(f'[插件库结构补全] {pid} 跳过：{e}')
 
 
 def _ensure_ui_prefs(db):
@@ -2203,6 +2241,13 @@ def perform_backup(label='启动'):
                         continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
                 except OSError:
                     continue
+                # v13.0.0.6：插件库同样先 checkpoint，避免 WAL 未落盘记录被备份漏掉
+                try:
+                    _pc = sqlite3.connect(src_db)
+                    _pc.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                    _pc.close()
+                except Exception:
+                    pass
                 pdst = os.path.join(bdir, f.replace('.db', f'_{tag}_{ts}.db'))
                 try:
                     shutil.copy2(src_db, pdst)
@@ -2335,7 +2380,7 @@ if __name__ == '__main__':
             print(f'[插件自愈] 执行异常（不影响启动）: {e}')
         if '--selfcheck' in sys.argv:
             print('='*60)
-            print('  自检报告 v13.0.0.5')
+            print('  自检报告 v13.0.0.6')
             print('='*60)
             try:
                 import sqlite3 as _sq

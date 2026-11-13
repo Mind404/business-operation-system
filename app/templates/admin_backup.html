@@ -73,9 +73,13 @@
                         <input type="hidden" name="mode" value="data">
                         <button type="submit" onclick="this.form.mode.value='data';return confirm('用「{{ f.name }}」恢复数据吗？\\n\\n只搬业务数据：当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变（旧版本备份请用这个）。\\n恢复前会自动保存一份保护备份，无需重启、不会被踢下线。')" style="background:#0f766e;border:none;color:#fff;font-size:13px;padding:4px 11px;border-radius:6px;cursor:pointer;margin-right:10px;">↺ 只恢复数据</button>
                         <button type="submit" onclick="this.form.mode.value='full';return confirm('用「{{ f.name }}」整库覆盖吗？\\n\\n⚠ 会把库结构一起退回备份时的版本（旧备份可能缺新版本的表和列），恢复后需要重新登录。\\n只有确实想把系统结构也退回旧版本时才用。\\n恢复前会自动保存一份保护备份。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;">整库覆盖</button>
+                        {% elif '插件包' in f.kind %}
+                        <input type="hidden" name="mode" value="full">
+                        <button type="submit" onclick="return confirm('确定用「{{ f.name }}」还原插件包吗？\\n\\n恢复前会自动保存保护备份。')" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;text-decoration:underline;">↺ 还原</button>
                         {% else %}
                         <input type="hidden" name="mode" value="full">
-                        <button type="submit" onclick="return confirm('确定用「{{ f.name }}」{{ '还原插件包' if '插件包' in f.kind else ('恢复' + f.kind) }}吗？\\n\\n恢复前会自动保存保护备份。')" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;text-decoration:underline;">{{ '↺ 还原' if '插件包' in f.kind else '↺ 恢复' }}</button>
+                        <button type="submit" onclick="this.form.mode.value='data';return confirm('用「{{ f.name }}」只恢复插件数据吗？\\n\\n只搬业务数据，当前版本表结构保持不变；恢复前会自动保存保护备份。')" style="background:#0f766e;border:none;color:#fff;font-size:13px;padding:4px 11px;border-radius:6px;cursor:pointer;margin-right:10px;">↺ 只恢复数据</button>
+                        <button type="submit" onclick="this.form.mode.value='full';return confirm('确定整库覆盖 {{ f.kind }} 吗？\\n\\n⚠ 会把库结构一起退回备份时版本；恢复前会自动保存保护备份。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;">整库覆盖</button>
                         {% endif %}
                     </form>
                     <form method="post" action="{{ url_for('admin_backup_delete') }}" style="display:inline;margin:0 0 0 12px;" onsubmit="return confirm('确定删除备份「{{ f.name }}」吗？\\n\\n仅删除 backups/ 里的这份副本，正在使用的数据不受影响；删除后不可恢复。')">

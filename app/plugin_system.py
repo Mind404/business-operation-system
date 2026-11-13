@@ -134,8 +134,9 @@ def _db_for_plugin_id(plugin_id):
         conn = sqlite3.connect(pdb, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
-        conn.execute('PRAGMA journal_mode = WAL')
+        # WAL 模式已持久化在库文件头，不要每请求重设 journal_mode（需独占写锁，恢复/备份时易触发 I/O 冲突）
         conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA synchronous = NORMAL')
         setattr(g, key, conn)
     return conn
 
