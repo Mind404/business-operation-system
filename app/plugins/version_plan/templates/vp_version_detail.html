@@ -64,7 +64,7 @@
 </div>
 
 {% if v['status'] == '已冻结' %}
-<div class="vp-warnbox">🔒 已冻结：需求构成锁定，不能再增删（R1）。{% if is_platform %}平台管理员可强制解冻并留痕。{% else %}需要调整请找平台管理员强制解冻。{% endif %}</div>
+<div class="vp-warnbox">🔒 已冻结：需求构成锁定，不能再增删（R1）。{% if is_platform %}管理员或平台管理员可强制解冻并留痕。{% else %}需要调整请找管理员强制解冻。{% endif %}</div>
 {% endif %}
 {% if v['vtype'] == '客户定制' %}
 <div class="vp-card"><h3>🧩 定制分支合回计划（R2）</h3>
@@ -112,7 +112,7 @@
       <div class="vp-field"><label class="vp-label">升级路径说明</label><textarea class="vp-textarea" name="upgrade_path" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['upgrade_path'] }}</textarea></div>
     </div>
     <div class="vp-field"><label class="vp-label">回滚方案（发布前须可执行并演练过）</label><textarea class="vp-textarea" name="rollback_plan" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['rollback_plan'] }}</textarea></div>
-    {% if can_edit %}<button class="vp-btn vp-btn-primary" type="submit">保存元数据</button>{% else %}<span class="vp-muted">版本号 {{ v['version_no'] }} 创建后不可修改（R4）；当前状态不可编辑，仅平台管理员在规划中/已冻结可改。</span>{% endif %}
+    {% if can_edit %}<button class="vp-btn vp-btn-primary" type="submit">保存元数据</button>{% else %}<span class="vp-muted">版本号 {{ v['version_no'] }} 创建后不可修改（R4）；当前状态不可编辑，仅管理员在规划中/已冻结可改。</span>{% endif %}
   </form>
 </div>
 

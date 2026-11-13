@@ -82,7 +82,12 @@ def _manifest_install_type(pid, man):
     return 'dir'
 
 def _upload_plugin_ids():
-    """当前 install_type='upload' 的插件 id 集合（独立短连接查主库，避免递归 get_db）"""
+    """外部接入插件 id 集合（install_type in upload/dir）。
+
+    v13.0.0.7：这个集合只管**数据隔离**——外部接入插件的业务数据都放在独立库
+    data/<id>.db 里，不能落主库。是否套"返回平台"外壳页由 _shell_plugin_ids() 决定，
+    两者不能混用：目录型插件（如 version_plan）同样需要独立库，但它自带平台导航，
+    不需要外壳页。"""
     global _upload_ids_cache
     if _upload_ids_cache is None:
         try:
@@ -94,9 +99,30 @@ def _upload_plugin_ids():
             _upload_ids_cache = set()
     return _upload_ids_cache
 
+
+_shell_ids_cache = None
+
+
+def _shell_plugin_ids():
+    """需要平台外壳页（带"返回平台"顶栏）的插件：仅上传安装的 zip 包插件。
+
+    目录型插件继承平台 base.html，本身已有平台导航，再套一层外壳就会变成双层导航。
+    """
+    global _shell_ids_cache
+    if _shell_ids_cache is None:
+        try:
+            con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+            _shell_ids_cache = {r[0] for r in con.execute(
+                "SELECT id FROM plugin_registry WHERE install_type='upload'").fetchall()}
+            con.close()
+        except Exception:
+            _shell_ids_cache = set()
+    return _shell_ids_cache
+
 def _invalidate_upload_cache():
-    global _upload_ids_cache
+    global _upload_ids_cache, _shell_ids_cache
     _upload_ids_cache = None
+    _shell_ids_cache = None
 
 def _plugin_db_path(plugin_id):
     """upload 插件 → app/data/<id>.db；内置/核心/未登记 → None（主库）"""
@@ -242,7 +268,7 @@ def inject_nav_context():
             'endpoint': ep, 'nav_path': man.get('url_prefix', man.get('nav_path', '/' + pid)),
             # v12.7.10.10：仅"上传安装"的插件算外来插件，导航走平台外壳页（带"返回平台"）；
             # 平台自带的目录型插件（univer_sheet 等，install_type=builtin）仍直接进页面，避免双层导航
-            'external': (pid in _upload_plugin_ids()),
+            'external': (pid in _shell_plugin_ids()),
         })
     # v12.7.10.17：导航不再按来源分區，全部业务插件同一组显示（用户不需要感知插件来源）
     # nav_ext 保留键位只为兼容旧模板/旧上下文，恒为空
@@ -630,10 +656,10 @@ def plugin_home_url(pid):
 
 
 def plugin_is_external(pid):
-    """是否外来插件：仅限上传安装（install_type=upload），平台自带插件不算。"""
+    """是否外来插件（需要外壳页）：仅限上传安装（install_type=upload），平台自带/目录型不算。"""
     if any(p['id'] == pid for p in PLUGINS):
         return False
-    return pid in _upload_plugin_ids()
+    return pid in _shell_plugin_ids()
 
 
 def _enabled_ids():

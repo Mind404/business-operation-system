@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-  <div class="shell-bar">
+  <div class="shell-bar" id="shellBar">
     <a class="back" href="/">← 返回平台</a>
     <span class="title">{{ plugin_icon }} {{ plugin_name }}</span>
     <span class="spacer"></span>
@@ -43,10 +43,18 @@
   <script>
   /* 插件内容就绪后再淡入，加载过程看到的是同底色而不是白块 */
   (function () {
+    /* 兜底：如果本页自己也被嵌进了另一个外壳页，就隐藏自带的返回栏，
+       避免出现两条一模一样的「返回平台 / 插件名 / 刷新」顶栏。 */
+    var selfEmbedded = false;
+    try { selfEmbedded = window.self !== window.top; } catch (e) { selfEmbedded = true; }
+    if (selfEmbedded) {
+      var bar = document.getElementById('shellBar');
+      if (bar) { bar.style.display = 'none'; }
+    }
     var f = document.getElementById('shellFrame'), t = document.getElementById('shellTip'), shown = false;
     function show() {
       if (shown) return; shown = true;
-      f.style.opacity = '1';
+      f.style.opacity = '1'; if (selfEmbedded) { f.style.height = '100vh'; }
       if (t) t.style.display = 'none';
     }
     f.addEventListener('load', function () { setTimeout(show, 40); });

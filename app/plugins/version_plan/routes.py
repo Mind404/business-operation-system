@@ -477,14 +477,26 @@ def _vrow(db, no, prod=''):
     return db.execute(f'SELECT * FROM {_t(L_VERSIONS)} WHERE version_no=?', (no,)).fetchone()
 
 
-def _can_manage():
-    """插件管理权限只认平台管理员。
+def _can_edit():
+    """业务操作权限：任何已登录用户都可以按状态机正常编辑与流转。
 
     插件内部的「产品负责人 / 测试负责人 / 发布经理 / 客户代表」只是业务签核角色，
-    不对应平台提升权限；这些账号在平台侧一律按普通用户处理。平台 `admin`
-    也不再自动获得本插件的管理权限，只有 `platform_admin` 可以新建、编辑、删除。
+    对应平台侧一律是普通用户权限，凭平台登录态即可参与业务操作，不需要额外提权。
     """
-    return _is_platform()
+    return bool(session.get('user_id')) or bool(session.get('username'))
+
+
+def _can_admin():
+    """插件管理权限：平台管理员（platform_admin）与平台管理员角色（admin）。
+
+    用于删除产品及归属数据、清空业务数据、维护模块字典、强制解冻等治理动作。
+    """
+    return session.get('user_role') in ('platform_admin', 'admin')
+
+
+def _can_manage():
+    """兼容旧引用：等同管理权限。"""
+    return _can_admin()
 
 
 def _is_platform():
@@ -492,7 +504,7 @@ def _is_platform():
 
 
 def _deny():
-    flash('无权限：该操作仅平台管理员可执行', 'error')
+    flash('无权限：该操作仅管理员或平台管理员可执行', 'error')
     return redirect(url_for('version_plan.index'))
 
 
@@ -661,7 +673,7 @@ def index():
                            'pool': dstat['规划池'], 'versions': len(vrows), 'active': active,
                            'released': dstat['已发布']})
     return render_template('vp_index.html', products=prod_cards, prod_map=_product_map(db), **ov,
-                           can_manage=_can_manage(), today=_today())
+                           can_manage=_can_edit(), can_admin=_can_admin(), today=_today())
 
 
 @blueprint.route('/version_plan/products/<code>')
@@ -674,7 +686,7 @@ def product_home(code):
         return redirect(url_for('version_plan.index'))
     ov = _overview(db, code)
     return render_template('vp_product.html', p=dict(p), **ov,
-                           can_manage=_can_manage(), today=_today())
+                           can_manage=_can_edit(), can_admin=_can_admin(), today=_today())
 
 
 # ---------------------------------------------------------------- 产品管理
@@ -696,13 +708,13 @@ def products():
         cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
                       'pool': dstat['规划池'], 'released': dstat['已发布'],
                       'versions': len(vrows), 'active': active, 'customers': cust_n})
-    return render_template('vp_products.html', products=cards, can_manage=_can_manage())
+    return render_template('vp_products.html', products=cards, can_manage=_can_edit(), can_admin=_can_admin())
 
 
 @blueprint.route('/version_plan/products/new', methods=['POST'])
 def product_new():
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     f = request.form
@@ -736,7 +748,7 @@ def product_new():
 @blueprint.route('/version_plan/products/<code>/edit', methods=['POST'])
 def product_edit(code):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     p = db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
@@ -768,7 +780,7 @@ def product_edit(code):
 def product_delete(code):
     """平台管理员删除产品及其归属数据（试验数据清理入口）。"""
     _ensure_tables()
-    if not _can_manage():
+    if not _can_admin():
         return _deny()
     db = get_db()
     p = db.execute(f'SELECT * FROM {_t(L_PRODUCTS)} WHERE code=?', (code,)).fetchone()
@@ -839,13 +851,13 @@ def demands():
                            pages=max(1, (total + size - 1) // size), q=q, st=st, ver=ver, cust=cust,
                            product=prod, products=_product_rows(db), prod_map=prod_map,
                            customers=customers, versions=versions, counts=counts,
-                           statuses=DEMAND_STATUS, dtypes=DEMAND_TYPE, can_manage=_can_manage())
+                           statuses=DEMAND_STATUS, dtypes=DEMAND_TYPE, can_manage=_can_edit(), can_admin=_can_admin())
 
 
 @blueprint.route('/version_plan/demands/new', methods=['GET', 'POST'])
 def demand_new():
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     products = _product_rows(db)
@@ -899,7 +911,7 @@ def demand_new():
 @blueprint.route('/version_plan/demands/<code>', methods=['GET', 'POST'])
 def demand_edit(code):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     d = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE code=?', (code,)).fetchone()
@@ -961,7 +973,7 @@ def demand_edit(code):
 @blueprint.route('/version_plan/demands/<code>/filter', methods=['POST'])
 def demand_filter(code):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     d = db.execute(f'SELECT * FROM {_t(L_DEMANDS)} WHERE code=?', (code,)).fetchone()
@@ -1018,7 +1030,7 @@ def demand_filter(code):
 @blueprint.route('/version_plan/demands/<code>/link', methods=['POST'])
 def demand_link(code):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     other = (request.form.get('other_code') or '').strip().upper()
@@ -1055,7 +1067,7 @@ def demand_link(code):
 @blueprint.route('/version_plan/demands/import', methods=['POST'])
 def demand_import():
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     f = request.files.get('file')
@@ -1198,13 +1210,13 @@ def versions():
     return render_template('vp_versions.html', rows=rows, counts=counts, pool=pool,
                            customers=customers, statuses=VERSION_STATUS, vtypes=VERSION_TYPE,
                            product=prod, products=_product_rows(db), prod_map=_product_map(db),
-                           can_manage=_can_manage(), today=_today(), modules=_modules())
+                           can_manage=_can_edit(), can_admin=_can_admin(), today=_today(), modules=_modules())
 
 
 @blueprint.route('/version_plan/versions/new', methods=['POST'])
 def version_new():
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     f = request.form
@@ -1271,7 +1283,7 @@ def version_detail(no):
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
     if request.method == 'POST':
-        if not _can_manage():
+        if not _can_edit():
             return _deny()
         f = request.form
         custs = [x.strip() for x in request.form.getlist('customers') if x.strip()]
@@ -1309,7 +1321,7 @@ def version_detail(no):
     logs = db.execute(f'SELECT * FROM {_t(L_LOGS)} WHERE obj_no=? ORDER BY id DESC LIMIT 20',
                       (no,)).fetchall()
     frozen = v['status'] == '已冻结'
-    can_edit = _can_manage() and v['status'] in ('规划中', '已冻结')
+    can_edit = _can_edit() and v['status'] in ('规划中', '已冻结')
     from .trains import CHECK_ITEMS, ensure_checks, ensure_signoffs, release_gate
     ensure_checks(db, no, v['product_code'] or '')
     roles = ensure_signoffs(db, no, v['product_code'] or '', v['vtype'])
@@ -1319,7 +1331,7 @@ def version_detail(no):
                            sign_roles=roles, check_items=CHECK_ITEMS,
                            release=release, logs=logs, frozen=frozen, can_edit=can_edit,
                            prod_map=_product_map(db), prod_name=_product_name(db, v['product_code'] or ''),
-                           can_manage=_can_manage(), is_platform=_is_platform(),
+                           can_manage=_can_edit(), can_admin=_can_admin(), is_platform=_can_admin(),
                            statuses=VERSION_STATUS, flow=VERSION_FLOW.get(v['status'], []),
                            today=_today(),
                            modules=[m for m in (v['modules'] or '').split(',') if m],
@@ -1329,7 +1341,7 @@ def version_detail(no):
 @blueprint.route('/version_plan/versions/<no>/add', methods=['POST'])
 def version_add(no):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
@@ -1375,7 +1387,7 @@ def version_add(no):
 @blueprint.route('/version_plan/versions/<no>/remove', methods=['POST'])
 def version_remove(no):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
@@ -1400,7 +1412,7 @@ def version_remove(no):
 @blueprint.route('/version_plan/versions/<no>/status', methods=['POST'])
 def version_status(no):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
@@ -1411,8 +1423,8 @@ def version_status(no):
 
     # 解冻：仅平台管理员，且留痕（R1）
     if target == '规划中' and v['status'] == '已冻结':
-        if not _is_platform():
-            flash('解冻只能由平台管理员执行（R1）', 'error')
+        if not _can_admin():
+            flash('解冻只能由管理员或平台管理员执行（R1）', 'error')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
         reason = (request.form.get('reason') or '').strip()
         if not reason:
@@ -1548,7 +1560,7 @@ def _build_release(db, no, prod=''):
 @blueprint.route('/version_plan/versions/<no>/release', methods=['POST'])
 def version_release(no):
     _ensure_tables()
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db()
     v = _vrow(db, no, (request.form.get('product') or request.args.get('product') or '').strip())
@@ -1594,7 +1606,7 @@ def version_release(no):
         _ulog('版本', no, '定稿发布说明', '')
         flash('发布说明已定稿，可导出 Markdown 发给客户', 'success')
     elif act == 'unfinalize':
-        if not _is_platform() and not _can_manage():
+        if not _can_admin():
             return _deny()
         db.execute(f'UPDATE {_t(L_RELEASES)} SET status="草稿", updated_at=? WHERE version_no=? AND product_code=?',
                    (_now(), no, v['product_code'] or ''))
@@ -1628,7 +1640,7 @@ def customers():
     db = get_db()
     prod = _req_product()
     if request.method == 'POST':
-        if not _can_manage():
+        if not _can_edit():
             return _deny()
         f = request.form
         name = (f.get('name') or '').strip()
@@ -1697,7 +1709,7 @@ def customers():
         [edit_name] + ([prod] if prod else [])).fetchone() if edit_name else None
     return render_template('vp_customers.html', rows=rows, versions=versions, warn=warn,
                            products=_product_rows(db), product=prod, prod_map=_product_map(db),
-                           can_manage=_can_manage(), today=_today(), edit_row=edit_row)
+                           can_manage=_can_edit(), can_admin=_can_admin(), today=_today(), edit_row=edit_row)
 
 
 # ---------------------------------------------------------------- 客户回告
@@ -1726,7 +1738,7 @@ def report():
                    for r in db.execute(f'SELECT product_code, version_no, release_date FROM {_t(L_VERSIONS)} {cwsql}', cargs).fetchall()}
     return render_template('vp_report.html', customers=customers, cust=cust, rows=rows,
                            product=prod, products=_product_rows(db), prod_map=_product_map(db),
-                           summary=summary, text=text, can_manage=_can_manage(), release_map=release_map)
+                           summary=summary, text=text, can_manage=_can_edit(), can_admin=_can_admin(), release_map=release_map)
 
 
 def _report_text(db, cust, rows, prod=''):
@@ -1792,7 +1804,7 @@ def settings():
     _ensure_tables()
     db = get_db()
     if request.method == 'POST':
-        if not _can_manage():
+        if not _can_admin():
             return _deny()
         raw = (request.form.get('modules') or '').replace('\r', '')
         items = [x.strip() for x in re.split(r'[,\n，]', raw) if x.strip()]
@@ -1811,14 +1823,14 @@ def settings():
     for key, table in (('demands', L_DEMANDS), ('versions', L_VERSIONS), ('trains', L_TRAINS),
                        ('customers', L_CUSTOMERS), ('releases', L_RELEASES), ('notices', L_NOTICES)):
         counts[key] = db.execute(f'SELECT COUNT(*) c FROM {_t(table)}').fetchone()['c']
-    return render_template('vp_settings.html', mods=mods, can_manage=_can_manage(), counts=counts)
+    return render_template('vp_settings.html', mods=mods, can_manage=_can_edit(), can_admin=_can_admin(), counts=counts)
 
 
 @blueprint.route('/version_plan/admin/clear-business', methods=['POST'])
 def clear_business():
     """平台管理员清空业务过程数据（保留产品档案与模块字典）。"""
     _ensure_tables()
-    if not _can_manage():
+    if not _can_admin():
         return _deny()
     db = get_db()
     if (request.form.get('confirm') or '').strip() != 'CLEAR':

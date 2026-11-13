@@ -14,7 +14,7 @@ from datetime import date, datetime
 
 from flask import flash, redirect, render_template, request, session, url_for
 
-from .routes import (PID, _can_manage, _deny, _ensure_product, _log, _now,
+from .routes import (PID, _can_edit, _deny, _ensure_product, _log, _now,
                      _product_map, _product_name, _product_rows, _t, _today,
                      _ulog, _vrow, blueprint)
 
@@ -110,14 +110,14 @@ def trains():
     months = _months(db, prod)
     return render_template('vp_trains.html', groups=groups, months=months, month=month,
                            product=prod, products=_product_rows(db), prod_map=_product_map(db),
-                           can_manage=_can_manage(), today=_today(),
+                           can_manage=_can_edit(), today=_today(),
                            statuses=TRAIN_STATUS)
 
 
 @blueprint.route('/version_plan/trains/new', methods=['POST'])
 def train_new():
     """建车次（加车）：编号自动按 产品-年月 递增，容量默认 40 人日。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     f = request.form
@@ -159,7 +159,7 @@ def train_new():
 @blueprint.route('/version_plan/trains/<code>/skip', methods=['POST'])
 def train_skip(code):
     """停发：原因必填；已装需求全部转候补，不占版本号；可随时恢复。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     t = _train(db, code)
@@ -199,7 +199,7 @@ def train_skip(code):
 @blueprint.route('/version_plan/trains/<code>/resume', methods=['POST'])
 def train_resume(code):
     """恢复发车：候补需求按容量重新装回，装不下的留候补。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     t = _train(db, code)
@@ -236,7 +236,7 @@ def train_resume(code):
 @blueprint.route('/version_plan/trains/<code>/to-version', methods=['POST'])
 def train_to_version(code):
     """车次转版本：把整列车的装载清单固化成版本，后续走冻结/签核/发布。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     t = _train(db, code)
@@ -307,13 +307,13 @@ def train_board():
                            waiting=waiting, pool=pool, changes=changes, used=used, cnt=cnt,
                            pct=pct, product=prod, products=_product_rows(db),
                            prod_map=_product_map(db), open_trains=open_trains,
-                           can_manage=_can_manage(), today=_today())
+                           can_manage=_can_edit(), today=_today())
 
 
 @blueprint.route('/version_plan/train-board/load', methods=['POST'])
 def board_load():
     """装车：临界区内重算容量再写入，装不下直接拒绝（不超卖）。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     code = (request.form.get('code') or '').strip()
@@ -372,7 +372,7 @@ def board_load():
 @blueprint.route('/version_plan/train-board/unload', methods=['POST'])
 def board_unload():
     """移出：需求回到规划池，车次留痕。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     code = (request.form.get('code') or '').strip()
@@ -409,7 +409,7 @@ def board_unload():
 @blueprint.route('/version_plan/train-board/move', methods=['POST'])
 def board_move():
     """一步改挂：同一事务内「移出旧车次 + 装入新车次」，任一失败整体回滚。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     frm = (request.form.get('from_train') or '').strip()
@@ -476,14 +476,14 @@ def assess():
         'WHERE score>0').fetchone()
     return render_template('vp_assess.html', rows=rows, hist=hist, product=prod,
                            products=_product_rows(db), prod_map=_product_map(db),
-                           can_manage=_can_manage(), cnt=len(rows),
+                           can_manage=_can_edit(), cnt=len(rows),
                            avg=round(float(stats['a'] or 0), 1), scored=int(stats['c'] or 0))
 
 
 @blueprint.route('/version_plan/assess/<code>', methods=['POST'])
 def assess_submit(code):
     """提交评估：四维 1-5 分，加权得分 ≥70 进规划池、40-69 挂起、<40 不做，全过程留痕。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     d = db.execute(f'SELECT * FROM {_t("version_plan_demands")} WHERE code=?', (code,)).fetchone()
@@ -575,7 +575,7 @@ def release_gate(db, no, prod, vtype):
 @blueprint.route('/version_plan/versions/<no>/check', methods=['POST'])
 def version_check(no):
     """保存单项确认结果（含证据），清单不存在时自动补齐。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     prod = (request.form.get('product') or '').strip()
@@ -599,7 +599,7 @@ def version_check(no):
 @blueprint.route('/version_plan/versions/<no>/sign', methods=['POST'])
 def version_sign(no):
     """四方签核：产品/测试/发布经理（定制版加客户代表），可同意或驳回。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     prod = (request.form.get('product') or '').strip()
@@ -630,7 +630,7 @@ def version_sign(no):
 @blueprint.route('/version_plan/customers/notice', methods=['POST'])
 def customer_notice():
     """给客户发版本回告：落一条可追溯记录（客户 / 版本 / 正文 / 时间）。"""
-    if not _can_manage():
+    if not _can_edit():
         return _deny()
     db = get_db_safe()
     cid = int(request.form.get('customer_id') or 0)

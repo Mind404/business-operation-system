@@ -16,13 +16,13 @@
   <form method="post" action="{{ url_for('version_plan.settings') }}">
     <div class="vp-field">
       <label class="vp-label">模块清单（一行一个，或用逗号分隔）</label>
-      <textarea class="vp-textarea" name="modules" style="min-height:220px" {{ 'disabled' if not can_manage }}>{{ mods|join('\n') }}</textarea>
+      <textarea class="vp-textarea" name="modules" style="min-height:220px" {{ 'disabled' if not can_admin }}>{{ mods|join('\n') }}</textarea>
     </div>
-    {% if can_manage %}<button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>{% else %}<span class="vp-muted">仅平台管理员可修改</span>{% endif %}
+    {% if can_admin %}<button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>{% else %}<span class="vp-muted">仅管理员可修改</span>{% endif %}
   </form>
 </div>
 
-{% if can_manage %}
+{% if can_admin %}
 <div class="vp-card" style="border-color:#fecaca;margin-top:16px">
   <h3>危险区：清空业务过程数据</h3>
   <p class="vp-muted">当前：需求 {{ counts.demands }} 条、版本 {{ counts.versions }} 个、车次 {{ counts.trains }} 个、客户 {{ counts.customers }} 家、发布说明 {{ counts.releases }} 份、回告 {{ counts.notices }} 条。</p>

@@ -298,10 +298,16 @@ def plugin_shell(pid):
     用户无法回到平台；统一走这里就能保证任何外来插件都有明确的返回入口。
     """
     man = plugin_system.plugin_manifest(pid)
-    if not man or not plugin_system.plugin_is_external(pid):
+    if not man:
         flash('插件不存在或不是外部插件', 'error')
         return redirect(url_for('index'))
     home = plugin_system.plugin_home_url(pid)
+    # v13.0.0.7：目录型插件自带平台导航，不再套外壳页，避免"外壳 + 平台导航"双层结构；
+    # 旧链接（/plugin-shell/<dir插件>）直接转跳到插件首页，行为等价且更轻。
+    if home.startswith('/plugin-shell'):
+        home = man.get('url_prefix') or ('/' + pid)
+    if not plugin_system.plugin_is_external(pid):
+        return redirect(home)
     return render_template('plugin_shell.html', pid=pid,
                            plugin_name=man.get('name', pid), plugin_icon=man.get('icon', '🧩'),
                            home_url=home)
@@ -347,7 +353,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.6'
+        APP_VERSION = '13.0.0.7'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -2380,7 +2386,7 @@ if __name__ == '__main__':
             print(f'[插件自愈] 执行异常（不影响启动）: {e}')
         if '--selfcheck' in sys.argv:
             print('='*60)
-            print('  自检报告 v13.0.0.6')
+            print('  自检报告 v13.0.0.7')
             print('='*60)
             try:
                 import sqlite3 as _sq

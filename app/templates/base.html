@@ -4,16 +4,26 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}业务高效运转系统{% endblock %}</title>
-    <style>
+    <script>
+    /* v13.0.0.7：只要页面处在 iframe 内就自动去壳（隐藏侧栏/顶栏）。
+       不再依赖 ?embed=1 参数 —— 表单提交、服务端 redirect 后参数会丢，
+       旧做法会让 iframe 里又冒出一套平台导航，看起来像"双层外壳"。 */
+    (function () {
+        var embedded = false;
+        try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
+        if (embedded) { document.documentElement.className += ' embed-mode'; }
+    })();
+</script>
+<style>
         /* v12.7.10.16：先落底色与骨架，样式表到达前不再露白 */
         html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
         .app-layout { display: flex; min-height: 100vh; }
     /* v13.0.1 去壳模式：插件被平台外壳 iframe 嵌入时不渲染侧栏与顶栏，避免双层导航 */
-    body.embed-mode .sidebar { display: none !important; }
-    body.embed-mode .page-header { display: none !important; }
-    body.embed-mode .content-body { padding: 14px 18px 22px !important; }
-    body.embed-mode .app-layout { display: block !important; }
-    body.embed-mode .readonly-banner { margin: 0 0 10px; }
+    body.embed-mode .sidebar, html.embed-mode .sidebar { display: none !important; }
+    body.embed-mode .page-header, html.embed-mode .page-header { display: none !important; }
+    body.embed-mode .content-body, html.embed-mode .content-body { padding: 14px 18px 22px !important; }
+    body.embed-mode .app-layout, html.embed-mode .app-layout { display: block !important; }
+    body.embed-mode .readonly-banner, html.embed-mode .readonly-banner { margin: 0 0 10px; }
 
         .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
         /* 跨页切换：用浏览器原生 View Transition 做旧页→新页交叉淡化，
