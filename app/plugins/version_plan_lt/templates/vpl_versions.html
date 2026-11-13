@@ -11,7 +11,7 @@
 </div>
 
 {% set active = 'versions' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <form method="get" class="vp-toolbar" style="margin-bottom:12px">
   <select class="vp-select" name="product" style="max-width:200px" onchange="this.form.submit()">
@@ -159,4 +159,5 @@
   sel.addEventListener('change', sync); sync();
 })();
 </script>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

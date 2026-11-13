@@ -11,7 +11,7 @@
 </div>
 
 {% set active = 'demands' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <div class="vp-toolbar">
   {% if can_manage %}
@@ -166,4 +166,5 @@
   </p>
   <p class="vp-muted" style="margin:8px 0 0">导入后全部进入「待过滤」，系统会在同产品内比对描述相似度并提示疑似重复；云文档溯源缺失的条目在过滤前必须补全（R6）。</p>
 </div>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

@@ -10,7 +10,7 @@
 </div>
 
 {% set active = 'products' %}{% set product = '' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <div class="vp-row2">
   <!-- 产品列表 -->
@@ -107,4 +107,5 @@
     </div>
   </div>
 </div>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

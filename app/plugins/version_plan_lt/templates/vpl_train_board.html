@@ -10,7 +10,7 @@
 </div>
 
 {% set active = 'train_board' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <form method="get" class="vp-toolbar" style="margin-bottom:12px">
   <select class="vp-select" name="product" style="max-width:190px" onchange="this.form.submit()">
@@ -33,8 +33,8 @@
   <div class="vp-kpi"><div class="vp-muted">容量 / 已装</div><div class="vp-stat">{{ '%g'|format(used) }} / {{ '%g'|format(t['capacity']) }} 人日</div></div>
   <div class="vp-kpi"><div class="vp-muted">装载率</div><div class="vp-stat">{{ pct }}%（{{ cnt }} 条）</div></div>
 </div>
-<div style="height:12px;background:#e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:16px">
-  <div style="height:100%;width:{{ pct }}%;background:{{ '#dc2626' if pct>=95 else ('#f59e0b' if pct>=70 else '#2563eb') }}"></div>
+<div class="vp-capbar {{ 'over' if pct >= 95 else ('warn' if pct >= 70 else '') }}">
+  <i style="width:{{ pct }}%"></i>
 </div>
 
 {% if t['status'] == '停发' %}
@@ -152,4 +152,5 @@
   </div>
 </div>
 {% endif %}
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

@@ -13,7 +13,7 @@
 </div>
 
 {% set active = 'versions' %}{% set product = v['product_code'] or '' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 {% set stage = {'规划中':0,'已冻结':1,'开发中':2,'测试中':2,'已发布':3,'已归档':3}.get(v['status'], 0) %}
 <div class="vp-card" style="padding:12px 16px;margin-bottom:12px">
@@ -191,7 +191,7 @@
     </span>
   </h3>
   <div class="vp-table-wrap">
-    <table class="vp-table">
+    <table class="vp-table vp-gate-table">
       <thead><tr><th style="width:44px">#</th><th>检查项</th><th style="width:300px">结论 / 证据</th></tr></thead>
       <tbody>
       {% for c in checks %}
@@ -317,4 +317,5 @@ elease', no=v['version_no']) }}" style="margin:0">
   </ul>
   {% else %}<div class="vp-empty" style="padding:16px 0">暂无记录</div>{% endif %}
 </div>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

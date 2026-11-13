@@ -16,7 +16,7 @@
 </div>
 
 {% set active = 'index' %}{% set product = p['code'] %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 {% if overdue_branches %}
 <div class="vp-errbox">
@@ -149,4 +149,5 @@
     </div>
   </div>
 </div>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

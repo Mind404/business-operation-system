@@ -10,7 +10,7 @@
 </div>
 
 {% set active = 'settings' %}{% set product = '' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <div class="vp-card">
   <form method="post" action="{{ url_for('version_plan_lt.settings') }}">
@@ -21,4 +21,5 @@
     {% if can_manage %}<button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>{% else %}<span class="vp-muted">仅管理员可修改</span>{% endif %}
   </form>
 </div>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

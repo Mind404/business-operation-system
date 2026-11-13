@@ -11,7 +11,7 @@
 </div>
 
 {% set active = 'report' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 <div class="vp-toolbar">
   <form method="get" action="{{ url_for('version_plan_lt.report') }}" class="vp-inline" style="margin:0">
@@ -94,4 +94,5 @@ function vpFallback(t){
   document.body.removeChild(ta);
 }
 </script>
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

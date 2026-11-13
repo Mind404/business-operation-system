@@ -17,7 +17,7 @@
 </div>
 
 {% set active = 'demands' %}{% set product = (d['product_code'] if d else product) or '' %}
-{% include 'vpl_nav.html' with context %}
+{% include 'vpl_shell_top.html' with context %}
 
 {% if not d %}
 <div class="vp-warnbox">三条硬要求：<b>云文档溯源必填</b>（能回到原始登记对口径，R6）；进规划池前还要有<b>来源客户 / 业务价值 / 验收标准</b>。</div>
@@ -136,4 +136,5 @@
   </div>
 </div>
 {% endif %}
+{% include 'vpl_shell_bottom.html' with context %}
 {% endblock %}

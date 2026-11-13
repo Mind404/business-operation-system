@@ -1,0 +1,40 @@
+{# Leantime 原版风格外壳：顶部青色栏 + 左侧模块栏 + 内容区 #}
+{% set qp = {'product': product} if product else {} %}
+<div class="lt-shell">
+  <header class="lt-topbar">
+    <div class="lt-brand"><span class="lt-logo">▣</span> <b>版本规划</b><span class="lt-brand-sub">原版风格</span></div>
+    <div class="lt-topbar-right">
+      <span class="lt-crumb">我的 我的项目</span>
+      {% if product %}<span class="lt-chip">{{ product }}</span>{% endif %}
+      <span class="lt-round">AV</span>
+    </div>
+  </header>
+
+  <div class="lt-body">
+    <aside class="lt-side">
+      <div class="lt-side-title">版本规划</div>
+      <a class="lt-nav {{ 'on' if active == 'index' }}" href="{{ url_for('version_plan_lt.index') }}"><i>◉</i>驾驶舱</a>
+      <a class="lt-nav {{ 'on' if active == 'products' }}" href="{{ url_for('version_plan_lt.products') }}"><i>▦</i>产品</a>
+      <a class="lt-nav {{ 'on' if active == 'demands' }}" href="{{ url_for('version_plan_lt.demands', **qp) }}"><i>▤</i>需求归集</a>
+      <a class="lt-nav {{ 'on' if active == 'assess' }}" href="{{ url_for('version_plan_lt.assess', **qp) }}"><i>◫</i>需求评估</a>
+      <a class="lt-nav {{ 'on' if active == 'trains' }}" href="{{ url_for('version_plan_lt.trains', **qp) }}"><i>▷</i>车次日历</a>
+      <a class="lt-nav {{ 'on' if active == 'train_board' }}" href="{{ url_for('version_plan_lt.train_board', **qp) }}"><i>▥</i>装车工作台</a>
+      <a class="lt-nav {{ 'on' if active == 'versions' }}" href="{{ url_for('version_plan_lt.versions', **qp) }}"><i>◈</i>版本规划</a>
+      <a class="lt-nav {{ 'on' if active == 'customers' }}" href="{{ url_for('version_plan_lt.customers', **qp) }}"><i>◍</i>客户矩阵</a>
+      <a class="lt-nav {{ 'on' if active == 'report' }}" href="{{ url_for('version_plan_lt.report', **qp) }}"><i>✉</i>客户回告</a>
+      <a class="lt-nav {{ 'on' if active == 'settings' }}" href="{{ url_for('version_plan_lt.settings') }}"><i>⚙</i>规则字典</a>
+      <div class="lt-side-foot">P1 迭代 · 版本规划</div>
+    </aside>
+
+    <main class="lt-main">
+      <div class="lt-pills">
+        <a class="lt-pill {{ 'on' if active == 'index' }}" href="{{ url_for('version_plan_lt.index') }}">◉ 驾驶舱</a>
+        <a class="lt-pill {{ 'on' if active == 'products' }}" href="{{ url_for('version_plan_lt.products') }}">▦ 产品</a>
+        <a class="lt-pill {{ 'on' if active == 'demands' }}" href="{{ url_for('version_plan_lt.demands', **qp) }}">▤ 需求归集</a>
+        <a class="lt-pill {{ 'on' if active == 'assess' }}" href="{{ url_for('version_plan_lt.assess', **qp) }}">◫ 需求评估</a>
+        <a class="lt-pill {{ 'on' if active == 'trains' }}" href="{{ url_for('version_plan_lt.trains', **qp) }}">▷ 车次日历</a>
+        <a class="lt-pill {{ 'on' if active == 'train_board' }}" href="{{ url_for('version_plan_lt.train_board', **qp) }}">▥ 装车工作台</a>
+        <a class="lt-pill {{ 'on' if active == 'versions' }}" href="{{ url_for('version_plan_lt.versions', **qp) }}">◈ 版本规划</a>
+        <a class="lt-pill {{ 'on' if active == 'customers' }}" href="{{ url_for('version_plan_lt.customers', **qp) }}">◍ 客户矩阵</a>
+        <a class="lt-pill {{ 'on' if active == 'report' }}" href="{{ url_for('version_plan_lt.report', **qp) }}">✉ 客户回告</a>
+      </div>
