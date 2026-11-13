@@ -1,0 +1,320 @@
+{% extends "base.html" %}
+{% block title %}{{ v['version_no'] }} · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>{{ v['version_no'] }} · {{ v['vtype'] }}</h1>
+    <p>📦 {{ prod_name or '未分配' }}　状态 <b>{{ v['status'] }}</b>
+    {% if v['base_version_no'] %} · 基线 {{ v['base_version_no'] }}{% endif %}
+    · 包含需求 {{ ds|length }} 条
+    {% if v['frozen_at'] %} · 冻结于 {{ v['frozen_at'] }}（{{ v['frozen_by'] }}）{% endif %}</p>
+  </div>
+</div>
+
+{% set active = 'versions' %}{% set product = v['product_code'] or '' %}
+{% include 'vpl_nav.html' with context %}
+
+{% set stage = {'规划中':0,'已冻结':1,'开发中':2,'测试中':2,'已发布':3,'已归档':3}.get(v['status'], 0) %}
+<div class="vp-card" style="padding:12px 16px;margin-bottom:12px">
+  <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+    <div style="flex:1;min-width:280px">
+      <div class="vp-stage">
+        {% for i in range(4) %}
+        <i class="{% if i < stage %}done{% elif i == stage %}{% if v['status'] in ('已发布','已归档') %}done{% else %}cur{% endif %}{% endif %}"></i>
+        {% endfor %}
+      </div>
+      <div class="vp-stage-labels"><span>规划</span><span>需求冻结</span><span>开发/测试</span><span>发布</span></div>
+    </div>
+    <div class="vp-road-dates" style="margin:0">
+      {% if v['freeze_date'] %}冻结 <b>{{ v['freeze_date'] }}</b>{% endif %}
+      {% if v['test_date'] %}　提测 <b>{{ v['test_date'] }}</b>{% endif %}
+      {% if v['release_date'] %}　发布 <b>{{ v['release_date'] }}</b>{% endif %}
+      {% if v['merge_target_no'] %}<br>合回 <b>{{ v['merge_target_no'] }}</b>　期限 <b>{{ v['merge_deadline'] }}</b>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="vp-toolbar">
+
+  <a class="vp-btn" href="{{ url_for('version_plan_lt.versions', product=v['product_code'] or '') }}">← 版本列表</a>
+  {% if v['status'] == '已发布' %}
+  <span class="vp-tag t-done">已发布 {{ v['released_at'] }}</span>
+  {% endif %}
+  {% if can_manage %}
+    {% for nxt in flow %}
+    <form method="post" action="{{ url_for('version_plan_lt.version_status', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="to" value="{{ nxt }}">
+      <button class="vp-btn {{ 'vp-btn-green' if nxt in ('已发布','开发中') else 'vp-btn-primary' }}" type="submit"
+        onclick="return confirm('把 {{ v['version_no'] }} 推进到「{{ nxt }}」？')">
+        {% if nxt == '已冻结' %}🔒 冻结版本{% elif nxt == '开发中' %}▶ 开始开发{% elif nxt == '测试中' %}🧪 转测试{% elif nxt == '已发布' %}🚀 发布{% elif nxt == '已归档' %}📦 归档{% endif %}
+      </button>
+    </form>
+    {% endfor %}
+    {% if v['status'] == '已冻结' and is_platform %}
+    <form method="post" action="{{ url_for('version_plan_lt.version_status', no=v['version_no']) }}" class="vp-inline" style="margin:0" onsubmit="return confirm('强制解冻会打开需求增删闸门，确定？')">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="to" value="规划中">
+      <input class="vp-input" name="reason" required placeholder="解冻原因（必填，会留痕）" style="max-width:220px">
+      <button class="vp-btn vp-btn-danger" type="submit">🔓 强制解冻</button>
+    </form>
+    {% endif %}
+  {% endif %}
+</div>
+
+{% if v['status'] == '已冻结' %}
+<div class="vp-warnbox">🔒 已冻结：需求构成锁定，不能再增删（R1）。{% if is_platform %}平台管理员可强制解冻并留痕。{% else %}需要调整请找平台管理员强制解冻。{% endif %}</div>
+{% endif %}
+{% if v['vtype'] == '客户定制' %}
+<div class="vp-card"><h3>🧩 定制分支合回计划（R2）</h3>
+  <p style="margin:0;font-size:13px">计划合回主线：<b>{{ v['merge_target_no'] or '未填' }}</b>　合回期限：<b>{{ v['merge_deadline'] or '未填' }}</b>
+  {% if v['merge_deadline'] and v['merge_deadline'] < today %}<span class="vp-tag t-red">已超期</span>{% endif %}</p>
+</div>
+{% endif %}
+{% if v['unfreeze_log'] %}
+<div class="vp-card"><h3>🔓 强制解冻留痕</h3><pre class="vp-pre" style="max-height:160px">{{ v['unfreeze_log'] }}</pre></div>
+{% endif %}
+
+<div class="vp-card">
+  <h3>📌 里程碑与版本元数据</h3>
+  <form method="post" action="{{ url_for('version_plan_lt.version_detail', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+    <div class="vp-row3">
+      <div class="vp-field"><label class="vp-label">需求冻结日</label><input class="vp-input" type="date" name="freeze_date" value="{{ v['freeze_date'] }}" {{ 'disabled' if not can_edit }}></div>
+  
+<div class="vp-field"><label class="vp-label">提测日</label><input class="vp-input" type="date" name="test_date" value="{{ v['test_date'] }}" {{ 'disabled' if not can_edit }}></div>
+      <div class="vp-field"><label class="vp-label">发布日</label><input class="vp-input" type="date" name="release_date" value="{{ v['release_date'] }}" {{ 'disabled' if not can_edit }}></div>
+    </div>
+    <div class="vp-row2">
+      <div class="vp-field"><label class="vp-label">基线版本</label><input class="vp-input" name="base_version_no" value="{{ v['base_version_no'] }}" {{ 'disabled' if not can_edit }}></div>
+      <div class="vp-field">
+        <label class="vp-label">涉及模块</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
+          {% for m in modules %}
+          <label class="vp-inline"><input type="checkbox" name="modules" value="{{ m }}" checked {{ 'disabled' if not can_edit }}> {{ m }}</label>
+          {% else %}<span class="vp-muted">未设置（在「模块字典」里配）</span>{% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="vp-field">
+      <label class="vp-label">目标客户</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
+        {% for c in customers %}
+        <label class="vp-inline"><input type="checkbox" name="customers" value="{{ c['name'] }}" {{ 'checked' if c['name'] in targets }} {{ 'disabled' if not can_edit }}> {{ c['name'] }}</label>
+        {% else %}<span class="vp-muted">还没建客户</span>{% endfor %}
+      </div>
+    </div>
+    <div class="vp-field"><label class="vp-label">接口变更说明</label><textarea class="vp-textarea" name="interface_change" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['interface_change'] }}</textarea></div>
+    <div class="vp-field"><label class="vp-label">回归范围（测试输入）</label><textarea class="vp-textarea" name="regression_scope" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['regression_scope'] }}</textarea></div>
+    <div class="vp-row2">
+      <div class="vp-field"><label class="vp-label">已知遗留问题</label><textarea class="vp-textarea" name="known_issues" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['known_issues'] }}</textarea></div>
+      <div class="vp-field"><label class="vp-label">升级路径说明</label><textarea class="vp-textarea" name="upgrade_path" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['upgrade_path'] }}</textarea></div>
+    </div>
+    <div class="vp-field"><label class="vp-label">回滚方案（发布前须可执行并演练过）</label><textarea class="vp-textarea" name="rollback_plan" style="min-height:56px" {{ 'disabled' if not can_edit }}>{{ v['rollback_plan'] }}</textarea></div>
+    {% if can_edit %}<button class="vp-btn vp-btn-primary" type="submit">保存元数据</button>{% else %}<span class="vp-muted">版本号 {{ v['version_no'] }} 创建后不可修改（R4）；当前状态不可编辑，仅管理员在规划中/已冻结可改。</span>{% endif %}
+  </form>
+</div>
+
+<div class="vp-card" style="overflow-x:auto">
+  <h3>📋 包含需求（{{ ds|length }} 条）</h3>
+  {% if ds %}
+  <table class="vp-table">
+    <tr><th>编号</th><th>客户</th><th>描述</th><th>类型</th><th>状态</th><th>溯源</th>{% if can_manage %}<th>操作</th>{% endif %}</tr>
+    {% for d in ds %}
+    <tr>
+      <td><a class="vp-code" href="{{ url_for('version_plan_lt.demand_edit', code=d['code']) }}">{{ d['code'] }}</a></td>
+      <td>{{ d['customer_name'] or '—' }}</td>
+      <td style="max-width:400px">{{ d['description'] }}</td>
+      <td>{{ d['demand_type'] }}</td>
+      <td>
+        {% set cls = {'已排期':'t-plan','已发布':'t-done','规划池':'t-pool'} %}
+        <span class="vp-tag {{ cls.get(d['status'],'t-no') }}">{{ d['status'] }}</span>
+      </td>
+      <td class="vp-muted" style="max-width:200px">{{ d['doc_ref'][:40] }}</td>
+      {% if can_manage %}
+      <td>
+        {% if v['status'] == '规划中' %}
+        <form method="post" action="{{ url_for('version_plan_lt.version_remove', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+          <input type="hidden" name="code" value="{{ d['code'] }}">
+          <button class="vp-btn vp-btn-sm vp-btn-danger" type="submit" onclick="return confirm('把 {{ d['code'] }} 移出本版本？')">移出</button>
+        </form>
+        {% else %}<span class="vp-muted">锁定</span>{% endif %}
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="vp-empty">这个版本还没有需求{% if v['status'] == '规划中' %}，从下面拉入{% endif %}</div>
+  {% endif %}
+</div>
+
+{% if can_manage and v['status'] == '规划中' %}
+<div class="vp-card">
+  <h3>➕ 从规划池拉入需求（{{ pool|length }} 条可选）</h3>
+  {% if pool %}
+  <form method="post" action="{{ url_for('version_plan_lt.version_add', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+      {% for d in pool %}
+      <label class="vp-inline" style="font-size:13px;align-items:flex-start">
+        <input type="checkbox" name="codes" value="{{ d['code'] }}" style="margin-top:3px">
+        <span><b class="vp-code">{{ d['code'] }}</b> · {{ d['customer_name'] or '—' }} · {{ d['description'][:80] }}
+          {% if d['related_codes'] %}<span class="vp-tag t-red">{{ d['relation_type'] }} {{ d['related_codes'] }}</span>{% endif %}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <button class="vp-btn vp-btn-primary" type="submit">拉入所选需求</button>
+    <span class="vp-muted">仅「规划池」需求可拉入（R7）</span>
+  </form>
+  {% else %}<div class="vp-empty">规划池空，先去过滤</div>{% endif %}
+</div>
+{% endif %}
+
+<div class="vp-card">
+  <h3>🚦 发布门禁
+    {% if gate['ok'] %}<span class="vp-tag t-done">可发布</span>
+    {% else %}<span class="vp-tag t-red">不可发布</span>{% endif %}
+  </h3>
+  <p class="vp-muted" style="margin-bottom:8px">7 项确认清单全部「通过」+ 应签角色全部「同意」才可发布；定制版客户代表必签。清单与签核均按「产品 + 版本号」双键隔离，不会与同号的其它产品串号。</p>
+  {% if not gate['ok'] %}
+  <div class="vp-warnbox">{% for r in gate['reasons'] %}<div>· {{ r }}</div>{% endfor %}</div>
+  {% endif %}
+</div>
+
+<div class="vp-card">
+  <h3>✅ 确认清单（7 项硬门禁）
+    <span class="vp-tag {{ 't-done' if checks | selectattr('result','equalto','通过') | list | length == 7 else 't-wait' }}">
+      {{ checks | selectattr('result','equalto','通过') | list | length }}/7
+    </span>
+  </h3>
+  <div class="vp-table-wrap">
+    <table class="vp-table">
+      <thead><tr><th style="width:44px">#</th><th>检查项</th><th style="width:300px">结论 / 证据</th></tr></thead>
+      <tbody>
+      {% for c in checks %}
+      <tr>
+        <td>{{ c['item_no'] }}</td>
+        <td>{{ check_items[c['item_no'] - 1] if c['item_no'] <= 7 else '' }}</td>
+        <td>
+          {% if can_manage and v['status'] != '已发布' %}
+          <form method="post" action="{{ url_for('version_plan_lt.version_check', no=v['version_no']) }}"
+                style="display:flex;gap:6px;align-items:center">
+            <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+            <input type="hidden" name="item_no" value="{{ c['item_no'] }}">
+            <select class="vp-select" name="result" style="width:96px">
+              {% for r in ['pending','通过','不通过'] %}
+              <option value="{{ r }}" {{ 'selected' if (c['result'] or 'pending') == r }}>{{ r }}</option>
+              {% endfor %}
+            </select>
+            <input class="vp-input" name="evidence" value="{{ c['evidence'] or '' }}" placeholder="证据/说明" style="width:110px">
+            <button class="vp-btn vp-btn-sm" type="submit">保存</button>
+          </form>
+          {% else %}
+            <span class="vp-tag {{ 't-done' if c['result']=='通过' else 't-wait' }}">{{ c['result'] }}</span>
+            <span class="vp-muted">{{ c['evidence'] }}{% if c['checked_by'] %} · {{ c['checked_by'] }}{% endif %}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="vp-card">
+  <h3>🖋️ 发布签核（{{ sign_roles | length }} 方）
+    <span class="vp-tag {{ 't-done' if signs.values() | selectattr('verdict','equalto','同意') | list | length == sign_roles | length else 't-wait' }}">
+      {{ signs.values() | selectattr('verdict','equalto','同意') | list | length }}/{{ sign_roles | length }}
+    </span>
+  </h3>
+  <p class="vp-muted" style="margin-bottom:10px">产品负责人 · 测试负责人 · 发布经理{% if v['vtype'] == '客户定制' %} · 客户代表（定制版必签）{% endif %}</p>
+  <div class="vp-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+    {% for role in sign_roles %}
+    {% set sg = signs.get(role, {}) %}
+    <div class="vp-prod-card">
+      <div class="vp-prod-top">
+        <div class="vp-prod-name" style="font-size:14px">{{ role }}</div>
+        <span class="vp-tag {{ 't-done' if sg.get('verdict') == '同意' else ('t-red' if sg.get('verdict') == '驳回' else 't-wait') }}">
+          {{ sg.get('verdict') or '待签' }}
+        </span>
+      </div>
+      {% if sg.get('comment') %}<div class="vp-muted" style="margin:6px 0">意见：{{ sg['comment'] }}</div>{% endif %}
+      {% if sg.get('signed_at') %}<div class="vp-muted" style="font-size:12px">签于 {{ sg['signed_at'] }}</div>{% endif %}
+      {% if can_manage and v['status'] != '已发布' %}
+      <form method="post" action="{{ url_for('version_plan_lt.version_sign', no=v['version_no']) }}" style="margin-top:8px">
+        <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+        <input type="hidden" name="role" value="{{ role }}">
+        <div class="vp-inline" style="gap:6px">
+          <input class="vp-input" name="comment" placeholder="签核意见" style="flex:1" value="">
+          <button class="vp-btn vp-btn-sm vp-btn-green" name="verdict" value="同意" type="submit">同意</button>
+          <button class="vp-btn vp-btn-sm vp-btn-danger" name="verdict" value="驳回" type="submit">驳回</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="vp-card">
+  <h3>📄 发布说明（Release Note）{% if release %} · <span class="vp-tag {{ 't-done' if release['status']=='定稿' else 't-wait' }}">{{ release['status'] }}</span>{% endif %}</h3>
+  {% if can_manage %}
+  <div class="vp-toolbar" style="box-shadow:none;margin-bottom:10px">
+    <form method="post" action="{{ url_for('version_plan_lt.version_release', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="act" value="regen">
+      <button class="vp-btn" type="submit">🔄 按版本数据重生成草稿</button>
+    </form>
+    {% if release %}
+    <a class="vp-btn" href="{{ url_for('version_plan_lt.release_md', no
+=v['version_no']) }}">⬇ 导出 Markdown</a>
+    {% if release['status'] == '草稿' %}
+    <form method="post" action="{{ url_for('version_plan_lt.version_release', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="act" value="finalize">
+      <button class="vp-btn vp-btn-green" type="submit">✅ 定稿</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('version_plan_lt.version_r
+elease', no=v['version_no']) }}" style="margin:0">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="act" value="unfinalize">
+      <button class="vp-btn" type="submit">↩ 取消定稿</button>
+    </form>
+    <span class="vp-muted">定稿人 {{ release['finalized_by'] }}</span>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+  {% if release %}
+    {% if release['status'] == '定稿' %}
+    <pre class="vp-pre">{{ release['content'] }}</pre>
+    {% else %}
+    <form method="post" action="{{ url_for('version_plan_lt.version_release', no=v['version_no']) }}">
+    <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
+      <input type="hidden" name="act" value="save">
+      <textarea class="vp-textarea" name="content" style="min-height:420px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px">{{ release['content'] }}</textarea>
+      <div style="margin-top:8px"><button class="vp-btn vp-btn-primary" type="submit">保存草稿</button>
+        <span class="vp-muted">版本置为「已发布」时会自动生成草稿；定稿后不可再改。</span></div>
+    </form>
+    {% endif %}
+    {% if release['rollback_plan'] %}
+    <div class="vp-field" style="margin-top:10px"><label class="vp-label">回滚方案</label><div class="vp-pre" style="white-space:pre-wrap">{{ release['rollback_plan'] }}</div></div>
+    {% endif %}
+  {% else %}
+  <div class="vp-empty">还没有发布说明。版本推进到「已发布」会自动生成；也可点上面「按版本数据重生成草稿」。</div>
+  {% endif %}
+</div>
+
+<div class="vp-card">
+  <h3>🕘 版本留痕</h3>
+  {% if logs %}
+  <ul class="vp-list">
+    {% for l in logs %}<li><span class="vp-muted">{{ l['created_at'][5:16] }}</span> <b>{{ l['operator'] }}</b> {{ l['action'] }} <span class="vp-muted">{{ l['detail'] }}</span></li>{% endfor %}
+  </ul>
+  {% else %}<div class="vp-empty" style="padding:16px 0">暂无记录</div>{% endif %}
+</div>
+{% endblock %}

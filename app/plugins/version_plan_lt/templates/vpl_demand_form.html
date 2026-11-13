@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑需求 ' + d['code'] if d else '录入需求' }} · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>{% if d %}✏️ 需求 {{ d['code'] }}{% else %}＋ 手动录入需求{% endif %}</h1>
+    <p>{% if d %}当前状态：<b>{{ d['status'] }}</b>{% if d['filter_result'] %} · 过滤结论 {{ d['filter_result'] }}{% endif %}
+      {% if d['version_no'] %} · 已排入 <span class="vp-code">{{ d['version_no'] }}</span>{% endif %}
+    {% else %}录入后进入「待过滤」队列，等过滤会上逐条判定{% endif %}</p>
+  </div>
+</div>
+
+<div class="vp-toolbar">
+  <a class="vp-btn" href="{{ url_for('version_plan_lt.demands', product=(d['product_code'] if d else product) or '') }}">← 返回列表</a>
+  {% if d and d['version_no'] %}<a class="vp-btn" href="{{ url_for('version_plan_lt.version_detail', no=d['version_no'], product=d['product_code']) }}">看所在版本</a>{% endif %}
+</div>
+
+{% set active = 'demands' %}{% set product = (d['product_code'] if d else product) or '' %}
+{% include 'vpl_nav.html' with context %}
+
+{% if not d %}
+<div class="vp-warnbox">三条硬要求：<b>云文档溯源必填</b>（能回到原始登记对口径，R6）；进规划池前还要有<b>来源客户 / 业务价值 / 验收标准</b>。</div>
+{% endif %}
+
+{% if sims %}
+<div class="vp-warnbox">
+  <b>⚠️ 疑似重复 {{ sims|length }} 条</b>（按描述相似度）：
+  <ul style="margin:6px 0 0;padding-left:18px">
+    {% for s in sims %}
+    <li><b class="vp-code">{{ s[0] }}</b> 相似度 {{ s[2] }} · 客户 {{ s[3] or '—' }} · {{ s[1][:50] }}
+      <a href="{{ url_for('version_plan_lt.demand_edit', code=s[0]) }}" target="_blank">查看</a></li>
+    {% endfor %}
+  </ul>
+  确认是同一条 → 在下方「重复/冲突关联」里标记，两条会互相关联。
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('version_plan_lt.demand_edit', code=d['code']) if d else url_for('version_plan_lt.demand_new') }}">
+  <div class="vp-card">
+    <h3>原始登记信息</h3>
+    <div class="vp-field">
+      <label class="vp-label">所属产品 <span class="vp-req">*</span></label>
+      <select class="vp-select" name="product_code" style="max-width:260px" {{ 'disabled' if d and d['status'] in ('已排期','已发布') }}>
+        <option value="">未分配</option>
+        {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if (d['product_code'] or '')==p['code'] or (not d and product==p['code']) }}>{{ p['name'] }}</option>{% endfor %}
+      </select>
+      {% if d and d['status'] in ('已排期','已发布') %}<div class="vp-muted">需求已「{{ d['status'] }}」，产品归属锁定，不可再改</div>{% endif %}
+    </div>
+    <div class="vp-row2">
+      <div class="vp-field">
+        <label class="vp-label">云文档溯源 <span class="vp-req">*</span>（行号 / 原始编号 / 原文摘要，不可清空）</label>
+        <input class="vp-input" name="doc_ref" required value="{{ d['doc_ref'] if d else '' }}"
+               placeholder="如：云文档-需求台账 第 128 行 / 原始编号 CUS-2026-071">
+      </div>
+      <div class="vp-field">
+        <label class="vp-label">提出日期</label>
+        <input class="vp-input" type="date" name="raised_at" value="{{ d['raised_at'] if d else today }}">
+      </div>
+    </div>
+    <div class="vp-field">
+      <label class="vp-label">需求描述 <span class="vp-req">*</span></label>
+      <textarea class="vp-textarea" name="description" required placeholder="可在云文档原文基础上整理改写">{{ d['description'] if d else '' }}</textarea>
+    </div>
+    <div class="vp-row3">
+      <div class="vp-field">
+        <label class="vp-label">来源客户</label>
+        <input class="vp-input" name="customer_name" list="vp-cust" value="{{ d['customer_name'] if d else '' }}" placeholder="选已有客户或直接填">
+        <datalist id="vp-cust">{% for c in customers %}<option value="{{ c['name'] }}">{% endfor %}</datalist>
+      </div>
+      <div class="vp-field">
+        <label class="vp-label">需求类型</label>
+        <select class="vp-select" name="demand_type">
+          {% for t in dtypes %}<option value="{{ t }}" {{ 'selected' if d and d['demand_type'] == t }}>{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="vp-field">
+        <label class="vp-label">预估人日（装车容量口径）</label>
+        <input class="vp-input" name="estimate" type="number" min="0" step="0.5"
+               value="{{ d['estimate'] if d and d['estimate'] else '2' }}" placeholder="如 3.5">
+      </div>
+      <div class="vp-field">
+        <label class="vp-label">是否客户定制</label>
+        <div class="vp-inline">
+          <input type="checkbox" name="is_custom" value="1" {{ 'checked' if d and d['is_custom'] }}>
+          <span class="vp-muted">勾选后填定制客户</span>
+          <input class="vp-input" name="custom_customer" value="{{ d['custom_customer'] if d else '' }}" placeholder="定制客户" style="max-width:130px">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="vp-card">
+    <h3>排期决策依据（进规划池前必填）</h3>
+    <div class="vp-field">
+      <label class="vp-label">业务价值：不用会怎样</label>
+      <textarea class="vp-textarea" name="business_value" placeholder="例如：客户现场 FOTA 失败率 3%，影响批量交付验收">{{ d['business_value'] if d else '' }}</textarea>
+    </div>
+    <div class="vp-field">
+      <label class="vp-label">验收标准：怎么算做完</label>
+      <textarea class="vp-textarea" name="acceptance" placeholder="例如：连续 50 次 FOTA 升级成功率 100%，断网可续传">{{ d['acceptance'] if d else '' }}</textarea>
+    </div>
+    <div class="vp-field">
+      <label class="vp-label">备注 / 附件说明</label>
+      <textarea class="vp-textarea" name="note" style="min-height:56px" placeholder="客户邮件截图、参考文档位置等">{{ d['note'] if d else '' }}</textarea>
+    </div>
+  </div>
+
+  <div class="vp-toolbar">
+    <button class="vp-btn vp-btn-primary" type="submit">保存</button>
+    <a class="vp-btn" href="{{ url_for('version_plan_lt.demands') }}">取消</a>
+    {% if d %}<span class="vp-muted" style="margin-left:auto">创建 {{ d['created_at'] }} · 更新 {{ d['updated_at'] }}</span>{% endif %}
+  </div>
+</form>
+
+{% if d %}
+<div class="vp-row2">
+  <div class="vp-card">
+    <h3>🔀 重复 / 冲突关联</h3>
+    <p class="vp-muted" style="margin:0 0 10px">当前：{% if d['relation_type'] %}<span class="vp-tag t-red">{{ d['relation_type'] }}</span> {{ d['related_codes'] }}{% else %}未标记{% endif %}</p>
+    <form method="post" action="{{ url_for('version_plan_lt.demand_link', code=d['code']) }}" class="vp-inline" style="flex-wrap:wrap">
+      <select class="vp-select" name="relation_type" style="max-width:110px">
+        <option value="重复">重复</option><option value="冲突">冲突</option>
+      </select>
+      <input class="vp-input" name="other_code" placeholder="另一条需求编号，如 R012" style="max-width:170px">
+      <button class="vp-btn" type="submit">标记（双向关联）</button>
+    </form>
+  </div>
+  <div class="vp-card">
+    <h3>🕘 这条需求的变更留痕</h3>
+    {% if logs %}
+    <ul class="vp-list">
+      {% for l in logs %}<li><span class="vp-muted">{{ l['created_at'][5:16] }}</span> <b>{{ l['operator'] }}</b> {{ l['action'] }} <span class="vp-muted">{{ l['detail'] }}</span></li>{% endfor %}
+    </ul>
+    {% else %}<div class="vp-empty" style="padding:16px 0">暂无记录</div>{% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}需求评估 · 原版风格{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>⚖️ 需求评估</h1>
+    <p>四维打分（价值 / 客户权重 / 紧急度 / 实现成本），自动加权排序：≥70 进规划池、40-69 挂起、&lt;40 不做。每轮评估都留痕。</p>
+  </div>
+</div>
+
+{% set active = 'assess' %}
+{% include 'vpl_nav.html' with context %}
+
+<form method="get" class="vp-toolbar" style="margin-bottom:12px">
+  <select class="vp-select" name="product" style="max-width:200px" onchange="this.form.submit()">
+    <option value="">全部产品</option>
+    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
+  </select>
+  <span class="vp-muted" style="margin-left:auto">待评估 {{ cnt }} 条 · 已评分 {{ scored }} 条 · 平均 {{ avg }} 分</span>
+</form>
+
+{% if not rows %}
+<div class="vp-empty">没有待评估需求。新需求登记后会先进这里。</div>
+{% endif %}
+
+{% for d in rows %}
+<div class="vp-card">
+  <div class="vp-card-hd">
+    <h3><span class="vp-code">{{ d['code'] }}</span> {{ d['description'][:50] }}{% if d['description']|length > 50 %}…{% endif %}</h3>
+    <span class="vp-tag t-wait">{{ d['status'] }}</span>
+  </div>
+  <div class="vp-muted" style="margin-bottom:8px">
+    来源 {{ d['source_type'] or d['doc_ref'] or '—' }}
+    {% if d['customer_name'] %} · 客户 {{ d['customer_name'] }}{% endif %}
+    · 类型 {{ d['demand_type'] or '—' }}
+    {% if hist.get(d['code']) %} · 上轮 {{ hist[d['code']]['score'] }} 分（{{ hist[d['code']]['verdict'] }}）{% endif %}
+  </div>
+  {% if d['business_value'] or d['acceptance'] %}
+  <div class="vp-muted" style="margin-bottom:10px">
+    {% if d['business_value'] %}业务价值：{{ d['business_value'][:80] }}{% endif %}
+    {% if d['acceptance'] %}　验收：{{ d['acceptance'][:60] }}{% endif %}
+  </div>
+  {% endif %}
+  {% if can_manage %}
+  <form method="post" action="{{ url_for('version_plan_lt.assess_submit', code=d['code']) }}">
+    <input type="hidden" name="product" value="{{ product }}">
+    <div class="vp-row3" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+      {% for key, label in [('value','业务价值'),('client','客户权重'),('urgent','紧急度'),('cost','实现成本')] %}
+      <div class="vp-field">
+        <label class="vp-label">{{ label }}</label>
+        <select class="vp-select" name="{{ key }}">
+          {% for n in [1,2,3,4,5] %}
+          <option value="{{ n }}" {{ 'selected' if n == 3 }}>{{ n }}{% if loop.last %}（最高）{% endif %}{% if loop.first %}（最低）{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="vp-inline">
+      <input class="vp-input" name="comment" placeholder="评估结论/口径说明（可选）" style="flex:1">
+      <button class="vp-btn vp-btn-primary" type="submit">提交评估</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

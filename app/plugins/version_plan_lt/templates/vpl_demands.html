@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}需求与过滤 · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+{% set qp = {'product': product} if product else {} %}
+<div class="vp-page-head">
+  <div>
+    <h1>🧹 需求与过滤工作台</h1>
+    <p>从云文档搬入的原始需求在这里逐条判定：进规划池 / 挂起 / 不做。每条必须保留云文档溯源。</p>
+  </div>
+</div>
+
+{% set active = 'demands' %}
+{% include 'vpl_nav.html' with context %}
+
+<div class="vp-toolbar">
+  {% if can_manage %}
+  <a class="vp-btn vp-btn-primary" href="{{ url_for('version_plan_lt.demand_new', **qp) }}">＋ 手动录入</a>
+  <form method="post" action="{{ url_for('version_plan_lt.demand_import') }}" enctype="multipart/form-data" class="vp-inline" style="margin:0">
+    {% if product %}<input type="hidden" name="product" value="{{ product }}">{% endif %}
+    <input type="file" name="file" accept=".csv,.txt" style="font-size:12px;max-width:220px">
+    <button class="vp-btn vp-btn-green" type="submit">⬆ 导入 CSV</button>
+  </form>
+  {% endif %}
+  <a class="vp-btn" href="{{ url_for('version_plan_lt.demand_export', **qp) }}">⬇ 导出需求</a>
+  <span class="vp-muted" style="margin-left:auto">共 {{ total }} 条</span>
+</div>
+
+<form method="get" class="vp-toolbar" style="margin-bottom:10px">
+  <input type="hidden" name="view" value="{{ request.args.get('view') or '' }}">
+  <select class="vp-select" name="product" style="max-width:180px" onchange="this.form.submit()">
+    <option value="">全部产品</option>
+    {% for p in products %}<option value="{{ p['code'] }}" {{ 'selected' if product == p['code'] }}>{{ p['name'] }}</option>{% endfor %}
+  </select>
+  <input class="vp-input" name="q" value="{{ q }}" placeholder="搜编号 / 描述 / 溯源 / 客户" style="max-width:240px">
+  <select class="vp-select" name="customer" style="max-width:170px">
+    <option value="">全部客户</option>
+    {% for c in customers %}<option value="{{ c['name'] }}" {{ 'selected' if cust == c['name'] }}>{{ c['name'] }}</option>{% endfor %}
+  </select>
+  <select class="vp-select" name="version" style="max-width:150px">
+    <option value="">全部版本</option>
+    {% for v in versions %}<option value="{{ v['version_no'] }}" {{ 'selected' if ver == v['version_no'] }}>{{ v['version_no'] }}</option>{% endfor %}
+  </select>
+  <input type="hidden" name="status" value="{{ st }}">
+  <button class="vp-btn" type="submit">筛选</button>
+  {% if q or cust or ver or product %}<a class="vp-btn" href="{{ url_for('version_plan_lt.demands', status=st) }}">清除</a>{% endif %}
+</form>
+
+<div class="vp-tabs">
+  <a class="vp-tab {{ 'on' if not st }}" href="{{ url_for('version_plan_lt.demands', q=q, **qp) }}">全部</a>
+  {% for s in statuses %}
+  <a class="vp-tab {{ 'on' if st == s }}" href="{{ url_for('version_plan_lt.demands', status=s, q=q, **qp) }}">{{ s }} {{ counts[s] }}</a>
+  {% endfor %}
+</div>
+
+<div class="vp-tabs" style="margin-left:0">
+  <a class="vp-tab {{ 'on' if request.args.get('view') != 'board' }}" href="{{ url_for('version_plan_lt.demands', status=st, q=q, customer=cust, version=ver, **qp) }}">☰ 表格</a>
+  <a class="vp-tab {{ 'on' if request.args.get('view') == 'board' }}" href="{{ url_for('version_plan_lt.demands', status=st, q=q, customer=cust, version=ver, view='board', **qp) }}">▦ 看板</a>
+</div>
+
+{% if st == '待过滤' and can_manage %}
+<div class="vp-warnbox">逐条判定：进规划池前必须先补全来源客户、业务价值、验收标准；挂起/不做必须填原因。点「编辑」可补齐信息。</div>
+{% endif %}
+
+{% if request.args.get('view') == 'board' %}
+<div class="vp-card">
+  <div class="vp-card-hd"><h3>需求流转看板</h3><span class="vp-muted">列内按登记顺序，点卡片可编辑</span></div>
+  <div class="vp-board">
+    {% for title, keys in [('待过滤', ('待过滤',)), ('规划池', ('规划池',)), ('已排期 / 已发布', ('已排期','已发布')), ('挂起 / 不做', ('挂起','不做'))] %}
+    {% set ns = namespace(cnt=0) %}
+    {% for d in rows %}{% if d['status'] in keys %}{% set ns.cnt = ns.cnt + 1 %}{% endif %}{% endfor %}
+    <div class="vp-col">
+      <div class="vp-col-hd"><b>{{ title }}</b><span class="cnt">{{ ns.cnt }}</span></div>
+      {% for d in rows %}{% if d['status'] in keys %}
+      <a class="vp-kan" href="{{ url_for('version_plan_lt.demand_edit', code=d['code']) }}">
+        <div class="vp-kan-top">
+          <b>{{ d['code'] }}</b>
+          {% set cls = {'待过滤':'t-wait','规划池':'t-pool','挂起':'t-hold','已排期':'t-plan','已发布':'t-done','不做':'t-no'} %}
+          <span class="vp-tag {{ cls.get(d['status'],'t-no') }}">{{ d['status'] }}</span>
+          <span class="cust">{{ prod_map.get(d['product_code'], {}).get('name', '未分配') }}</span>
+        </div>
+        <p>{{ d['description'] }}</p>
+        <div class="vp-kan-foot">
+          <span class="vp-tag t-no">{{ d['demand_type'] }}</span>
+          {% if d['version_no'] %}<span class="vp-tag t-plan">{{ d['version_no'] }}</span>{% endif %}
+          {% if d['is_custom'] %}<span class="vp-tag t-red">定制</span>{% endif %}
+        </div>
+      </a>
+      {% endif %}{% endfor %}
+      {% if ns.cnt == 0 %}<div class="vp-muted" style="padding:12px 2px;font-size:12px">这一列是空的</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="vp-card" style="overflow-x:auto">
+  {% if rows %}
+  <table class="vp-table">
+    <tr>
+      <th style="width:64px">编号</th>
+      <th style="width:120px">产品</th>
+      <th style="width:190px">云文档溯源</th>
+      <th style="width:96px">客户</th>
+      <th>需求描述</th>
+      <th style="width:86px">类型</th>
+      <th style="width:80px">状态</th>
+      <th style="width:72px">版本</th>
+      <th style="width:120px">关联</th>
+      <th style="width:230px">操作</th>
+    </tr>
+    {% for d in rows %}
+    <tr>
+      <td><span class="vp-code">{{ d['code'] }}</span></td>
+      <td><span class="vp-tag t-pool">{{ prod_map.get(d['product_code'], {}).get('name', '未分配') }}</span></td>
+      <td class="vp-muted" title="{{ d['doc_ref'] }}">{{ d['doc_ref'][:26] }}{% if d['doc_ref']|length > 26 %}…{% endif %}</td>
+      <td>{{ d['customer_name'] or '—' }}{% if d['is_custom'] %}<div class="vp-muted">定制{% if d['custom_customer'] %}·{{ d['custom_customer'] }}{% endif %}</div>{% endif %}</td>
+      <td style="max-width:420px">{{ d['description'][:110] }}{% if d['description']|length > 110 %}…{% endif %}
+        {% if d['filter_note'] %}<div class="vp-muted">备注：{{ d['filter_note'][:60] }}</div>{% endif %}</td>
+      <td>{{ d['demand_type'] }}</td>
+      <td>
+        {% set cls = {'待过滤':'t-wait','规划池':'t-pool','挂起':'t-hold','已排期':'t-plan','已发布':'t-done','不做':'t-no'} %}
+        <span class="vp-tag {{ cls.get(d['status'], 't-no') }}">{{ d['status'] }}</span>
+      </td>
+      <td>{% if d['version_no'] %}<span class="vp-code">{{ d['version_no'] }}</span>{% else %}<span class="vp-muted">—</span>{% endif %}</td>
+      <td class="vp-muted">{{ d['relation_type'] }}{% if d['related_codes'] %} {{ d['related_codes'] }}{% endif %}</td>
+      <td>
+        {% if can_manage and d['status'] in ('待过滤','挂起','规划池') %}
+        <form method="post" action="{{ url_for('version_plan_lt.demand_filter', code=d['code']) }}" class="vp-inline" style="margin:0;flex-wrap:wrap">
+          <select class="vp-select" name="filter_result" style="max-width:104px;padding:4px 6px;font-size:12px">
+            <option value="进规划池" {{ 'selected' if d['status']=='规划池' }}>进规划池</option>
+            <option value="挂起" {{ 'selected' if d['status']=='挂起' }}>挂起</option>
+            <option value="不做">不做</option>
+          </select>
+          <input class="vp-input" name="filter_note" value="{{ d['filter_note'] }}" placeholder="原因（挂起/不做必填）" style="max-width:120px;padding:4px 6px;font-size:12px">
+          <button class="vp-btn vp-btn-sm vp-btn-primary" type="submit">判定</button>
+        </form>
+        {% endif %}
+        <div class="vp-inline" style="margin-top:5px">
+          <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demand_edit', code=d['code']) }}">编辑</a>
+          {% if d['version_no'] %}<a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.version_detail', no=d['version_no'], product=d['product_code']) }}">看版本</a>{% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="vp-empty">没有符合条件的需求{% if st == '待过滤' %}，队列已清空{% endif %}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if pages > 1 %}
+<div class="vp-toolbar">
+  <span class="vp-muted">第 {{ page }} / {{ pages }} 页</span>
+  {% if page > 1 %}<a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demands', status=st, q=q, customer=cust, version=ver, page=page-1, **qp) }}">← 上一页</a>{% endif %}
+  {% if page < pages %}<a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demands', status=st, q=q, customer=cust, version=ver, page=page+1, **qp) }}">下一页 →</a>{% endif %}
+</div>
+{% endif %}
+
+<div class="vp-card">
+  <h3>📥 从云文档搬入（CSV 导入说明）</h3>
+  <p class="vp-muted" style="margin:0 0 6px">把云文档表格导出为 CSV（Excel「另存为 CSV UTF-8」），表头支持这些列名：</p>
+  <p style="margin:0;font-size:12.5px;line-height:1.8">
+    <b>产品</b>（可选：产品名或编号，留空归入当前筛选产品）、<b>云文档溯源</b>（必填：行号/原始编号/原文摘要）、<b>提出日期</b>、<b>来源客户</b>、<b>需求描述</b>（必填）、
+    <b>业务价值</b>、<b>验收标准</b>、<b>需求类型</b>（新增功能/功能优化/缺陷修复）、<b>是否定制</b>（是/否）
+  </p>
+  <p class="vp-muted" style="margin:8px 0 0">导入后全部进入「待过滤」，系统会在同产品内比对描述相似度并提示疑似重复；云文档溯源缺失的条目在过滤前必须补全（R6）。</p>
+</div>
+{% endblock %}

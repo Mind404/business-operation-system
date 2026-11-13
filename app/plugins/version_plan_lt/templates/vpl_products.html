@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}产品管理 · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>📦 产品管理</h1>
+    <p>每个产品独立过滤需求、规划版本、流转受控；需求 / 版本 / 客户都归属到具体产品，跨产品不串版本。</p>
+  </div>
+</div>
+
+{% set active = 'products' %}{% set product = '' %}
+{% include 'vpl_nav.html' with context %}
+
+<div class="vp-row2">
+  <!-- 产品列表 -->
+  <div>
+    {% if products %}
+    <div class="vp-prod-grid">
+      {% for p in products %}
+      <div class="vp-prod-card {{ 'off' if p['status'] != '启用' }}">
+        <div class="vp-prod-top">
+          <div>
+            <a class="vp-prod-name" href="{{ url_for('version_plan_lt.product_home', code=p['code']) }}">{{ p['name'] }}</a>
+            <span class="vp-code">{{ p['code'] }}</span>
+          </div>
+          <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>
+        </div>
+        {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner'] }}</div>{% endif %}
+        {% if p['description'] %}<div class="vp-muted" style="margin-top:2px">{{ p['description'] }}</div>{% endif %}
+        <div class="vp-prod-stats">
+          <div><b>{{ p['demands'] }}</b><span>需求</span></div>
+          <div><b>{{ p['pending'] }}</b><span>待过滤</span></div>
+          <div><b>{{ p['pool'] }}</b><span>规划池</span></div>
+          <div><b>{{ p['active'] }}</b><span>在建版本</span></div>
+          <div><b>{{ p['customers'] }}</b><span>客户</span></div>
+        </div>
+        <div class="vp-toolbar" style="margin:10px 0 0">
+          <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.product_home', code=p['code']) }}">进入产品空间 →</a>
+          <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.demands', product=p['code']) }}">需求</a>
+          <a class="vp-btn vp-btn-sm" href="{{ url_for('version_plan_lt.versions', product=p['code']) }}">版本</a>
+        </div>
+        <details style="margin-top:10px">
+          <summary class="vp-muted" style="cursor:pointer;font-size:12px">✏️ 编辑产品</summary>
+          <form method="post" action="{{ url_for('version_plan_lt.product_edit', code=p['code']) }}" style="margin-top:10px">
+            <div class="vp-field"><label class="vp-label">产品名称</label>
+              <input class="vp-input" name="name" value="{{ p['name'] }}" required></div>
+            <div class="vp-field"><label class="vp-label">负责人</label>
+              <input class="vp-input" name="owner" value="{{ p['owner'] or '' }}"></div>
+            <div class="vp-field"><label class="vp-label">状态</label>
+              <select class="vp-select" name="status">
+                <option value="启用" {{ 'selected' if p['status']=='启用' }}>启用</option>
+                <option value="停用" {{ 'selected' if p['status']!='启用' }}>停用</option>
+              </select></div>
+            <div class="vp-field"><label class="vp-label">说明</label>
+              <textarea class="vp-textarea" name="description">{{ p['description'] or '' }}</textarea></div>
+            <button class="vp-btn vp-btn-primary vp-btn-sm" type="submit">保存修改</button>
+          </form>
+        </details>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="vp-card"><div class="vp-empty">
+      <div class="big">📦</div><p>还没有产品，先在右侧新建第一个产品。</p>
+    </div></div>
+    {% endif %}
+  </div>
+
+  <!-- 新建产品 -->
+  <div>
+    <div class="vp-card">
+      <h3>＋ 新建产品</h3>
+      {% if can_manage %}
+      <form method="post" action="{{ url_for('version_plan_lt.product_new') }}">
+        <div class="vp-field">
+          <label class="vp-label">产品编号 <span class="req">*</span></label>
+          <input class="vp-input" name="code" placeholder="如 P1、MODEM-A" required pattern="[A-Za-z0-9_-]{1,20}">
+          <div class="vp-muted">仅限字母/数字/中划线/下划线，创建后不可改</div>
+        </div>
+        <div class="vp-field">
+          <label class="vp-label">产品名称 <span class="req">*</span></label>
+          <input class="vp-input" name="name" placeholder="如 Cat.1 模组、Wi-Fi 模组" required>
+        </div>
+        <div class="vp-field">
+          <label class="vp-label">负责人</label>
+          <input class="vp-input" name="owner" placeholder="可选">
+        </div>
+        <div class="vp-field">
+          <label class="vp-label">说明</label>
+          <textarea class="vp-textarea" name="description" placeholder="产品定位、范围、备注（可选）"></textarea>
+        </div>
+        <button class="vp-btn vp-btn-primary" type="submit">创建产品</button>
+      </form>
+      {% else %}
+      <div class="vp-muted">仅管理员可新建产品</div>
+      {% endif %}
+    </div>
+    <div class="vp-card">
+      <h3>规则说明</h3>
+      <ul class="vp-list">
+        <li>版本号、客户名<b>全局唯一</b>（不可重号、同名）；隔离体现在归属、受控规则与筛选视图上。</li>
+        <li>规划池需求只能拉入<b>同产品</b>的版本；跨产品会被拦截。</li>
+        <li>需求进入「已排期 / 已发布」后，归属产品锁定，不可再改。</li>
+        <li>停用产品不删除数据，在途需求 / 版本 / 客户仍可查阅与统计。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

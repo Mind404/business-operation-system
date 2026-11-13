@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}模块字典 · 版本规划{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('version_plan_lt.vp_css') }}">
+<div class="vp-page-head">
+  <div>
+    <h1>⚙️ 模块字典</h1>
+    <p>版本里「涉及模块」的多选项来自这里，改完保存即生效，不写死在代码里。</p>
+  </div>
+</div>
+
+{% set active = 'settings' %}{% set product = '' %}
+{% include 'vpl_nav.html' with context %}
+
+<div class="vp-card">
+  <form method="post" action="{{ url_for('version_plan_lt.settings') }}">
+    <div class="vp-field">
+      <label class="vp-label">模块清单（一行一个，或用逗号分隔）</label>
+      <textarea class="vp-textarea" name="modules" style="min-height:220px" {{ 'disabled' if not can_manage }}>{{ mods|join('\n') }}</textarea>
+    </div>
+    {% if can_manage %}<button class="vp-btn vp-btn-primary" type="submit">保存模块字典</button>{% else %}<span class="vp-muted">仅管理员可修改</span>{% endif %}
+  </form>
+</div>
+{% endblock %}
