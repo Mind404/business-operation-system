@@ -981,3 +981,88 @@ def check_plugin_tables_integrity():
     except Exception as e:
         warnings.append(f'表一致性校验执行异常：{e}')
     return warnings, infos
+
+# ============================================================
+# v13.0.0.1 启动自愈：外部插件表结构与独立库缺失自动修复
+# 背景：插件建表原是"页面首次访问时惰性触发"，一旦插件库缺失/被清空，
+#       管理页会满是"尚未建表"告警，且用户不点开插件页就永远不自愈。
+# ============================================================
+def _seed_dir():
+    return os.path.join(_app_dir(), 'data', '_seed')
+
+
+def restore_plugin_db_if_empty(plugin_id):
+    """插件独立库缺失/空库时，从 data/_seed/<id>.db 恢复一份。
+    只恢复"空库"，绝不覆盖已有数据。返回 (是否恢复, 说明)"""
+    src = os.path.join(_seed_dir(), plugin_id + '.db')
+    dst = os.path.join(_app_dir(), 'data', plugin_id + '.db')
+    if not os.path.isfile(src):
+        return False, '无种子库'
+    need = False
+    try:
+        if not os.path.isfile(dst) or os.path.getsize(dst) < 4096:
+            need = True
+        else:
+            con = sqlite3.connect(dst, timeout=3.0)
+            n = len(con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+            con.close()
+            need = (n == 0)
+    except Exception:
+        need = True
+    if not need:
+        return False, '库正常'
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        for suffix in ('-wal', '-shm'):
+            side = dst + suffix
+            if os.path.isfile(side):
+                os.remove(side)
+        return True, '已从种子库恢复'
+    except Exception as e:
+        return False, f'恢复失败：{e}'
+
+
+def ensure_external_plugin_tables():
+    """启动时把所有外部插件（upload / dir）的表真实建出来（幂等）。
+    返回可读报告列表。"""
+    report = []
+    try:
+        import importlib
+        from plugins import discover_plugins
+    except Exception as e:
+        return [f'无法加载插件包：{e}']
+    _found = discover_plugins()
+    _pairs = _found.items() if hasattr(_found, 'items') else _found
+    for pid, mod in _pairs:
+        try:
+            man = getattr(mod, 'manifest', {}) or {}
+            it = _manifest_install_type(pid, man)
+            if it not in ('upload', 'dir'):
+                continue  # 内置插件表在 init_plugin_tables 里已建
+            restored, note = restore_plugin_db_if_empty(pid)
+            target = None
+            try:
+                target = importlib.import_module(f'plugins.{pid}.routes')
+            except Exception as e:
+                report.append(f'{pid}: 路由导入失败 {e}')
+                continue
+            fn = getattr(target, 'ensure_schema', None)
+            if not callable(fn):
+                report.append(f'{pid}: 缺 ensure_schema（跳过建表）')
+                continue
+            fn()
+            n = 0
+            pdb = os.path.join(_app_dir(), 'data', pid + '.db')
+            if os.path.isfile(pdb):
+                con = sqlite3.connect(pdb, timeout=3.0)
+                n = len(con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+                con.close()
+            report.append(f'{pid}: 表就绪（{n} 张）' + (f'，{note}' if restored else ''))
+        except Exception as e:
+            report.append(f'{pid}: 自愈失败 {e}')
+    return report
+

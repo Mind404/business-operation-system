@@ -1805,3 +1805,9 @@ def __openapi_rows():
                                        (limit, offset)).fetchall()]
     return jsonify({'openapi': 1, 'table': table, 'offset': offset, 'limit': limit,
                     'total': total, 'fields': cols, 'rows': rows})
+
+
+def ensure_schema():
+    """v13.0.0.1：供平台启动自愈调用（app context 内执行，幂等）——
+    插件表不再依赖"页面首次访问"才建，避免管理页出现"尚未建表"告警。"""
+    _ensure_tables()

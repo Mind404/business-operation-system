@@ -346,7 +346,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0'
+        APP_VERSION = '13.0.0.1'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -2325,6 +2325,45 @@ if __name__ == '__main__':
     # 插件建表 + 增量迁移（必须在 init_db() 之后：全新库先有 users 表与种子，再执行 v6 角色升级等迁移）
     with app.app_context():
         plugin_system.init_plugin_tables()
+        # v13.0.0.1 启动自愈：外部插件库缺失/空库→从 data/_seed 恢复，并主动建表
+        # （原实现要等用户首次打开插件页才建表，一旦库缺失，管理页会满屏"尚未建表"告警）
+        try:
+            _rep = plugin_system.ensure_external_plugin_tables()
+            for _r in _rep:
+                print(f'[插件自愈] {_r}')
+        except Exception as e:
+            print(f'[插件自愈] 执行异常（不影响启动）: {e}')
+        if '--selfcheck' in sys.argv:
+            print('='*60)
+            print('  自检报告 v13.0.0.1')
+            print('='*60)
+            try:
+                import sqlite3 as _sq
+                _db = _sq.connect(app.config['DATABASE'])
+                for _r in _db.execute("SELECT id, name, enabled, install_type FROM plugin_registry "
+                                      "WHERE install_type IN ('upload','dir') ORDER BY id").fetchall():
+                    print('  插件 %-16s 启用=%s  接入方式=%s' % (_r[0], '是' if _r[2] else '否(导航会隐藏)',
+                                                              _r[3]))
+                _db.close()
+                _dd = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+                for _f in sorted(os.listdir(_dd)):
+                    if _f.endswith('.db'):
+                        _p2 = os.path.join(_dd, _f)
+                        _c = _sq.connect(_p2)
+                        _n = len(_c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+                        _c.close()
+                        print('  库文件 %-28s %8d 字节  %d 张表' % (_f, os.path.getsize(_p2), _n))
+            except Exception as e:
+                print('  [自检] 读取状态失败：%s' % e)
+            try:
+                _w, _i = plugin_system.check_plugin_tables_integrity()
+                print('[自检] 表一致性告警 %d 条，提示 %d 条' % (len(_w), len(_i)))
+                for _x in _w[:5]:
+                    print('  - ' + _x)
+            except Exception as e:
+                print('[自检] 校验异常：%s' % e)
+            print('[自检] 完成。若仍有告警，请把上面内容截图给技术同学。')
+            sys.exit(0)
         # v12.4.5 插件表一致性校验：登记 vs 实际建表（冲突/未登记告警打印到启动日志）
         try:
             _warns, _infos = plugin_system.check_plugin_tables_integrity()
@@ -2337,7 +2376,39 @@ if __name__ == '__main__':
         except Exception as e:
             print(f'[插件表校验] 执行异常（不影响启动）: {e}')
     host, port, debug, https_mode = get_config()
+
+    # v13.0.0.1 端口占用自动顺延：避免"新版没起来、浏览器还在看旧的"这种假故障
+    def _port_free(p):
+        import socket
+        sk = socket.socket()
+        try:
+            sk.bind(('127.0.0.1', p))
+            return True
+        except OSError:
+            return False
+        finally:
+            sk.close()
+
+    if not _port_free(port):
+        _base = port
+        _switched = False
+        for _cand in range(_base + 1, _base + 11):
+            if _port_free(_cand):
+                port = _cand
+                _switched = True
+                break
+        if _switched:
+            print('='*60)
+            print(f'  [注意] 端口 {_base} 已被占用（多半是上次没关掉的旧窗口还在跑）。')
+            print(f'  本次自动改用端口 {port}，请用下面显示的新地址访问。')
+            print('  建议关掉多余的旧窗口，避免两个实例同时改同一份数据。')
+            print('='*60)
+        else:
+            print(f'  [错误] 端口 {_base}-{_base+10} 全部被占用，请关闭旧窗口后重试。')
+            sys.exit(1)
+
     print('='*60)
+    print(f'  数据目录: {os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")}')
     print('  业务高效运转系统')
     if https_mode:
         print(f'  本机访问: https://127.0.0.1:{port}  （自签证书，浏览器首次访问需点「高级→继续前往」）')
