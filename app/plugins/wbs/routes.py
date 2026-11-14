@@ -56,6 +56,20 @@ def _wbs_project_editable(db, pid):
     return False, '仅项目负责人、参与人员或管理员可编辑'
 
 
+def _wbs_project_approved(db, pid):
+    """项目审批态校验（v13.0.0.11）：非管理员写任务前，项目本身必须是「已通过」。
+
+    驳回/待审批的项目，其任务可能仍保留此前的「已通过」标记，
+    只看任务审批态会让成员继续写入已驳回项目，这里按项目态再兜一层。"""
+    p = db.execute('SELECT name, approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return False, '项目不存在'
+    st = (p['approval_status'] or '').strip()
+    if st != '已通过':
+        return False, '项目《%s》当前审批状态为「%s」，任务不可编辑' % (p['name'], st or '未提交')
+    return True, ''
+
+
 def _fmt_date(v):
     """日期归一化（v12.7.6 多格式容错）：任意常见格式 → YYYY-MM-DD；无法解析返回 None。
 
@@ -807,6 +821,9 @@ def wbs_task_inline(tid):
         allowed = editable_admin
     elif member:
         # 项目成员（普通用户）：仅已通过任务的执行字段
+        okp, msgp = _wbs_project_approved(db, t['project_id'])
+        if not okp:
+            return jsonify({'ok': False, 'msg': msgp}), 403
         if t['approval_status'] != '已通过':
             return jsonify({'ok': False, 'msg': '任务待审批通过后才能编辑'}), 403
         allowed = {'status','progress','remark'}
@@ -938,14 +955,18 @@ def wbs_project_tasks_resubmit(pid):
 def wbs_task_notes_data(tid):
     import json
     db = get_db()
-    t = db.execute('SELECT notes, approval_status FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    t = db.execute('SELECT notes, approval_status, project_id FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'notes': [], 'approval_ok': False})
     try:
         notes = json.loads(t['notes']) if t['notes'] else []
     except Exception:
         notes = []
-    return jsonify({'notes': notes, 'approval_ok': t['approval_status'] == '已通过'})
+    approved = t['approval_status'] == '已通过'
+    if not _wbs_is_admin():
+        okp, _ = _wbs_project_approved(db, t['project_id'])
+        approved = approved and okp
+    return jsonify({'notes': notes, 'approval_ok': approved})
 
 
 @blueprint.route('/wbs/task/<int:tid>/note', methods=['POST'])
@@ -961,6 +982,10 @@ def wbs_task_add_note(tid):
     ok, msg = _wbs_project_editable(db, t['project_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg}), 403
+    if session.get('user_role') not in ('admin', 'platform_admin'):
+        okp, msgp = _wbs_project_approved(db, t['project_id'])
+        if not okp:
+            return jsonify({'ok': False, 'msg': msgp}), 403
     data = request.get_json(silent=True) or {}
     content = (data.get('content') or '').strip()
     if not content:
