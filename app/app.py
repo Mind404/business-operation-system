@@ -353,7 +353,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.9'
+        APP_VERSION = '13.0.0.10'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()

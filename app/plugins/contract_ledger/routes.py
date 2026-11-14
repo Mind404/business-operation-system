@@ -112,13 +112,13 @@ def import_csv():
                 continue
             _cn = (r.get('contract_no') or '').strip()
             _vals = [(_amt if k == 'amount' else (r.get(k) or '').strip()) for k in COLS]
-            if _cn in _exist:
+            if _cn in _exist and _exist[_cn] is not None:
                 c.execute(_upd_sql, _vals + [_exist[_cn]])
                 updated += 1
             else:
-                c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
+                cur = c.execute('INSERT INTO contract_items (%s) VALUES (%s)' % (
                     ','.join(COLS), ','.join('?' * len(COLS))), _vals + [])
-                _exist[_cn] = None
+                _exist[_cn] = cur.lastrowid
                 n += 1
         c.commit()
     finally:

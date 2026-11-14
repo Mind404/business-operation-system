@@ -796,7 +796,7 @@ def wbs_task_inline(tid):
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'ok': False, 'msg': '任务不存在'}), 404
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     field = data.get('field')
     value = data.get('value', '')
     admin = session.get('user_role') in ('admin', 'platform_admin')
@@ -961,7 +961,7 @@ def wbs_task_add_note(tid):
     ok, msg = _wbs_project_editable(db, t['project_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg}), 403
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     content = (data.get('content') or '').strip()
     if not content:
         return jsonify({'ok': False, 'msg': '内容为空'}), 400
@@ -993,7 +993,7 @@ def wbs_task_update_note(tid):
     ok, msg = _wbs_project_editable(db, t['project_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg}), 403
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     try:
         idx = int(data.get('index', -1))
     except (TypeError, ValueError):
