@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% block title %}数据备份 - 业务高效运转系统{% endblock %}
 {% block content %}
-<div style="max-width:1200px;margin:0 auto;padding:20px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <h2 style="margin:0;font-size:20px;color:#111827;">💾 数据备份</h2>
+<div style="max-width:1180px;margin:0 auto;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        <div>
+            <h2 style="margin:0;font-size:20px;color:#111827;">数据备份</h2>
+            <div style="font-size:12px;color:#6b7280;margin-top:4px;">一次备份 = 一套（主库 + 各插件库 + 插件包），下面按「备份组」呈现，一组一张卡</div>
+        </div>
         <form method="post" action="{{ url_for('admin_backup_run') }}" style="margin:0;">
-            <button id="btn-backup-now" type="submit" style="background:#2563eb;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:14px;cursor:pointer;">⬆ 立即备份全部数据</button>
+            <button id="btn-backup-now" type="submit" style="background:#2563eb;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:14px;cursor:pointer;">立即备份全部数据</button>
 <script>
 (function(){
   var b=document.getElementById('btn-backup-now');
@@ -21,84 +24,157 @@
         </form>
     </div>
 
-    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:18px;line-height:1.8;">
-        <b>备份说明：</b><br>
-        · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code> 下各插件库）＋ <b>插件包本体快照</b>（<code>pluginpack_备份_*.zip</code>，含上传安装插件自己的代码，恢复后插件不会"消失"）；<br>
-        · 自动备份：系统每次启动时自动执行一次；<b>保留策略：每种备份各保留最近 7 份</b>，更旧的自动清理；<br>
-        · 恢复提示：<b>系统开着就能直接恢复，点完立即生效，不需要停止服务或重启</b>；恢复前系统会自动把当前数据另存一份“<b>xxx_保护_时间</b>”留档（列表里标注〔恢复前自动保护〕，只作留档、不参与恢复，可下载或删除）；<br>
-        · 每点一次「立即备份」会生成<b>一整套</b>（主库 + 各插件库 + 插件包），连点会生成多套；按钮已做防连点，10 秒内重复点击只执行第一次。<br>
-        · <b>两种恢复方式：</b>「<b style="color:#0f766e;">只恢复数据</b>」只搬业务数据，当前版本的库结构和功能原样不动——<b>旧版本做的备份请用这个</b>；「整库覆盖」会把结构一起退回备份时刻，只在确实要把系统退回旧版本时才用。<br>
-        · <b>换新版本带数据：</b>升级软件后想恢复旧版数据，用下面「导入备份文件」上传旧版备份（或把旧版目录的 <code>app/backups/</code> 整个拷到新版对应位置），即可在列表中恢复。
-    </div>
-
-    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:18px;">
-        <form method="post" action="{{ url_for('admin_backup_upload') }}" enctype="multipart/form-data"
-              style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
-            <b style="font-size:14px;color:#854d0e;">📥 导入备份文件（升级/换版本后恢复旧数据用）</b>
-            <input type="file" name="backup_file" accept=".db,.zip" required
-                   style="border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:13px;background:#fff;">
-            <button type="submit" style="background:#d97706;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;">导入</button>
-        </form>
-        <div style="font-size:12px;color:#92400e;margin-top:6px;">
-            支持上传旧版备份文件（<code>business_备份_*.db</code>、<code>&lt;插件id&gt;_备份_*.db</code>，以及插件包快照 <code>pluginpack_备份_*.zip</code>，≤512MB）。
-            导入后出现在下方列表，点「恢复」即把旧数据/插件还原到本版本；恢复前自动保护当前数据。
+    <div style="display:flex;gap:10px;flex-wrap:wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#334155;">
+        <div style="flex:1 1 240px;min-width:0;">
+            <div style="color:#64748b;font-size:12px;">最近一次备份</div>
+            <div style="font-weight:600;margin-top:2px;">{{ stats.latest or '暂无' }}</div>
+            {% if stats.latest %}<div style="color:#64748b;font-size:12px;margin-top:2px;">这一套含 {{ stats.latest_n }} 个文件</div>{% endif %}
+        </div>
+        <div style="flex:0 0 120px;">
+            <div style="color:#64748b;font-size:12px;">备份组数</div>
+            <div style="font-weight:600;margin-top:2px;">{{ stats.count }} 组</div>
+        </div>
+        <div style="flex:0 0 140px;">
+            <div style="color:#64748b;font-size:12px;">占用空间</div>
+            <div style="font-weight:600;margin-top:2px;">{{ '%.1f'|format(stats.size / 1024) }} KB</div>
+        </div>
+        <div style="flex:0 0 150px;">
+            <div style="color:#64748b;font-size:12px;">当前主库</div>
+            <div style="font-weight:600;margin-top:2px;font-family:monospace;font-size:12px;">{{ current_db }}</div>
+        </div>
+        <div style="flex:0 0 110px;">
+            <div style="color:#64748b;font-size:12px;">平台版本</div>
+            <div style="font-weight:600;margin-top:2px;">v{{ app_version }}</div>
         </div>
     </div>
 
-    {% if files %}
-    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);font-size:14px;">
-        <thead>
-            <tr style="background:#f9fafb;text-align:left;">
-                <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">备份文件</th>
-                <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">类型</th>
-                <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">大小</th>
-                <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">生成时间</th>
-                <th style="padding:10px 14px;border-bottom:1px solid #e5e7eb;">操作</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for f in files %}
-            <tr style="border-bottom:1px solid #f3f4f6;">
-                <td style="padding:10px 14px;font-family:monospace;font-size:13px;word-break:break-all;">{{ f.name }}</td>
-                <td style="padding:10px 14px;">
-                    <span style="background:{{ '#dbeafe;color:#1d4ed8' if f.kind == '主库' else ('#dcfce7;color:#166534' if '插件包' in f.kind else '#f3e8ff;color:#7e22ce') }};padding:2px 8px;border-radius:99px;font-size:12px;">{{ f.kind }}</span>
-                </td>
-                <td style="padding:10px 14px;color:#6b7280;">{{ '%.1f'|format(f.size / 1024) }} KB</td>
-                <td style="padding:10px 14px;color:#6b7280;">{{ f.mtime }}</td>
-                <td style="padding:10px 14px;">
-                    <a href="{{ url_for('admin_backup_download', fname=f.name) }}" style="color:#2563eb;text-decoration:none;margin-right:12px;">⬇ 下载</a>
-                    <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
-                        <input type="hidden" name="backup_file" value="{{ f.name }}">
-                        {% if f.kind == '主库' %}
-                        <input type="hidden" name="mode" value="data">
-                        <button type="submit" onclick="this.form.mode.value='data';return confirm('用「{{ f.name }}」恢复数据吗？\\n\\n只搬业务数据：当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变（旧版本备份请用这个）。\\n恢复前会自动保存一份保护备份，无需重启、不会被踢下线。')" style="background:#0f766e;border:none;color:#fff;font-size:13px;padding:4px 11px;border-radius:6px;cursor:pointer;margin-right:10px;">↺ 只恢复数据</button>
-                        <button type="submit" onclick="this.form.mode.value='full';return confirm('用「{{ f.name }}」整库覆盖吗？\\n\\n⚠ 会把库结构一起退回备份时的版本（旧备份可能缺新版本的表和列），恢复后需要重新登录。\\n只有确实想把系统结构也退回旧版本时才用。\\n恢复前会自动保存一份保护备份。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;">整库覆盖</button>
-                        {% elif '插件包' in f.kind %}
-                        <input type="hidden" name="mode" value="full">
-                        <button type="submit" onclick="return confirm('确定用「{{ f.name }}」还原插件包吗？\\n\\n恢复前会自动保存保护备份。')" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;text-decoration:underline;">↺ 还原</button>
+    <details style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 16px;margin-bottom:14px;">
+        <summary style="cursor:pointer;font-size:13px;color:#1e40af;font-weight:600;">备份规则与恢复说明（点开查看）</summary>
+        <div style="font-size:13px;color:#1e40af;margin-top:8px;line-height:1.9;">
+            · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code>）＋ 插件包代码快照（<code>pluginpack_*.zip</code>）；<br>
+            · 插件数据必须独立存放，所以一套备份是<b>多个文件</b>，但同一次备份的这批文件时间戳一致，视为<b>一组</b>；<br>
+            · 自动备份：系统每次启动执行一次；保留策略为「每个库的备份与保护各保留最近 7 份」；<br>
+            · 「只恢复数据」只搬业务数据，当前版本的表结构、账号体系、插件登记、模型配置都不动——导入旧版本备份请用这个；<br>
+            · 「整组恢复」按 插件库 → 主库 的顺序一次恢复整套，任一库失败立即中止并说明恢复到哪一步；插件代码不会被覆盖；<br>
+            · 恢复前系统会自动把当前库另存为「xxx_保护_时间」留档，见页面底部「恢复前留档」，只作留档，不参与恢复。
+        </div>
+    </details>
+
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:18px;">
+        <form method="post" action="{{ url_for('admin_backup_upload') }}" enctype="multipart/form-data"
+              style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
+            <b style="font-size:14px;color:#854d0e;">导入备份文件</b>
+            <input type="file" name="backup_file" accept=".db,.zip" required
+                   style="border:1px solid #d1d5db;border-radius:8px;padding:6px 10px;font-size:13px;background:#fff;">
+            <button type="submit" style="background:#d97706;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;">导入</button>
+            <span style="font-size:12px;color:#92400e;">支持 <code>business_备份_*.db</code>、<code>&lt;插件id&gt;_备份_*.db</code>、<code>pluginpack_备份_*.zip</code>，≤512MB；导入后出现在下方对应组里</span>
+        </form>
+    </div>
+
+    {% if groups %}
+    <div style="display:flex;flex-direction:column;gap:14px;">
+    {% for grp in groups %}
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;background:#fafafa;border-bottom:1px solid #f1f5f9;">
+                <div style="min-width:0;">
+                    <div style="font-size:15px;font-weight:600;color:#111827;font-family:monospace;">{{ grp.when }}</div>
+                    <div style="font-size:12px;color:#6b7280;margin-top:3px;">
+                        一整套 · {{ grp['items']|length }} 个文件 ·
+                        {% if grp.main %}主库{% endif %}
+                        {% if grp.plugins %}{% if grp.main %} + {% endif %}{{ grp.plugins|length }} 个插件库（{{ grp.plugins|join('、') }}）{% endif %}
+                        {% if grp.pack %}{% if grp.main or grp.plugins %} + {% endif %}插件包{% endif %}
+                        · {{ '%.1f'|format(grp.size / 1024) }} KB
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <a href="{{ url_for('admin_backup_download_group', ts=grp.ts) }}"
+                       style="background:#fff;border:1px solid #cbd5e1;color:#334155;font-size:13px;padding:7px 14px;border-radius:8px;text-decoration:none;">整组下载 zip</a>
+                    <form method="post" action="{{ url_for('admin_backup_restore_group') }}" style="margin:0;">
+                        <input type="hidden" name="group_ts" value="{{ grp.ts }}">
+                        <button type="submit"
+                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。恢复完成后需要用备份里的账号重新登录。')"
+                                style="background:#0f766e;color:#fff;border:none;font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;">整组恢复</button>
+                    </form>
+                </div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">
+                <colgroup><col style="width:52%"><col style="width:20%"><col style="width:14%"><col style="width:14%"></colgroup>
+                <tbody>
+                {% for it in grp['items'] %}
+                    <tr style="border-bottom:1px solid #f6f7f9;">
+                        <td style="padding:9px 16px;font-family:monospace;font-size:12px;word-break:break-all;">{{ it.name }}</td>
+                        <td style="padding:9px 10px;">
+                            <span style="background:{{ '#dbeafe;color:#1d4ed8' if it.lib == 'main' else ('#dcfce7;color:#166534' if it.lib == 'pack' else '#f3e8ff;color:#7e22ce') }};padding:2px 8px;border-radius:99px;font-size:12px;">
+                                {{ '主库' if it.lib == 'main' else ('插件包' if it.lib == 'pack' else '插件库 ' ~ it.pre) }}
+                            </span>
+                        </td>
+                        <td style="padding:9px 10px;color:#6b7280;">{{ '%.1f'|format(it.size / 1024) }} KB</td>
+                        <td style="padding:9px 16px;">
+                            <a href="{{ url_for('admin_backup_download', fname=it.name) }}" style="color:#2563eb;text-decoration:none;">下载</a>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <details style="padding:8px 16px 12px;">
+                <summary style="cursor:pointer;font-size:12px;color:#64748b;">单库恢复 / 标准恢复（高级，仅在需要单独回退某个库时使用）</summary>
+                <div style="margin-top:8px;font-size:12px;color:#6b7280;line-height:1.9;">
+                {% for it in grp['items'] %}
+                    <div style="padding:4px 0;border-bottom:1px dashed #f1f5f9;">
+                        <span style="font-family:monospace;">{{ it.name }}</span> ·
+                        {% if it.lib == 'pack' %}
+                        <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
+                            <input type="hidden" name="backup_file" value="{{ it.name }}">
+                            <input type="hidden" name="mode" value="full">
+                            <button type="submit" onclick="return confirm('确定用这个插件包还原代码吗？\n\n只会补回缺失的插件，不用旧代码覆盖已存在的插件。')" style="background:none;border:none;color:#dc2626;font-size:12px;cursor:pointer;text-decoration:underline;">还原插件包</button>
+                        </form>
                         {% else %}
-                        <input type="hidden" name="mode" value="full">
-                        <button type="submit" onclick="this.form.mode.value='data';return confirm('用「{{ f.name }}」只恢复插件数据吗？\\n\\n只搬业务数据，当前版本表结构保持不变；恢复前会自动保存保护备份。')" style="background:#0f766e;border:none;color:#fff;font-size:13px;padding:4px 11px;border-radius:6px;cursor:pointer;margin-right:10px;">↺ 只恢复数据</button>
-                        <button type="submit" onclick="this.form.mode.value='full';return confirm('确定整库覆盖 {{ f.kind }} 吗？\\n\\n⚠ 会把库结构一起退回备份时版本；恢复前会自动保存保护备份。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;">整库覆盖</button>
+                        <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
+                            <input type="hidden" name="backup_file" value="{{ it.name }}">
+                            <button type="submit" onclick="this.form.mode.value='data';return confirm('用这一份单独恢复 {{ it.pre }}？\n\n只搬业务数据，表结构保持当前版本。')" style="background:none;border:none;color:#0f766e;font-size:12px;cursor:pointer;text-decoration:underline;">只恢复数据</button>
+                            <input type="hidden" name="mode" value="data">
+                            <button type="submit" onclick="this.form.mode.value='full';return confirm('整库覆盖 {{ it.pre }}？\n\n会把库结构一起退回备份时刻，只在确实要让该库退回旧版本时才用。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;margin-left:10px;">整库覆盖</button>
+                        </form>
                         {% endif %}
-                    </form>
-                    <form method="post" action="{{ url_for('admin_backup_delete') }}" style="display:inline;margin:0 0 0 12px;" onsubmit="return confirm('确定删除备份「{{ f.name }}」吗？\\n\\n仅删除 backups/ 里的这份副本，正在使用的数据不受影响；删除后不可恢复。')">
-                        <input type="hidden" name="backup_file" value="{{ f.name }}">
-                        <button type="submit" style="background:none;border:none;color:#6b7280;font-size:13px;cursor:pointer;text-decoration:underline;">🗑 删除</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                        <form method="post" action="{{ url_for('admin_backup_delete') }}" style="display:inline;margin:0 0 0 10px;" onsubmit="return confirm('确定删除这一个备份文件吗？仅删 backups/ 里的副本，正在使用的数据不受影响。')">
+                            <input type="hidden" name="backup_file" value="{{ it.name }}">
+                            <button type="submit" style="background:none;border:none;color:#94a3b8;font-size:12px;cursor:pointer;text-decoration:underline;">删除</button>
+                        </form>
+                    </div>
+                {% endfor %}
+                </div>
+            </details>
+        </div>
+    {% endfor %}
+    </div>
     {% else %}
     <div style="background:#fff;border:1px dashed #d1d5db;border-radius:10px;padding:40px;text-align:center;color:#9ca3af;font-size:14px;">
-        还没有备份文件。<br>点右上角「立即备份全部数据」生成第一份备份，或重启系统时也会自动备份。
+        还没有备份文件。<br>点右上角「立即备份全部数据」生成第一套，或重启系统时也会自动备份。
     </div>
     {% endif %}
 
-    <div style="margin-top:18px;font-size:12px;color:#9ca3af;">
-        共 {{ files|length }} 份备份 · 备份目录：app/backups/（主库 business_备份_*.db，插件库 &lt;插件id&gt;_备份_*.db）
+    {% if protects %}
+    <details style="margin-top:18px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 16px;">
+        <summary style="cursor:pointer;font-size:13px;color:#475569;">恢复前留档（系统每次恢复前自动生成，共 {{ protects|length }} 组，仅作留档、不参与恢复）</summary>
+        <div style="margin-top:8px;">
+            {% for p in protects %}
+            <div style="font-size:12px;color:#64748b;padding:6px 0;border-bottom:1px dashed #f1f5f9;">
+                <span style="font-family:monospace;">{{ p.when }}</span> · {{ p['items']|length }} 个文件 · {{ '%.1f'|format(p.size / 1024) }} KB
+                {% for it in p['items'] %}
+                <a href="{{ url_for('admin_backup_download', fname=it.name) }}" style="color:#2563eb;text-decoration:none;margin-left:10px;">下载 {{ it.pre }}</a>
+                <form method="post" action="{{ url_for('admin_backup_delete') }}" style="display:inline;margin:0 0 0 8px;" onsubmit="return confirm('确定删除这份留档吗？')">
+                    <input type="hidden" name="backup_file" value="{{ it.name }}">
+                    <button type="submit" style="background:none;border:none;color:#94a3b8;font-size:12px;cursor:pointer;text-decoration:underline;">删除</button>
+                </form>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    <div style="margin-top:16px;font-size:12px;color:#9ca3af;">
+        共 {{ stats.count }} 个备份组 · 文件目录：app/backups/ ｜ 命名规则 <code>&lt;库名&gt;_备份_&lt;年月日_时分秒&gt;.db</code>，同一时间戳即同一组
     </div>
 </div>
 {% endblock %}

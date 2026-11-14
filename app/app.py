@@ -31,6 +31,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
+try:
+    from config import APP_VERSION
+except Exception:
+    APP_VERSION = '13.0.0.11'
+
 # v12.7.2 性能优化：WSGI 层 gzip 压缩中间件（静态文件也能压缩，15MB manifest→~4MB）
 class GzipMiddleware:
     """轻量 gzip 中间件：对文本类型响应自动压缩，减少局域网传输时间。"""
@@ -353,7 +358,7 @@ def healthz():
     try:
         from config import APP_VERSION
     except Exception:
-        APP_VERSION = '13.0.0.10'
+        APP_VERSION = '13.0.0.11'
     ok = True
     try:
         get_db().execute('SELECT 1').fetchone()
@@ -1103,6 +1108,96 @@ def _backup_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
 
 
+def _db_rowcount(path):
+    """统计一个库里所有业务表的总行数（用于恢复前后对比提示）。失败返回 -1。"""
+    try:
+        c = sqlite3.connect(path, timeout=30)
+        try:
+            names = [r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'")]
+            n = 0
+            for t in names:
+                try:
+                    n += c.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0]
+                except Exception:
+                    pass
+            return n
+        finally:
+            c.close()
+    except Exception:
+        return -1
+
+
+def _backup_groups():
+    """v13.0.0.11：把备份文件按「同一时间戳的一套」归堆。
+
+    一次「立即备份全部数据」会产出同一 ts 的多个文件（主库 + 各插件库 + 插件包快照），
+    物理上必须分开（插件数据独立库），逻辑上是一套。这里按 ts 归组，页面上以「备份组」
+    为单位呈现，避免同一套文件在列表里被拆成互不相干的几行。
+    「恢复前自动保护」的时间戳与所恢复的备份组不同，不做强行归组，统一放进保护留档区。
+    返回 {'groups': [...], 'protects': [...], 'stats': {...}}
+    """
+    import re as _re
+    bdir = _backup_dir()
+    stats = {'count': 0, 'size': 0, 'latest': '', 'latest_n': 0}
+    if not os.path.isdir(bdir):
+        return {'groups': [], 'protects': [], 'stats': stats}
+    _pat = _re.compile(r'^(?P<pre>.+?)_(?P<tag>备份|保护)_(?P<d>\d{8})_(?P<t>\d{6})\.(?P<ext>db|zip)$')
+    groups = {}
+    protects = {}
+    for f in sorted(os.listdir(bdir)):
+        if not (f.endswith('.db') or f.endswith('.zip')):
+            continue
+        m = _pat.match(f)
+        if not m:
+            continue
+        fp = os.path.join(bdir, f)
+        try:
+            size = os.path.getsize(fp)
+        except OSError:
+            continue
+        if size <= 0:
+            continue
+        pre, tag, ext = m.group('pre'), m.group('tag'), m.group('ext')
+        ts = '%s_%s' % (m.group('d'), m.group('t'))
+        when = '%s-%s-%s %s:%s:%s' % (m.group('d')[:4], m.group('d')[4:6], m.group('d')[6:],
+                                     m.group('t')[:2], m.group('t')[2:4], m.group('t')[4:])
+        if ext == 'zip':
+            lib, label = 'pack', '插件包'
+        elif pre == 'business':
+            lib, label = 'main', '主库'
+        else:
+            lib, label = 'plugin', '插件库'
+        item = {'name': f, 'size': size, 'lib': lib, 'label': label,
+                'pre': pre, 'ts': ts, 'when': when, 'is_pack': ext == 'zip'}
+        bucket = protects if tag == '保护' else groups
+        g = bucket.setdefault(ts, {'ts': ts, 'when': when, 'items': [],
+                                   'size': 0, 'plugins': [], 'main': None, 'pack': None})
+        g['items'].append(item)
+        g['size'] += size
+        if lib == 'plugin':
+            g['plugins'].append(pre)
+        elif lib == 'main':
+            g['main'] = item
+        else:
+            g['pack'] = item
+
+    for g in groups.values():
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+    for g in protects.values():
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+
+    gl = sorted(groups.values(), key=lambda x: x['ts'], reverse=True)
+    pl = sorted(protects.values(), key=lambda x: x['ts'], reverse=True)
+    stats['count'] = len(gl)
+    stats['size'] = sum(g['size'] for g in gl)
+    if gl:
+        stats['latest'] = gl[0]['when']
+        stats['latest_n'] = len(gl[0]['items'])
+    return {'groups': gl, 'protects': pl, 'stats': stats}
+
+
 def _backup_list():
     """返回备份文件列表（按时间倒序）：名称/大小/修改时间/类型"""
     bdir = _backup_dir()
@@ -1198,9 +1293,16 @@ def admin_backup():
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
-    files = _backup_list()
-    return render_template('admin_backup.html', files=files,
-                           current_db=os.path.basename(app.config['DATABASE']))
+    grouped = _backup_groups()
+    try:
+        from config import APP_VERSION
+    except Exception:
+        APP_VERSION = '13.0.0.11'
+    return render_template('admin_backup.html', files=_backup_list(),
+                           groups=grouped['groups'], protects=grouped['protects'],
+                           stats=grouped['stats'],
+                           current_db=os.path.basename(app.config['DATABASE']),
+                           app_version=APP_VERSION)
 
 
 _LAST_MANUAL_BACKUP = {'ts': 0.0}
@@ -1447,6 +1549,197 @@ def _admin_backup_restore_body():
     except Exception as e:
         flash(f'恢复失败：{e}（不影响现有数据，现场保护备份已生成）', 'error')
     return redirect(url_for('admin_backup'))
+
+
+@app.route('/admin/backup/download-group/<ts>')
+def admin_backup_download_group(ts):
+    """v13.0.0.11：把一整套备份（同一时间戳的主库 + 各插件库 + 插件包）打包成一个 zip 下载，
+    内含 manifest.json（版本、时间、每个文件的库归属/大小/SHA256），便于归档和校验。"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    import re as _re
+    import zipfile
+    import hashlib
+    import tempfile
+    from flask import after_this_request
+    if not _re.fullmatch(r'\d{8}_\d{6}', ts or ''):
+        flash('备份组参数无效', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    if not os.path.isdir(bdir):
+        flash('备份目录不存在', 'error')
+        return redirect(url_for('admin_backup'))
+    pat = _re.compile(r'^(.+?)_备份_%s\.(db|zip)$' % _re.escape(ts))
+    picked = []
+    for f in sorted(os.listdir(bdir)):
+        m = pat.match(f)
+        if not m:
+            continue
+        fp = os.path.join(bdir, f)
+        try:
+            if os.path.getsize(fp) <= 0:
+                continue
+        except OSError:
+            continue
+        pre, ext = m.group(1), m.group(2)
+        picked.append((f, fp, pre, ext))
+    if not picked:
+        flash('该备份组已经没有可下载的文件', 'error')
+        return redirect(url_for('admin_backup'))
+
+    out = tempfile.NamedTemporaryFile(suffix='.zip', prefix='bkgroup_', delete=False)
+    out.close()
+    manifest = {'app_version': APP_VERSION, 'group_ts': ts,
+                'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'files': []}
+    try:
+        with zipfile.ZipFile(out.name, 'w', zipfile.ZIP_DEFLATED) as z:
+            for f, fp, pre, ext in picked:
+                if ext == 'zip':
+                    lib = 'pluginpack'
+                elif pre == 'business':
+                    lib = 'business'
+                else:
+                    lib = 'plugin:%s' % pre
+                data = open(fp, 'rb').read()
+                z.writestr(f, data, zipfile.ZIP_DEFLATED)
+                manifest['files'].append({
+                    'name': f, 'library': lib, 'size': len(data),
+                    'sha256': hashlib.sha256(data).hexdigest()})
+                if ext == 'zip':
+                    manifest['pluginpack'] = f
+                elif lib == 'business':
+                    manifest['main'] = f
+                else:
+                    manifest.setdefault('plugins', []).append(pre)
+            manifest['scope'] = '一次完整备份：主库 + 全部插件库 + 插件包快照'
+            z.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+    except Exception as e:
+        try:
+            os.remove(out.name)
+        except Exception:
+            pass
+        flash(f'打包备份组失败：{e}', 'error')
+        return redirect(url_for('admin_backup'))
+
+    log_operation('数据备份', '整组下载', '备份组 %s（%d 个文件）' % (ts, len(picked)),
+                  session.get('username'))
+
+    @after_this_request
+    def _cleanup(resp):
+        try:
+            os.remove(out.name)
+        except Exception:
+            pass
+        return resp
+    return send_file(out.name, as_attachment=True,
+                     download_name='business-backup-group-%s.zip' % ts,
+                     mimetype='application/zip')
+
+
+@app.route('/admin/backup/restore-group', methods=['POST'])
+def admin_backup_restore_group():
+    """v13.0.0.11：整组恢复（一次恢复一套备份里的全部数据库）。
+    仍然走「只恢复数据」：只搬业务数据，当前版本的表结构/账号体系/插件登记不动。
+    插件包代码不在此覆盖（避免用旧代码盖掉新版本），需要回退插件代码请到单库高级操作里单独还原。"""
+    if _RESTORE_GATE.is_set():
+        flash('已有恢复任务正在进行，请稍候再试。', 'warning')
+        return redirect(url_for('admin_backup'))
+    with _RESTORE_LOCK:
+        _RESTORE_GATE.set()
+        try:
+            time.sleep(0.5)
+            return _admin_restore_group_body()
+        finally:
+            _RESTORE_GATE.clear()
+
+
+def _admin_restore_group_body():
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    import re as _re
+    ts = (request.form.get('group_ts') or '').strip()
+    if not _re.fullmatch(r'\d{8}_\d{6}', ts or ''):
+        flash('备份组参数无效', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    pat = _re.compile(r'^(.+?)_备份_%s\.db$' % _re.escape(ts))
+    entries = []
+    for f in sorted(os.listdir(bdir)):
+        m = pat.match(f)
+        if m:
+            entries.append((m.group(1), os.path.join(bdir, f), f))
+    if not entries:
+        flash('该备份组里没有可恢复的数据库文件', 'error')
+        return redirect(url_for('admin_backup'))
+    # 先恢复插件库、最后恢复主库：主库恢复会替换会话表把当前登录踢掉，
+    # 放最后才能保证前面几个库在同一请求里顺利恢复完。
+    entries.sort(key=lambda e: (0 if e[0] != 'business' else 1))
+
+    rows = []
+    for pre, src, fname in entries:
+        if pre == 'business':
+            target = app.config['DATABASE']
+            kind = '主库'
+        else:
+            target = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '%s.db' % pre)
+            kind = '插件库(%s)' % pre
+        before = _db_rowcount(target)
+        try:
+            ok, msg, _ = perform_backup('恢复前保护', only=pre)
+        except Exception as e:
+            ok, msg = False, str(e)
+        if not ok:
+            flash('整组恢复已中止：恢复 %s 前生成保护备份失败（%s）。'
+                  '已恢复的库：%s。未恢复的库仍保持原样，可稍后重试或先停止系统再恢复。'
+                  % (kind, msg, '、'.join(r['kind'] for r in rows) or '无'), 'error')
+            return redirect(url_for('admin_backup'))
+        try:
+            fresh = False
+            if pre == 'business':
+                _ensure_all_tables()
+                try:
+                    _c = sqlite3.connect(target, timeout=30)
+                    _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                    _c.close()
+                    fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
+                except Exception:
+                    fresh = False
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=fresh)
+            else:
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=False)
+                _reinit_plugin_schema(pre)
+        except Exception as e:
+            flash('整组恢复已中止：恢复 %s 失败（%s）。已恢复的库：%s。'
+                  '失败原因可查看服务日志，当前库已由保护备份留档，可回退。'
+                  % (kind, e, '、'.join(r['kind'] for r in rows) or '无'), 'error')
+            return redirect(url_for('admin_backup'))
+        after = _db_rowcount(target)
+        rows.append({'kind': kind, 'file': fname, 'before': before, 'after': after,
+                     'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such)})
+
+    try:
+        log_operation('数据备份', '整组恢复',
+                      '备份组 %s（%d 个库：%s）' % (ts, len(rows), '、'.join(r['kind'] for r in rows)),
+                      session.get('username'))
+    except Exception:
+        pass
+
+    _fresh_any = any(r['fresh'] for r in rows)
+    _detail = '；'.join('%s %s → %s' % (r['kind'], r['before'], r['after']) for r in rows)
+    if _fresh_any:
+        session.clear()
+        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。'
+              '这是新装系统，账号也随主库一起导入，请用<b>备份时的账号和密码</b>重新登录（通常是 admin / admin123）。'
+              % (ts, _detail, len(rows)), 'warning')
+        return redirect(url_for('login'))
+    session.clear()
+    flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
+          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。'
+          '主库连账号会话一起还原了，请重新登录（admin / admin123）。'
+          % (ts, _detail, len(rows)), 'warning')
+    return redirect(url_for('login'))
 
 
 @app.route('/admin/backup/delete', methods=['POST'])
