@@ -1468,7 +1468,7 @@ def _admin_backup_restore_body():
                 flash(f'✅ 已导入旧数据（表结构保持当前版本）：{fname}。'
                       f'本次搬迁 {len(moved)} 张表：{"、".join(moved) or "无"}。'
                       f'因为这是新装系统，账号也一并从备份导入（{len(_names)} 个），'
-                      f'请用<b>备份时的账号和密码</b>重新登录（通常是 admin / admin123）。'
+                      f'请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
                       f'表结构 / 索引 / 插件登记 / 模型配置仍是当前版本，一个都没动。{_tip}', 'warning')
                 return redirect(url_for('login'))
             flash(f'✅ 已恢复数据（表结构保持当前版本）：{fname}。'
@@ -1677,8 +1677,23 @@ def _admin_restore_group_body():
     # 放最后才能保证前面几个库在同一请求里顺利恢复完。
     entries.sort(key=lambda e: (0 if e[0] != 'business' else 1))
 
+    # 跨版本兼容：老版本可能带当前版本已卸载/未安装的插件库（如 v13.0.0.0 的 version_plan_lt），
+    # 这类库不恢复——否则会在 data/ 下留一个没有任何插件认领的孤儿库。跳过并明确提示。
+    known = {'business'}
+    try:
+        _kc = sqlite3.connect(app.config['DATABASE'], timeout=10)
+        for (_pid,) in _kc.execute('SELECT id FROM plugin_registry').fetchall():
+            known.add(_pid)
+        _kc.close()
+    except Exception:
+        pass
+    skipped = []
+
     rows = []
     for pre, src, fname in entries:
+        if pre not in known:
+            skipped.append('%s（%s）' % (pre, fname))
+            continue
         if pre == 'business':
             target = app.config['DATABASE']
             kind = '主库'
@@ -1719,26 +1734,34 @@ def _admin_restore_group_body():
         rows.append({'kind': kind, 'file': fname, 'before': before, 'after': after,
                      'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such)})
 
+    if not rows:
+        flash('该备份组里没有可恢复的库：%s。这些库属于当前版本未安装的插件，'
+              '文件仍保留在 backups/ 中，安装对应插件后再单独恢复即可。'
+              % ('、'.join(skipped),), 'warning')
+        return redirect(url_for('admin_backup'))
+
     try:
         log_operation('数据备份', '整组恢复',
-                      '备份组 %s（%d 个库：%s）' % (ts, len(rows), '、'.join(r['kind'] for r in rows)),
+                      '备份组 %s（%d 个库：%s%s）' % (ts, len(rows), '、'.join(r['kind'] for r in rows),
+                                                  ('；跳过 ' + '、'.join(skipped)) if skipped else ''),
                       session.get('username'))
     except Exception:
         pass
 
     _fresh_any = any(r['fresh'] for r in rows)
     _detail = '；'.join('%s %s → %s' % (r['kind'], r['before'], r['after']) for r in rows)
+    _skip_note = ('已跳过（当前版本未安装该插件，文件仍保留）：%s。' % '、'.join(skipped)) if skipped else ''
     if _fresh_any:
         session.clear()
-        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。'
-              '这是新装系统，账号也随主库一起导入，请用<b>备份时的账号和密码</b>重新登录（通常是 admin / admin123）。'
-              % (ts, _detail, len(rows)), 'warning')
+        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。%s'
+              '这是新装系统，账号也随主库一起导入，请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
+              % (ts, _detail, len(rows), _skip_note), 'warning')
         return redirect(url_for('login'))
     session.clear()
     flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
-          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。'
+          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s'
           '主库连账号会话一起还原了，请重新登录（admin / admin123）。'
-          % (ts, _detail, len(rows)), 'warning')
+          % (ts, _detail, len(rows), _skip_note), 'warning')
     return redirect(url_for('login'))
 
 
