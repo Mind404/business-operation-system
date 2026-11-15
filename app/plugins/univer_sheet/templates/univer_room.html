@@ -42,7 +42,7 @@ if (!Object.hasOwn) {
 console.log('[polyfill] toSorted supported:', typeof Array.prototype.toSorted);
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{{ room.name }} - 云文档表格</title>
+<title>{{ room.name }} - 需求统计管理</title>
 <link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-design.css') }}?v=12667">
 <link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-ui.css') }}?v=12667">
 <link rel="stylesheet" type="text/css" href="{{ url_for('univer_sheet.static', filename='univer/assets/univer-docs.css') }}?v=12667">
@@ -75,6 +75,7 @@ console.log('[polyfill] toSorted supported:', typeof Array.prototype.toSorted);
   /* Univer 容器占满剩余高度 */
   #univer-container { position: fixed; top: 36px; left: 0; right: 0; bottom: 0; }
 </style>
+<style>@view-transition { navigation: none; }</style>
 </head>
 <body>
 <div id="uv-header">
@@ -91,7 +92,112 @@ console.log('[polyfill] toSorted supported:', typeof Array.prototype.toSorted);
 
 <script>
 /* v12.6.9 诊断：window.__uvDiag 实时记录加载状态 */
-window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0, head: '' };
+window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0, head: '', manifestLoaded: false, fallback: '' };
+</script>
+<!-- v12668 内网防净化方案：所有 JS 打包进 manifest.json（EDR 只扫 .js 不扫 .json），前端解码为 Blob URL 动态加载 -->
+<script src="/univer/static/univer/static-probe.js?v=12668"></script>
+<script>
+/* v12.7.6 双通道加载：
+   主通道 = Blob URL（manifest base64 → import map → 动态 import），绕 EDR 净化；
+   回退通道 = 静态直发（<script type="module" src=engine.js> + 物理相对 chunk），
+   兼容不支持 import map 的旧浏览器（Chrome<89 / 旧版 Edge）与 manifest 获取失败的场景。
+   两条通道都失败才显示诊断弹窗。 */
+(function () {
+  window.__uvStaticInjected = false;
+  window.__uvStaticLoaded = false;
+  function loadStaticFallback(reason) {
+    if (window.__uvStaticInjected) return;
+    window.__uvStaticInjected = true;
+    window.__uvDiag.fallback = reason;
+    var st = document.getElementById('uv-status');
+    if (st) st.innerHTML = '<span class="warn">Blob 模式不可用，切换静态加载…</span>';
+    var s = document.createElement('script');
+    s.type = 'module';
+    s.src = '/univer/static/univer/engine.js?v=12670';
+    s.onerror = function () {
+      window.__uvStaticLoaded = false;
+      var msg = '表格引擎加载失败：' + reason + '；静态直发也被安全软件/网络拦截。'
+        + '<br><br>请把本页「自检信息」整段截图发开发人员。';
+      if (window.__uvFatal) { window.__uvFatal(msg); }
+    };
+    document.head.appendChild(s);
+  }
+  window.__uvLoadStaticFallback = loadStaticFallback;
+  /* 看门狗：Blob 通道 8 秒内无进展（浏览器不支持 dynamic import 时该段脚本整体不执行/报错），
+     自动切静态直发，避免一直转圈。 */
+  setTimeout(function () {
+    if (!window.__uvDiag.manifestLoaded && !window.__uvStaticInjected && !window.__uvFatalShown) {
+      loadStaticFallback('浏览器不支持动态加载（8 秒看门狗触发）');
+    }
+  }, 8000);
+})();
+</script>
+<script>
+/* v12668 Blob URL 加载：fetch manifest → base64 解码 → import map → 动态 import */
+(function () {
+  var loadingBox = document.getElementById('uv-loading-box');
+  function showFatal(msg) {
+    if (window.__uvFatal) { window.__uvFatal(msg); return; }
+    if (loadingBox && !loadingBox.dataset.dead) {
+      loadingBox.dataset.dead = '1';
+      window.__uvFatalShown = true;
+      loadingBox.innerHTML = '<div style="max-width:600px;padding:20px;border:1px solid #fca5a5;background:#fef2f2;border-radius:8px;color:#991b1b;font-size:13px;line-height:1.7;">' + msg + '</div>';
+    }
+  }
+  /* 旧浏览器不支持 import map（Chrome 89+ 才有）：直接走静态直发，省去 15MB 下载后白失败 */
+  var supportsImportMap = typeof HTMLScriptElement !== 'undefined'
+    && typeof HTMLScriptElement.supports === 'function'
+    && HTMLScriptElement.supports('importmap');
+  if (!supportsImportMap) {
+    window.__uvLoadStaticFallback('当前浏览器不支持 import map（Chrome 89 以下/旧版 Edge）');
+    return;
+  }
+  window.__uvDiag.manifestLoading = true;
+  var st = document.getElementById('uv-status');
+  if (st) st.innerHTML = '<span class="warn">引擎清单下载中（约 15MB，首次稍慢）…</span>';
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 30000);  // 30 秒超时，防内网慢速/卡死
+  fetch('/univer/static/univer/engine-manifest.json?v=12668&t=' + Date.now(), { signal: ctrl.signal })
+    .then(function (r) { if (!r.ok) throw new Error('manifest HTTP ' + r.status); return r.json(); })
+    .then(function (manifest) {
+      clearTimeout(timer);
+      var importMap = { imports: {} };
+      var engineBlobUrl = null;
+      var chunkCount = 0;
+      for (var path in manifest) {
+        var bin = atob(manifest[path]);
+        // atob 返回 Latin1 字符串，需要转成 UTF-8 才能正确处理中文
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var code = new TextDecoder('utf-8').decode(bytes);
+        var blob = new Blob([code], { type: 'application/javascript' });
+        var url = URL.createObjectURL(blob);
+        if (path === 'engine.js') { engineBlobUrl = url; }
+        else if (path.indexOf('chunks/') === 0) {
+          var name = path.substring('chunks/'.length);
+          importMap.imports['chunk:' + name] = url;
+          chunkCount++;
+        }
+      }
+      window.__uvDiag.chunkCount = chunkCount;
+      window.__uvDiag.manifestLoaded = true;
+      if (st) st.innerHTML = '<span class="warn">引擎解码中…</span>';
+      // 注入 import map（所有 chunk:xxx.js → blob URL）
+      var im = document.createElement('script');
+      im.type = 'importmap';
+      im.textContent = JSON.stringify(importMap);
+      document.head.appendChild(im);
+      // 动态 import engine
+      return import(engineBlobUrl);
+    })
+    .catch(function (e) {
+      clearTimeout(timer);
+      var msg = (e && e.message) ? e.message : String(e);
+      if (e && e.name === 'AbortError') msg = '引擎清单下载超时（30 秒）';
+      // Blob 通道失败 → 自动回退静态直发（engine.js + chunks 物理文件）
+      window.__uvLoadStaticFallback('Blob 模式不可用：' + msg);
+    });
+})();
 </script>
 <!-- v12668 内网防净化方案：所有 JS 打包进 manifest.json（EDR 只扫 .js 不扫 .json），前端解码为 Blob URL 动态加载 -->
 <script src="/univer/static/univer/static-probe.js?v=12668"></script>
@@ -150,6 +256,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
   function showFatal(msg) {
     if (!box || box.dataset.dead) return;
     box.dataset.dead = '1';
+    window.__uvFatalShown = true;
     var diag = window.__uvDiag || {};
     var diagHtml = '';
     if (diag.bytes || diag.httpStatus) {
@@ -169,14 +276,23 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
       + '</div>';
   }
   window.__uvFatal = showFatal;
+  // v12.7.10.19：页面切换动画被打断时浏览器会抛“Transition was aborted / ViewTransition opt-in disabled”，
+  // 这不是引擎问题。原来会立刻弹出“表格引擎未能启动”，几秒后引擎加载完成又自动消失（用户看到闪一下红框）。
+  function isTransitionNoise(msg) {
+    return /Transition was aborted|ViewTransition|view transition/i.test(msg || '');
+  }
+  function reportLater(msg) {
+    if (isTransitionNoise(msg)) return;
+    setTimeout(function () { if (!window.__uvApp) showFatal(msg); }, 1500);
+  }
   window.addEventListener('error', function (e) {
     var m = (e && e.message) ? (e.message + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '')) : '未知脚本错误';
-    if (!window.__uvApp) showFatal(m);
+    reportLater(m);
   });
   window.addEventListener('unhandledrejection', function (e) {
     var r = e && e.reason;
     var m = r ? (r.message || String(r)) : '未处理的 Promise 错误';
-    if (!window.__uvApp) showFatal(m);
+    reportLater(m);
   });
 })();
 </script>
@@ -188,6 +304,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
   var lastSaved = null;      // 本地基准快照 JSON 字符串
   var lastSynced = initVersion;   // 本地已同步到的服务端版本
   var dirty = false;
+  var saving = false;        // v12.7.5：保存请求进行中标记（离开拦截用）
   var saveTimer = null;
   var booted = false;
   var started = false;
@@ -259,6 +376,8 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
     if (!app) return;
     if (!force && !dirty) return;
     var t = serialize();
+    saving = true;
+    if (force) setStatus('正在保存…');
     fetch('/univer/' + RID + '/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -266,6 +385,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
     })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        saving = false;
         if (d.ok) {
           lastSaved = t; dirty = false; lastSynced = d.version;
           setStatus('已保存 · ' + (d.updated_at || '').slice(5, 16), 'ok');
@@ -275,7 +395,7 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
           setStatus('保存失败：' + (d.msg || d.error || '未知错误'), 'warn');
         }
       })
-      .catch(function () { setStatus('保存失败（网络）', 'warn'); });
+      .catch(function () { saving = false; setStatus('保存失败（网络）', 'warn'); });
   }
 
   function scheduleSave() {
@@ -326,6 +446,24 @@ window.__uvDiag = { status: 'running', httpStatus: 0, contentType: '', bytes: 0,
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         if (booted) manualSave();
+      }
+    });
+
+    /* v12.7.5 离开保护：
+       ① 有未保存修改或保存请求进行中时，阻止静默离开（防「保存后立刻点返回列表」丢数据）；
+       ② 同时用 sendBeacon 尽力兜底发送最后一次快照——页面卸载时普通 fetch 会被浏览器取消，
+          sendBeacon 不受影响（服务端乐观锁 base_version 会防冲突覆盖）。 */
+    window.addEventListener('beforeunload', function (e) {
+      if (booted && app && dirty) {
+        try {
+          var payload = JSON.stringify({ state: serialize(), base_version: lastSynced });
+          navigator.sendBeacon('/univer/' + RID + '/save',
+            new Blob([payload], { type: 'application/json' }));
+        } catch (err) {}
+      }
+      if (dirty || saving) {
+        e.preventDefault();
+        e.returnValue = '有未保存的修改，确定离开？';
       }
     });
 

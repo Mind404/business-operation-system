@@ -4,10 +4,53 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}业务高效运转系统{% endblock %}</title>
+    <script>
+    /* v13.0.0.7：只要页面处在 iframe 内就自动去壳（隐藏侧栏/顶栏）。
+       不再依赖 ?embed=1 参数 —— 表单提交、服务端 redirect 后参数会丢，
+       旧做法会让 iframe 里又冒出一套平台导航，看起来像"双层外壳"。 */
+    (function () {
+        var embedded = false;
+        try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
+        if (embedded) { document.documentElement.className += ' embed-mode'; }
+    })();
+</script>
+<style>
+        /* v12.7.10.16：先落底色与骨架，样式表到达前不再露白 */
+        html, body { margin: 0; padding: 0; background: #eef2f7; color: #111827; }
+        .app-layout { display: flex; min-height: 100vh; }
+    /* v13.0.1 去壳模式：插件被平台外壳 iframe 嵌入时不渲染侧栏与顶栏，避免双层导航 */
+    body.embed-mode .sidebar, html.embed-mode .sidebar { display: none !important; }
+    body.embed-mode .page-header, html.embed-mode .page-header { display: none !important; }
+    body.embed-mode .content-body, html.embed-mode .content-body { padding: 14px 18px 22px !important; }
+    body.embed-mode .app-layout, html.embed-mode .app-layout { display: block !important; }
+    body.embed-mode .readonly-banner, html.embed-mode .readonly-banner { margin: 0 0 10px; }
+
+        .sidebar { width: 232px; flex: 0 0 232px; background: #0f172a; }
+        /* 跨页切换：用浏览器原生 View Transition 做旧页→新页交叉淡化，
+           替换掉原先"整页重画"时那一帧白底 */
+        @view-transition { navigation: auto; }
+        ::view-transition-old(root) { animation: vtOut .09s ease-out both; }
+        ::view-transition-new(root) { animation: vtIn .12s ease-out both; }
+        @keyframes vtOut { from { opacity: 1 } to { opacity: .30 } }
+        @keyframes vtIn { from { opacity: .30 } to { opacity: 1 } }
+        /* 不支持 View Transition 的浏览器（老内核）退回轻淡入 */
+        @supports not (view-transition-name: root) {
+            @keyframes pageIn { from { opacity: .9 } to { opacity: 1 } }
+            body { animation: pageIn .10s ease-out; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            ::view-transition-old(root), ::view-transition-new(root) { animation: none }
+            body { animation: none }
+        }
+    </style>
+    <!-- v12.7.10.16：鼠标悬停/按下导航时，浏览器预渲染目标页，点击后直接切换（省掉整页等待） -->
+    <script type="speculationrules">
+    {"prerender":[{"where":{"href_matches":["/","/wbs/*","/univer/*","/contract_ledger/*","/plugin-shell/*","/profile"]},"eagerness":"moderate"}]}
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block styles %}{% endblock %}
 </head>
-<body>
+<body{% if request.args.get("embed") == "1" %} class="embed-mode"{% endif %}>
     <div class="app-layout">
         <!-- 侧边导航 -->
         <aside class="sidebar">
@@ -23,8 +66,8 @@
                 <div class="nav-group">
                     {% for p in nav_core %}
                     {% set np = p.nav_path %}
-                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                    {% set is_active = (np == '/' and request.path == '/') or (np != '/' and (request.path.startswith(np) or request.path.startswith('/plugin-shell/' ~ p.id))) %}
+                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
@@ -37,29 +80,35 @@
                     {% for p in nav_biz %}
                     {% set np = p.nav_path %}
                     {% set is_active = (np == '/' and request.path == '/') or (np != '/' and request.path.startswith(np)) %}
-                    <a href="{{ url_for(p.endpoint) }}" class="nav-item {% if is_active %}active{% endif %}">
+                    <a href="{{ url_for('plugin_shell', pid=p.id) if p.external else url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
                 </div>
                 {% endif %}
 
-                {# v12.1.0 系统管理（仅平台管理员可见）：用户管理 + 插件管理 #}
+                {# v12.7.10.17：不再展示「外部插件」分区，来源只体现在插件管理页 #}                {# 系统管理（仅平台管理员可见）：顺序可在页面上拖拽调整 #}
                 {% if current_role == 'platform_admin' %}
-                <div class="nav-group">
+                <div class="nav-group" id="navAdminGroup">
                     <div class="nav-group-title">系统管理</div>
-                    <a href="{{ url_for('admin_users') }}" class="nav-item {% if request.path.startswith('/admin/users') %}active{% endif %}">
-                        <span class="nav-icon">👥</span> 用户管理
+                    {% for p in nav_admin %}
+                    {% set np = p.nav_path %}
+                    {% set is_active = request.path.startswith(np) %}
+                    <a href="{{ url_for(p.endpoint) }}" data-nav-key="{{ p.id }}" class="nav-item {% if is_active %}active{% endif %}">
+                        <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
-                    <a href="{{ url_for('admin_plugins') }}" class="nav-item {% if request.path.startswith('/admin/plugins') %}active{% endif %}">
-                        <span class="nav-icon">🧩</span> 插件管理
-                    </a>
-                    <a href="{{ url_for('admin_backup') }}" class="nav-item {% if request.path.startswith('/admin/backup') %}active{% endif %}">
-                        <span class="nav-icon">💾</span> 数据备份
-                    </a>
-                    <a href="{{ url_for('ai_admin.index') }}" class="nav-item {% if request.path.startswith('/admin/ai') %}active{% endif %}">
-                        <span class="nav-icon">🤖</span> AI 智能分析
-                    </a>
+                    {% endfor %}
+                </div>
+                <div style="padding:6px 12px 10px;">
+                    {% if session.get('user_role') == 'platform_admin' %}
+                    <button type="button" id="navEditBtn" onclick="toggleNavEdit()"
+                            style="width:100%;padding:6px 8px;font-size:12px;color:#93a4c4;background:transparent;border:1px dashed rgba(255,255,255,.18);border-radius:6px;cursor:pointer;">
+                        ✥ 调整导航顺序
+                    </button>
+                    <div id="navEditHint" style="display:none;font-size:11px;color:#9fb0cc;line-height:1.5;margin-top:6px;">
+                        拖动左侧项目到目标位置，完成后点上方按钮保存。顺序对所有用户生效。
+                    </div>
+                    {% endif %}
                 </div>
                 {% endif %}
 
@@ -125,6 +174,21 @@
         </main>
     </div>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+    // v13.0.1：iframe 内翻页自动带 embed=1，避免翻页后回退成双层导航
+    (function () {
+      if (!document.body.classList.contains('embed-mode')) return;
+      document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a') : null;
+        if (!a) return;
+        var href = a.getAttribute('href') || '';
+        if (!href || href.charAt(0) === '#' || href.indexOf('javascript:') === 0) return;
+        if (a.target === '_blank' || a.target === '_top') return;
+        if (href.indexOf('embed=') >= 0) return;
+        a.setAttribute('href', href + (href.indexOf('?') >= 0 ? '&' : '?') + 'embed=1');
+      }, true);
+    })();
+    </script>
     <script>
     // 全局只读模式：拦截所有修改操作
     (function() {
@@ -526,6 +590,57 @@
         } else {
             autoHide();
         }
+    })();
+    </script>
+    <script>
+    // v12.7.10.10 导航顺序拖拽（仅平台管理员可见该入口，后端另有角色校验）
+    (function () {
+        var editing = false;
+        function saveNavOrder() {
+            var keys = [].map.call(document.querySelectorAll('.nav-menu .nav-item'), function (a) {
+                return a.getAttribute('data-nav-key');
+            }).filter(Boolean);
+            fetch('/admin/nav/order', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({keys: keys})
+            }).then(function (r) { return r.json(); }).then(function (d) {
+                if (!d || !d.ok) alert((d && d.msg) || '导航顺序保存失败');
+            }).catch(function () { alert('导航顺序保存失败（网络异常）'); });
+        }
+        window.toggleNavEdit = function () {
+            editing = !editing;
+            document.querySelectorAll('.nav-menu .nav-item').forEach(function (a) {
+                a.draggable = editing;
+                a.style.cursor = editing ? 'grab' : '';
+                a.style.outline = editing ? '1px dashed rgba(255,255,255,.28)' : '';
+            });
+            var btn = document.getElementById('navEditBtn');
+            var hint = document.getElementById('navEditHint');
+            if (btn) btn.textContent = editing ? '✓ 完成并保存' : '✥ 调整导航顺序';
+            if (hint) hint.style.display = editing ? 'block' : 'none';
+            if (!editing) saveNavOrder();
+        };
+        var dragging = null;
+        document.addEventListener('dragstart', function (e) {
+            var a = e.target.closest && e.target.closest('.nav-item');
+            if (!a || !editing) return;
+            dragging = a; a.style.opacity = '.4';
+            try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'x'); } catch (x) {}
+        });
+        document.addEventListener('dragend', function () {
+            if (dragging) dragging.style.opacity = '';
+            dragging = null;
+        });
+        document.addEventListener('dragover', function (e) {
+            if (!dragging) return;
+            var a = e.target.closest && e.target.closest('.nav-item');
+            if (!a || a === dragging) return;
+            if (a.parentElement !== dragging.parentElement) return;  // 只允许同组内调整
+            e.preventDefault();
+            var rect = a.getBoundingClientRect();
+            var after = (e.clientY - rect.top) > rect.height / 2;
+            a.parentElement.insertBefore(dragging, after ? a.nextSibling : a);
+        });
     })();
     </script>
 </body>

@@ -18,42 +18,78 @@
     .status-select.locked{opacity:.5;cursor:default;}
 </style>
 <div style="margin-bottom:14px;">
-    <a href="{{ url_for('wbs.wbs_projects') }}" style="color:#2563eb;text-decoration:none;font-size:13px;">← 返回项目列表</a>
+    <a href="{{ url_for('wbs.wbs_projects') }}" style="display:inline-flex;align-items:center;height:30px;padding:0 13px;font-size:13px;border:1px solid #ccd2e0;border-radius:6px;background:#fff;color:#33415c;text-decoration:none;transition:background .12s,border-color .12s;" onmouseover="this.style.background='#f3f6fb'" onmouseout="this.style.background='#fff'">← 返回项目列表</a>
 </div>
 
-<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
-    <div>
-        <h1 style="margin:0;font-size:22px;">🗓️ {{ p.name }}</h1>
-        <p style="color:#666;font-size:13px;margin:6px 0 0;">
-            负责人：{{ p.owner or '-' }} · 参与人：{{ p.participants or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
-            {% if p.description %}<br>{{ p.description }}{% endif %}
-        </p>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+<div style="margin-bottom:10px;">
+    <h1 style="margin:0;font-size:22px;">🗓️ {{ p.name }}</h1>
+    <p style="color:#666;font-size:13px;margin:6px 0 0;">
+        负责人：{{ p.owner_disp or '-' }} · 参与人：{{ p.participants_disp or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
+        {% if p.description %}<br>{{ p.description }}{% endif %}
+    </p>
+</div>
+
+<style>
+/* v12.7.10.25：操作按钮、折叠、状态筛选、缩放合并为一条工具栏（宽屏一行，窄屏自动换行） */
+.wbs-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 10px;background:#fff;
+    border:1px solid #e2e8f0;border-radius:8px;margin-bottom:10px;box-shadow:0 1px 2px rgba(16,24,40,.04);}
+.wbs-tb-group{display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.wbs-tb-sep{width:1px;height:22px;background:#e5e7eb;margin:0 2px;flex:none;}
+.wbs-tb-btn{display:inline-flex;align-items:center;height:30px;padding:0 10px;background:#eef2f7;
+    border:1px solid #ccd;border-radius:6px;color:#333;font-size:13px;line-height:1;text-decoration:none;
+    cursor:pointer;white-space:nowrap;box-sizing:border-box;}
+.wbs-tb-btn:hover{background:#e3eaf4;}
+</style>
+
+<div class="wbs-toolbar">
+    <div class="wbs-tb-group">
         {% if can_edit %}
-        <a href="{{ url_for('wbs.wbs_project_edit', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">编辑项目信息</a>
+        <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_project_edit', pid=p.id) }}">编辑项目</a>
         {% endif %}
-        <button onclick="tryImport()" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">导入Excel</button>
-        <a href="{{ url_for('wbs.wbs_template') }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">下载模板</a>
-        <a href="{{ url_for('wbs.wbs_export', pid=p.id) }}" style="padding:7px 14px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;text-decoration:none;color:#333;font-size:13px;">导出Excel</a>
-        <span style="font-size:12px;color:#888;" title="系统所有WBS附件占用的磁盘空间（单文件上限50MB，单任务最多10个附件）">📎 附件共 {{ attach_count }} 个 · {{ attach_mb }} MB</span>
+        <button type="button" class="wbs-tb-btn" onclick="tryImport()">导入Excel</button>
+        <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_template') }}">下载模板</a>
+        <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_export', pid=p.id) }}">导出Excel</a>
+        <span style="font-size:12px;color:#888;white-space:nowrap;"
+              title="系统所有WBS附件占用的磁盘空间（单文件上限50MB，单任务最多10个附件）">📎 {{ attach_count }} · {{ attach_mb }}MB</span>
         {% if current_role in ('admin','platform_admin') %}
-        <span style="font-size:12px;color:#777;">导入：模板含状态/进度列；已存在的WBS编号会<b style="color:#2563eb;">同步更新</b>，新编号自动新增并自动排序归类。</span>
+        <span style="font-size:12px;color:#6b7280;white-space:nowrap;cursor:help;border-bottom:1px dashed #cbd5e1;"
+              title="模板含状态/进度列；已存在的WBS编号会同步更新，新编号自动新增并自动排序归类。计划开始/结束支持 2026-11-05、2026/11/05、2026.11.05、2026年11月5日 等格式；格式无法识别时整表不导入并提示行号。">ⓘ</span>
         {% endif %}
         {% if current_role in ('admin','platform_admin') and pending_count > 0 %}
-        <button onclick="batchApprove('approve')" style="padding:7px 14px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
+        <button type="button" onclick="batchApprove('approve')" style="height:30px;padding:0 12px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;">
             ✓ 通过
         </button>
-        <button onclick="batchApprove('reject')" style="padding:7px 14px;background:#dc3545;border:1px solid #dc3545;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;">
+        <button type="button" onclick="batchApprove('reject')" style="height:30px;padding:0 12px;background:#dc3545;border:1px solid #dc3545;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;">
             ✗ 驳回
         </button>
         {% endif %}
-        <div style="display:flex;gap:0;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
-            <button onclick="setZoom(1)" id="zoom100" style="padding:7px 10px;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:12px;">100%</button>
-            <button onclick="setZoom(1.25)" id="zoom125" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">125%</button>
-            <button onclick="setZoom(1.5)" id="zoom150" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">150%</button>
-            <button onclick="setZoom(2)" id="zoom200" style="padding:7px 10px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">200%</button>
-        </div>
+    </div>
+    <span class="wbs-tb-sep"></span>
+    <div class="wbs-tb-group" id="wbsCollapseBar" title="按状态筛选，可多选">
+        <button type="button" id="btnCollapseDone" onclick="wbsToggleDone()"
+                style="height:30px;padding:0 10px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;white-space:nowrap;">
+            ⊟ 折叠完成
+        </button>
+        <button type="button" onclick="wbsExpandAll()"
+                style="height:30px;padding:0 10px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;white-space:nowrap;">
+            ⊞ 展开全部
+        </button>
+        <button type="button" class="wbs-st-btn" data-st="进行中" onclick="wbsToggleStatus('进行中')">进行中 <b class="wbs-st-n">0</b></button>
+        <button type="button" class="wbs-st-btn" data-st="未开始" onclick="wbsToggleStatus('未开始')">未开始 <b class="wbs-st-n">0</b></button>
+        <button type="button" class="wbs-st-btn" data-st="阻塞" onclick="wbsToggleStatus('阻塞')">阻塞 <b class="wbs-st-n">0</b></button>
+        <button type="button" class="wbs-st-btn" data-st="已完成" onclick="wbsToggleStatus('已完成')">已完成 <b class="wbs-st-n">0</b></button>
+        <button type="button" id="btnClearStatus" onclick="wbsClearStatus()" title="清除状态筛选"
+                style="display:none;height:30px;padding:0 8px;font-size:12px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:6px;cursor:pointer;white-space:nowrap;">
+            ✕
+        </button>
+        <span id="wbsCollapseInfo" style="font-size:12px;color:#6b7280;white-space:nowrap;"></span>
+    </div>
+    <span class="wbs-tb-sep"></span>
+    <div class="wbs-tb-group" style="display:flex;gap:0;margin-left:auto;border:1px solid #ccd;border-radius:6px;overflow:hidden;">
+        <button type="button" onclick="setZoom(1)" id="zoom100" style="padding:0 7px;height:28px;background:#2563eb;color:#fff;border:none;cursor:pointer;font-size:12px;">100%</button>
+        <button type="button" onclick="setZoom(1.25)" id="zoom125" style="padding:0 7px;height:28px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">125%</button>
+        <button type="button" onclick="setZoom(1.5)" id="zoom150" style="padding:0 7px;height:28px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">150%</button>
+        <button type="button" onclick="setZoom(2)" id="zoom200" style="padding:0 7px;height:28px;background:#eef2f7;color:#333;border:none;border-left:1px solid #ccd;cursor:pointer;font-size:12px;">200%</button>
     </div>
 </div>
 
@@ -88,6 +124,17 @@
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
 
+<style>
+.wbs-st-btn{padding:5px 9px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;transition:background .12s,color .12s;}
+.wbs-st-btn:hover{background:#eef3fb;}
+.wbs-st-btn.on{background:#2b579a;color:#fff;border-color:#2b579a;}
+.wbs-st-btn.on .wbs-st-n{background:rgba(255,255,255,.28);color:#fff;}
+.wbs-st-btn .wbs-st-n{display:inline-block;min-width:18px;margin-left:2px;padding:0 4px;border-radius:8px;background:#eef2f7;color:#374151;font-weight:600;}
+/* 只作为层级上下文保留的父级阶段行：淡化显示，提示它不是筛选结果 */
+.wbs-ctx td{color:#9aa3af;}
+</style>
+<!-- v12.7.10.25 折叠与状态筛选已并入上方工具栏（wbs-toolbar） -->
+
 <!-- WBS表格 -->
 <div id="wbsWrap" style="overflow-x:auto;">
 <table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;table-layout:fixed;">
@@ -114,7 +161,8 @@
         {% set is_phase = '.' not in (t.wbs_code or '') %}
         {% set depth = (t.wbs_code or '').split('.')|length - 1 %}
         {% set pad = depth * 18 %}
-        <tr data-tid="{{ t.id }}" class="{% if is_phase %}phase-row{% else %}task-row{% endif %}"
+        <tr data-tid="{{ t.id }}" data-code="{{ t.wbs_code or '' }}" data-status="{{ t.status or '' }}"
+            class="{% if is_phase %}phase-row{% else %}task-row{% endif %}"
             style="{% if is_phase %}background:#d6e4f5;font-weight:600;{% else %}background:#fff;{% endif %}">
             <td style="padding:7px 6px;border:1px solid #d0d7e5;text-align:center;">
                 {% if current_role in ('admin','platform_admin') %}
@@ -482,6 +530,10 @@ document.querySelectorAll('.status-select').forEach(sel => {
             if(res.ok) {
                 sel.dataset.prev = sel.value;
                 sel.style.background = sel.value==='已完成'?'#d4edda':sel.value==='进行中'?'#cce5ff':sel.value==='阻塞'?'#f8d7da':'#fff';
+                // v12.7.10.22 修复：同步这一行的 data-status，否则筛选/计数还按改之前的旧状态算
+                var trRow = sel.closest('tr');
+                if (trRow) { trRow.setAttribute('data-status', sel.value); }
+                if (window.wbsRefreshStatus) window.wbsRefreshStatus();
             } else {
                 alert(res.msg || '保存失败');
                 sel.value = oldVal;
@@ -720,5 +772,141 @@ function setZoom(z) {
     try { localStorage.setItem('wbsZoom', z); } catch(e){}
 }
 (function(){ try { var z = parseFloat(localStorage.getItem('wbsZoom')||'1'); setZoom(z); } catch(e){} })();
+</script>
+<script>
+// v12.7.10.10 WBS 层级折叠：父任务点 ▶/▼ 收起子任务；一键折叠已完成；全部展开
+(function () {
+    var table = document.getElementById('wbsTable');
+    if (!table) return;
+    var rows = [].slice.call(table.querySelectorAll('tbody tr'));
+    // 只把带 data-status 的行算作“数据行”；表格底部的“新增任务”表单行不参与统计
+    var dataRows = rows.filter(function (tr) { return tr.getAttribute('data-status') !== null; });
+    var collapsed = {};      // 被收起的父任务编号集合
+    var hideDone = false;    // 是否折叠已完成
+    var statusSel = {};      // v12.7.10.20 状态多选筛选：{ '进行中': true }
+
+    function statusOf(tr) { return (tr.getAttribute('data-status') || '').trim(); }
+    function selectedStatuses() {
+        return Object.keys(statusSel).filter(function (k) { return statusSel[k]; });
+    }
+    // 状态按钮上的数量徽标（v12.7.10.22：改为每次重算，行内改状态后数字立即跟上）
+    function recount() {
+        var c = {};
+        dataRows.forEach(function (tr) { var s2 = statusOf(tr); if (s2) c[s2] = (c[s2] || 0) + 1; });
+        [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
+            var n = b.querySelector('.wbs-st-n');
+            if (n) n.textContent = c[b.getAttribute('data-st')] || 0;
+        });
+    }
+
+    function codeOf(tr) { return (tr.getAttribute('data-code') || '').trim(); }
+    function isDone(tr) { return (tr.getAttribute('data-status') || '').indexOf('已完成') === 0; }
+    function ancestors(code) {
+        var parts = code.split('.'), out = [];
+        for (var i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('.'));
+        return out;
+    }
+    function descendants(code) {
+        if (!code) return [];
+        return rows.filter(function (r) { return codeOf(r).indexOf(code + '.') === 0; });
+    }
+    function hasChild(code) { return descendants(code).length > 0; }
+
+    // 已完成行是否可整体收起：自己已完成，且所有子孙都已完成（不把未完成子任务藏起来）
+    function canCollapseDone(tr) {
+        if (!isDone(tr)) return false;
+        var kids = descendants(codeOf(tr));
+        return kids.every(isDone);
+    }
+
+    function refresh() {
+        var sel = selectedStatuses();
+        var anySel = sel.length > 0;
+        var keep = null, ctxRows = 0;
+        if (anySel) {
+            // 命中的行 + 它的所有祖先行（祖先是层级上下文，必须保留，否则会出现挂在缺失父下的孤儿行）
+            keep = {};
+            rows.forEach(function (tr) {
+                if (sel.indexOf(statusOf(tr)) >= 0) {
+                    var c0 = codeOf(tr);
+                    keep[c0] = 'match';
+                    ancestors(c0).forEach(function (a) { if (!keep[a]) keep[a] = 'ctx'; });
+                }
+            });
+        }
+        var hidden = 0;
+        rows.forEach(function (tr) {
+            var code = codeOf(tr);
+            var byParent = ancestors(code).some(function (a) { return collapsed[a]; });
+            // 用户显式选了状态时，以筛选为准，“折叠已完成”让位（否则选了已完成却看不到）
+            var byDone = hideDone && !anySel && canCollapseDone(tr);
+            var byStatus = anySel && !keep[code];
+            var hide = byParent || byDone || byStatus;
+            tr.style.display = hide ? 'none' : '';
+            if (hide && tr.getAttribute('data-status') !== null) hidden++;
+            var isCtx = anySel && !hide && keep[code] === 'ctx';
+            if (tr.classList) tr.classList.toggle('wbs-ctx', !!isCtx);
+            if (isCtx) ctxRows++;
+            var btn = tr.querySelector('.wbs-toggle');
+            if (btn) {
+                var c = !!collapsed[code];
+                btn.textContent = c ? '▶' : '▼';
+                btn.title = c ? '展开子任务' : '收起子任务';
+            }
+        });
+        var info = document.getElementById('wbsCollapseInfo');
+        if (info) {
+            var parts = [];
+            if (anySel) parts.push('命中 ' + (dataRows.length - hidden - ctxRows) + ' 行');
+            if (hidden) parts.push('隐藏 ' + hidden + ' 行');
+            if (Object.keys(collapsed).length) parts.push('收起 ' + Object.keys(collapsed).length + ' 个');
+            if (hideDone && !anySel) parts.push('已折叠完成项');
+            if (anySel && ctxRows) parts.push('父级 ' + ctxRows + ' 行（灰）');
+            info.textContent = parts.length ? parts.join(' · ') : '';
+        }
+        // 按钮选中态 / 清除按钮显隐
+        [].forEach.call(document.querySelectorAll('.wbs-st-btn'), function (b) {
+            if (b.classList) b.classList.toggle('on', !!statusSel[b.getAttribute('data-st')]);
+        });
+        var cb = document.getElementById('btnClearStatus');
+        if (cb) cb.style.display = anySel ? '' : 'none';
+        recount();
+        var btnDone = document.getElementById('btnCollapseDone');
+        if (btnDone) btnDone.textContent = hideDone ? '⊞ 显示完成' : '⊟ 折叠完成';
+    }
+
+    // 给有子任务的父行插入折叠按钮（按钮插在 WBS 编号单元格最前，父行本身始终保留）
+    rows.forEach(function (tr) {
+        var code = codeOf(tr);
+        if (!code || !hasChild(code)) return;
+        var firstCell = tr.querySelector('td');
+        if (!firstCell || firstCell.querySelector('.wbs-toggle')) return;
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'wbs-toggle';
+        btn.textContent = '▼';
+        btn.title = '收起子任务';
+        btn.style.cssText = 'border:none;background:transparent;cursor:pointer;color:#2b579a;font-size:12px;padding:0 3px;line-height:1;';
+        btn.onclick = function (e) {
+            e.stopPropagation();
+            if (collapsed[code]) delete collapsed[code]; else collapsed[code] = true;
+            refresh();
+        };
+        firstCell.insertBefore(btn, firstCell.firstChild);
+    });
+
+    window.wbsToggleDone = function () { hideDone = !hideDone; refresh(); };
+    // v12.7.10.20 状态多选筛选：点一次加入，再点一次取消；可同时选多个状态
+    window.wbsToggleStatus = function (st) {
+        statusSel[st] = !statusSel[st];
+        if (selectedStatuses().length) hideDone = false;
+        refresh();
+    };
+    window.wbsClearStatus = function () { statusSel = {}; refresh(); };
+    // v12.7.10.22：行内改状态后同步行上的 data-status，并重算按钮数字与筛选结果
+    window.wbsRefreshStatus = function () { refresh(); };
+    window.wbsExpandAll = function () { collapsed = {}; hideDone = false; refresh(); };
+    refresh();
+})();
 </script>
 {% endblock %}

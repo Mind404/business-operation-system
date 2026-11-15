@@ -63,22 +63,66 @@ def _app_dir():
 
 _upload_ids_cache = None
 
+# v12.7.10.15：平台自带的目录型插件（随安装包发布，不是外部插件）。
+# 目录发现的插件默认按外部插件(dir)登记，命中这里的仍记为 builtin。
+BUNDLED_DIR_PLUGINS = {'univer_sheet'}
+
+
+def _manifest_install_type(pid, man):
+    """v12.7.10.16：插件来源以 manifest 声明为准。
+    source='builtin' → 平台内置；source='external' → 外部插件（目录接入）；
+    未声明时按老规则兜底（bundled 标记 / 自带白名单 → 内置，其余 → 外部）。"""
+    src = str((man or {}).get('source') or '').strip().lower()
+    if src == 'builtin':
+        return 'builtin'
+    if src == 'external':
+        return 'dir'
+    if (man or {}).get('bundled') or pid in BUNDLED_DIR_PLUGINS:
+        return 'builtin'
+    return 'dir'
+
 def _upload_plugin_ids():
-    """当前 install_type='upload' 的插件 id 集合（独立短连接查主库，避免递归 get_db）"""
+    """外部接入插件 id 集合（install_type in upload/dir）。
+
+    v13.0.0.7：这个集合只管**数据隔离**——外部接入插件的业务数据都放在独立库
+    data/<id>.db 里，不能落主库。是否套"返回平台"外壳页由 _shell_plugin_ids() 决定，
+    两者不能混用：目录型插件（如 version_plan）同样需要独立库，但它自带平台导航，
+    不需要外壳页。"""
     global _upload_ids_cache
     if _upload_ids_cache is None:
         try:
             con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
             _upload_ids_cache = {r[0] for r in con.execute(
-                "SELECT id FROM plugin_registry WHERE install_type='upload'").fetchall()}
+                "SELECT id FROM plugin_registry WHERE install_type IN ('upload','dir')").fetchall()}
             con.close()
         except Exception:
             _upload_ids_cache = set()
     return _upload_ids_cache
 
+
+_shell_ids_cache = None
+
+
+def _shell_plugin_ids():
+    """需要平台外壳页（带"返回平台"顶栏）的插件：仅上传安装的 zip 包插件。
+
+    目录型插件继承平台 base.html，本身已有平台导航，再套一层外壳就会变成双层导航。
+    """
+    global _shell_ids_cache
+    if _shell_ids_cache is None:
+        try:
+            con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+            _shell_ids_cache = {r[0] for r in con.execute(
+                "SELECT id FROM plugin_registry WHERE install_type='upload'").fetchall()}
+            con.close()
+        except Exception:
+            _shell_ids_cache = set()
+    return _shell_ids_cache
+
 def _invalidate_upload_cache():
-    global _upload_ids_cache
+    global _upload_ids_cache, _shell_ids_cache
     _upload_ids_cache = None
+    _shell_ids_cache = None
 
 def _plugin_db_path(plugin_id):
     """upload 插件 → app/data/<id>.db；内置/核心/未登记 → None（主库）"""
@@ -116,8 +160,9 @@ def _db_for_plugin_id(plugin_id):
         conn = sqlite3.connect(pdb, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
-        conn.execute('PRAGMA journal_mode = WAL')
+        # WAL 模式已持久化在库文件头，不要每请求重设 journal_mode（需独占写锁，恢复/备份时易触发 I/O 冲突）
         conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA synchronous = NORMAL')
         setattr(g, key, conn)
     return conn
 
@@ -152,12 +197,34 @@ def init_plugin_tables():
             continue
         db.execute('''INSERT INTO plugin_registry
             (id, name, icon, grp, core, description, endpoint, tables, enabled, install_type)
-            VALUES (?,?,?,?,?,?,?,?,1,'builtin')
+            VALUES (?,?,?,?,?,?,?,?,1,?)
             ON CONFLICT(id) DO NOTHING''',
             (man.get('id', pid), man.get('name', pid), man.get('icon', '🧩'),
              man.get('group', '业务'), 1 if man.get('core') else 0,
              man.get('description', ''), man.get('endpoint', ''),
-             json.dumps(man.get('tables', []), ensure_ascii=False)))
+             json.dumps(man.get('tables', []), ensure_ascii=False),
+             _manifest_install_type(pid, man)))
+    # v12.7.10.15：历史误登记纠正——目录里的外部插件曾被写成 builtin，页面显示成"平台内置"。
+    # 只纠正"目录里确实存在、且业务表没落在主库"的行，避免库切换后读不到历史数据。
+    try:
+        import os as _os
+        static_ids2 = {p['id'] for p in PLUGINS}
+        _mmp = _manifest_map()
+        _data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data')
+        for r in db.execute("SELECT id FROM plugin_registry WHERE install_type='builtin'").fetchall():
+            pid = r['id']
+            if pid in static_ids2 or pid in BUNDLED_DIR_PLUGINS or pid not in _mmp:
+                continue
+            pdb = _os.path.join(_data_dir, pid + '.db')
+            has_own = _os.path.isfile(pdb) and _os.path.getsize(pdb) > 0
+            n_tab = db.execute('SELECT COUNT(*) c FROM plugin_tables WHERE plugin_id=?', (pid,)).fetchone()
+            n_tab = n_tab['c'] if n_tab else 0
+            if has_own or n_tab == 0:
+                db.execute("UPDATE plugin_registry SET install_type='dir' WHERE id=?", (pid,))
+                print(f'[插件类型纠正] {pid}: builtin -> dir（目录接入，按外部插件处理）')
+    except Exception as e:
+        print(f'[插件类型纠正] 跳过: {e}')
+
     # v10.5.0：清理已下线的注册与订阅记录（静态表+目录中都不存在的插件，如已卸载/删除的插件包）
     static_ids = [p['id'] for p in PLUGINS]
     manifest_ids = list(_manifest_map().keys())
@@ -180,7 +247,7 @@ def inject_nav_context():
     """注入模板导航：核心常驻 + 业务插件（仅启用可见）+ 系统管理入口由 base.html 按角色渲染"""
     user_id = session.get('user_id')
     if not user_id:
-        return {'nav_core': [], 'nav_biz': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
+        return {'nav_core': [], 'nav_biz': [], 'nav_ext': [], 'nav_all_plugins': PLUGINS, 'user_subscribed': set()}
     registered = set(current_app.view_functions.keys())
     enabled_ids = _enabled_ids()
     available = [p for p in PLUGINS if p['endpoint'] in registered and p['id'] in enabled_ids]
@@ -199,8 +266,15 @@ def inject_nav_context():
             'id': pid, 'name': man.get('name', pid), 'icon': man.get('icon', '🧩'),
             'group': man.get('group', '业务'), 'core': 0, 'desc': man.get('description', ''),
             'endpoint': ep, 'nav_path': man.get('url_prefix', man.get('nav_path', '/' + pid)),
+            # v12.7.10.10：仅"上传安装"的插件算外来插件，导航走平台外壳页（带"返回平台"）；
+            # 平台自带的目录型插件（univer_sheet 等，install_type=builtin）仍直接进页面，避免双层导航
+            'external': (pid in _shell_plugin_ids()),
         })
-    return {'nav_core': core_plugins, 'nav_biz': biz_plugins,
+    # v12.7.10.17：导航不再按来源分區，全部业务插件同一组显示（用户不需要感知插件来源）
+    # nav_ext 保留键位只为兼容旧模板/旧上下文，恒为空
+    nav_biz = biz_plugins
+    nav_ext = []
+    return {'nav_core': core_plugins, 'nav_biz': nav_biz, 'nav_ext': nav_ext,
             'nav_all_plugins': available, 'user_subscribed': set()}
 
 
@@ -280,12 +354,29 @@ def register_plugin_guard(app):
             pid = _plugin_id_for_path(request.path)
         if not pid:
             pid = _manifest_prefix_plugin(request.path)
+        if not pid and ep and '.' in ep:
+            # v12.7.10.22：插件卸载后注册记录已删、路径缓存也失效，但蓝图仍在进程里。
+            # 用蓝图名回查，保证这类"孤儿蓝图"也能落到存在性判断，而不是继续执行抛 500。
+            _bp = ep.split('.')[0]
+            if _bp in _BIZ_ENDPOINTS:
+                pid = _BIZ_ENDPOINTS[_bp]
         if not pid:
             return None
         # 核心常驻插件放行（不可停用）
         core_ids = {p['id'] for p in PLUGINS if p['core']}
         if pid in core_ids:
             return None
+        # v12.7.10.22 修复：插件已卸载时注册记录已删除，旧的 blueprint 还在进程里，
+        # 原来会继续执行并因数据表/目录缺失抛 500。这里先判存在性，给出友好提示。
+        _exists = True
+        try:
+            _row = get_db().execute('SELECT enabled FROM plugin_registry WHERE id=?', (pid,)).fetchone()
+            _exists = _row is not None
+        except Exception:
+            _exists = True
+        if not _exists:
+            flash(f'插件「{pid}」已卸载（业务数据表保留），重启系统后彻底移除', 'error')
+            return redirect(url_for('index'))
         # v12.1.0 平台级停用拦截
         if not _plugin_enabled(pid):
             flash(f'插件「{pid}」已被平台停用', 'error')
@@ -369,8 +460,15 @@ def toggle_plugin(user_id, plugin_id):
 # v12.1.0 插件管理（平台管理员）：目录发现 / 启停 / 上传安装 / 卸载
 # ============================================================
 def _registry_rows():
-    db = get_db()
-    return {r['id']: r for r in db.execute('SELECT * FROM plugin_registry').fetchall()}
+    # 同上：登记表在主库，不受插件库路由影响
+    try:
+        con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+        con.row_factory = sqlite3.Row
+        rows = con.execute('SELECT * FROM plugin_registry').fetchall()
+        con.close()
+    except Exception:
+        return {}
+    return {r['id']: r for r in rows}
 
 
 _manifest_cache = None
@@ -399,9 +497,181 @@ def _invalidate_manifest_cache():
     _manifest_cache = None
 
 
+# ============================================================
+# v12.7.10.10 插件数据开放接口（OpenAPI v1）
+# 约定：插件必须自带两个只读接口（路径固定，挂在插件自己的 url_prefix 下）：
+#   GET <url_prefix>/__openapi/datasets        -> 声明可开放的数据集（表逻辑名/字段/行数/主键）
+#   GET <url_prefix>/__openapi/rows?table=&limit=&offset= -> 分页返回该数据集的行
+# 平台侧：进程内直接调用视图函数（不发 HTTP、不经过登录中间件），插件无需对外开放端口。
+# ============================================================
+OPENAPI_VERSION = 1
+_OPENAPI_SUFFIX_DATASETS = '/__openapi/datasets'
+_OPENAPI_SUFFIX_ROWS = '/__openapi/rows'
+_OPENAPI_MAX_ROWS = 1000          # 单次调用行数硬上限（防止插件一次吐出整库）
+_openapi_status_cache = {}
+
+
+def invalidate_openapi_cache():
+    """插件安装/卸载/启停后调用，重新探测开放接口。"""
+    global _openapi_status_cache
+    _openapi_status_cache = {}
+
+
+def _plugin_url_prefix(pid):
+    man = _manifest_map().get(pid) or {}
+    up = man.get('url_prefix')
+    if isinstance(up, (list, tuple)):
+        up = up[0] if up else ''
+    return str(up or '').rstrip('/')
+
+
+def _openapi_endpoint(pid, suffix):
+    """在当前 app 的 url_map 里找该插件开放接口的视图。返回 (view_func, rule) 或 (None, None)。"""
+    try:
+        app = current_app._get_current_object()
+    except Exception:
+        return None, None
+    prefix = _plugin_url_prefix(pid)
+    if not prefix:
+        return None, None
+    for rule in app.url_map.iter_rules():
+        if rule.rule.endswith(suffix) and rule.rule.startswith(prefix):
+            return app.view_functions.get(rule.endpoint), rule.rule
+    return None, None
+
+
+def _openapi_call(pid, suffix, query=None):
+    """进程内直接调用插件开放接口视图（不发起 HTTP，不触发登录校验）。"""
+    view, rule = _openapi_endpoint(pid, suffix)
+    if not view:
+        return None
+    try:
+        app = current_app._get_current_object()
+        with app.test_request_context(rule, query_string=query or {}):
+            rv = view()
+        if isinstance(rv, tuple):
+            rv = rv[0]
+        if hasattr(rv, 'get_json'):
+            return rv.get_json(silent=True)
+        if isinstance(rv, (dict, list)):
+            return rv
+        if isinstance(rv, str):
+            return json.loads(rv)
+        return None
+    except Exception as e:
+        print('[插件开放接口] 调用失败 %s%s: %s' % (pid, suffix, e))
+        return None
+
+
+def plugin_openapi_status(pid):
+    """探测插件开放接口是否可用，并取回数据集声明。结果按进程缓存。"""
+    if pid in _openapi_status_cache:
+        return _openapi_status_cache[pid]
+    has_rows = _openapi_endpoint(pid, _OPENAPI_SUFFIX_ROWS)[0] is not None
+    ds = _openapi_call(pid, _OPENAPI_SUFFIX_DATASETS, {})
+    if not has_rows:
+        st = {'supported': False, 'reason': '未实现 %s（数据开放接口缺失）' % _OPENAPI_SUFFIX_ROWS, 'tables': []}
+    elif not isinstance(ds, dict) or not isinstance(ds.get('tables'), list):
+        st = {'supported': False, 'reason': '未实现 %s 或返回格式不符' % _OPENAPI_SUFFIX_DATASETS, 'tables': []}
+    else:
+        st = {'supported': True, 'version': ds.get('openapi'), 'tables': ds['tables'],
+              'plugin': ds.get('plugin', pid)}
+    _openapi_status_cache[pid] = st
+    return st
+
+
+def plugin_openapi_rows(pid, table, limit=200, offset=0):
+    """按开放接口分页取数。返回 {'rows': [...], 'total': int|None, 'fields': [...]}，失败返回 None。"""
+    try:
+        limit = max(1, min(int(limit), _OPENAPI_MAX_ROWS))
+        offset = max(0, int(offset))
+    except Exception:
+        limit, offset = 200, 0
+    r = _openapi_call(pid, _OPENAPI_SUFFIX_ROWS,
+                      {'table': table, 'limit': str(limit), 'offset': str(offset)})
+    if not isinstance(r, dict):
+        return None
+    return {'rows': r.get('rows') or [], 'total': r.get('total'), 'fields': r.get('fields') or []}
+
+
+def plugin_data_sources():
+    """外部插件数据源清单（供平台 AI 读取）。
+
+    数据开放是**开发时的硬要求**：插件必须实现 OpenAPI v1 两个只读接口（见《插件开发规范》§13）。
+    平台优先走开放接口（access='openapi'）；老插件/未实现接口的，回退直读 data/<插件id>.db
+    （access='db'，AI 上下文会显式标注"直读兜底"，不假装接口已开放）。
+
+    manifest 的 `data_open` 仍用于边界声明（可选）：
+        'data_open': {'ai_readable': True, 'tables': [...], 'description': '...'}
+    """
+    out = []
+    try:
+        enabled = _enabled_ids()
+    except Exception:
+        enabled = set()
+    builtin = {p['id'] for p in PLUGINS}
+    data_dir = os.path.join(_app_dir(), 'data')
+    for pid, man in _manifest_map().items():
+        if pid in builtin:
+            continue
+        decl = man.get('data_open') or {}
+        tables = list(decl.get('tables') or man.get('tables') or [])
+        st = plugin_openapi_status(pid)
+        if st.get('supported'):
+            api_tables = [t.get('name') for t in st.get('tables') or [] if isinstance(t, dict) and t.get('name')]
+            if api_tables:
+                tables = api_tables
+        out.append({
+            'id': pid,
+            'name': man.get('name', pid),
+            'enabled': pid in enabled,
+            'ai_readable': bool(decl.get('ai_readable', True)),
+            'tables': tables,
+            'db_path': os.path.join(data_dir, pid + '.db'),
+            'note': decl.get('description', ''),
+            'access': 'openapi' if st.get('supported') else 'db',
+            'openapi': st,
+        })
+    return out
+
+
+def plugin_manifest(pid):
+    """取插件 manifest：内置静态表优先，其次目录发现的外部插件。"""
+    for p in PLUGINS:
+        if p['id'] == pid:
+            return dict(p)
+    return dict(_manifest_map().get(pid) or {})
+
+
+def plugin_home_url(pid):
+    """插件首页 URL（用于平台外壳页 iframe 嵌入）。"""
+    man = plugin_manifest(pid)
+    ep = man.get('endpoint')
+    if ep:
+        try:
+            return url_for(ep)
+        except Exception:
+            pass
+    return man.get('url_prefix') or ('/' + pid)
+
+
+def plugin_is_external(pid):
+    """是否外来插件（需要外壳页）：仅限上传安装（install_type=upload），平台自带/目录型不算。"""
+    if any(p['id'] == pid for p in PLUGINS):
+        return False
+    return pid in _shell_plugin_ids()
+
+
 def _enabled_ids():
-    db = get_db()
-    rows = db.execute('SELECT id, enabled FROM plugin_registry').fetchall()
+    # v12.7.10.14：上传插件请求内 get_db() 会被路由到插件独立库，
+    # 系统表 plugin_registry 必须走主库独立短连接，否则 no such table。
+    try:
+        con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+        con.row_factory = sqlite3.Row
+        rows = con.execute('SELECT id, enabled FROM plugin_registry').fetchall()
+        con.close()
+    except Exception:
+        return set()
     return {r['id'] for r in rows if r['enabled']}
 
 
@@ -430,6 +700,12 @@ def get_plugins_admin():
         item['registered'] = bool(row)
         item['install_type'] = row['install_type'] if row and row['install_type'] else 'builtin'
         item['enabled'] = bool(row['enabled']) if row else True
+        # v12.7.10.16：是否在 manifest 里显式声明了来源（未声明的外部插件会在管理页提示补声明）
+        try:
+            _man = _manifest_map().get(pid) or {}
+            item['source_declared'] = bool(str(_man.get('source') or '').strip())
+        except Exception:
+            item['source_declared'] = False
         # v12.4.5 表登记：该插件在 plugin_tables 中的 逻辑名→实际名 映射
         item['table_map'] = []
         try:
@@ -462,8 +738,8 @@ def uninstall_plugin(plugin_id):
         return False, '插件未登记'
     if row['core']:
         return False, '核心插件不可卸载'
-    if row['install_type'] != 'upload':
-        return False, '内置插件不可卸载（仅管理页上传安装的插件可卸载）'
+    if row['install_type'] not in ('upload', 'dir'):
+        return False, '平台内置功能不可卸载；仅"上传安装 / 目录接入"的外部插件可卸载'
     db = get_db()
     db.execute('UPDATE plugin_registry SET enabled=0 WHERE id=?', (plugin_id,))
     db.execute('DELETE FROM user_plugins WHERE plugin_id=?', (plugin_id,))
@@ -479,6 +755,7 @@ def uninstall_plugin(plugin_id):
         _manifest_prefix_cache.pop(k, None)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
     _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
+    invalidate_openapi_cache()  # v12.7.10.10：新装的插件要重新探测数据开放接口
     return True, f'插件 {plugin_id} 已卸载（业务数据表保留）。重启系统后彻底移除。'
 
 
@@ -511,6 +788,7 @@ def register_uploaded_plugin(plugin_id, manifest, blueprint=None):
             _manifest_prefix_cache.setdefault(str(pfx), plugin_id)
     _invalidate_manifest_cache()  # v12.5.28 性能修复：目录已变，失效 manifest 缓存
     _invalidate_upload_cache()  # v12.7.0：上传/卸载改变 upload 集合，失效独立库路由缓存
+    invalidate_openapi_cache()  # v12.7.10.10：新装插件的开放接口需重新探测
     return True
 
 
@@ -528,7 +806,9 @@ _LEGACY_TABLE_PREFIXES = ('wbs_', 'reqcollect_', 'test_', 'ai_', 'production_', 
 # 平台系统表（非插件业务表）
 _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'user_plugins', 'operation_logs', 'ai_providers',
-                           'ai_chat_logs', 'approval_requests'}
+                           'ai_chat_logs', 'approval_requests',
+                           # v12.7.10.10 平台自身新表（非插件建表，无需登记 plugin_tables）
+                           'user_sessions', 'ui_prefs'}
 # 平台早期无前缀遗留业务表（白名单豁免；v12.4.8 已删除 42 张 8 模块时代业务表，
 # 仅剩 users/tasks 两张核心在用：登录与工作台待办）
 _PLATFORM_LEGACY_TABLES = {'users', 'tasks'}
@@ -728,3 +1008,88 @@ def check_plugin_tables_integrity():
     except Exception as e:
         warnings.append(f'表一致性校验执行异常：{e}')
     return warnings, infos
+
+# ============================================================
+# v13.0.0.1 启动自愈：外部插件表结构与独立库缺失自动修复
+# 背景：插件建表原是"页面首次访问时惰性触发"，一旦插件库缺失/被清空，
+#       管理页会满是"尚未建表"告警，且用户不点开插件页就永远不自愈。
+# ============================================================
+def _seed_dir():
+    return os.path.join(_app_dir(), 'data', '_seed')
+
+
+def restore_plugin_db_if_empty(plugin_id):
+    """插件独立库缺失/空库时，从 data/_seed/<id>.db 恢复一份。
+    只恢复"空库"，绝不覆盖已有数据。返回 (是否恢复, 说明)"""
+    src = os.path.join(_seed_dir(), plugin_id + '.db')
+    dst = os.path.join(_app_dir(), 'data', plugin_id + '.db')
+    if not os.path.isfile(src):
+        return False, '无种子库'
+    need = False
+    try:
+        if not os.path.isfile(dst) or os.path.getsize(dst) < 4096:
+            need = True
+        else:
+            con = sqlite3.connect(dst, timeout=3.0)
+            n = len(con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+            con.close()
+            need = (n == 0)
+    except Exception:
+        need = True
+    if not need:
+        return False, '库正常'
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        for suffix in ('-wal', '-shm'):
+            side = dst + suffix
+            if os.path.isfile(side):
+                os.remove(side)
+        return True, '已从种子库恢复'
+    except Exception as e:
+        return False, f'恢复失败：{e}'
+
+
+def ensure_external_plugin_tables():
+    """启动时把所有外部插件（upload / dir）的表真实建出来（幂等）。
+    返回可读报告列表。"""
+    report = []
+    try:
+        import importlib
+        from plugins import discover_plugins
+    except Exception as e:
+        return [f'无法加载插件包：{e}']
+    _found = discover_plugins()
+    _pairs = _found.items() if hasattr(_found, 'items') else _found
+    for pid, mod in _pairs:
+        try:
+            man = getattr(mod, 'manifest', {}) or {}
+            it = _manifest_install_type(pid, man)
+            if it not in ('upload', 'dir'):
+                continue  # 内置插件表在 init_plugin_tables 里已建
+            restored, note = restore_plugin_db_if_empty(pid)
+            target = None
+            try:
+                target = importlib.import_module(f'plugins.{pid}.routes')
+            except Exception as e:
+                report.append(f'{pid}: 路由导入失败 {e}')
+                continue
+            fn = getattr(target, 'ensure_schema', None)
+            if not callable(fn):
+                report.append(f'{pid}: 缺 ensure_schema（跳过建表）')
+                continue
+            fn()
+            n = 0
+            pdb = os.path.join(_app_dir(), 'data', pid + '.db')
+            if os.path.isfile(pdb):
+                con = sqlite3.connect(pdb, timeout=3.0)
+                n = len(con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+                con.close()
+            report.append(f'{pid}: 表就绪（{n} 张）' + (f'，{note}' if restored else ''))
+        except Exception as e:
+            report.append(f'{pid}: 自愈失败 {e}')
+    return report
+

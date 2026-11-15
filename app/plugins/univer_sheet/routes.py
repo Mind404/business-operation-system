@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""云文档表格插件。
+"""需求统计管理插件。
 
 本插件将 Univer 开源项目（https://github.com/dream-num/univer，v1.3.1）
 官方 SDK 构建产物真实接入平台：
@@ -148,7 +148,7 @@ def new_room():
                 (name, desc, cur))
             db.commit()
             rid = db.execute('SELECT id FROM univer_rooms WHERE name=?', (name,)).fetchone()['id']
-            log_operation('云文档表格', '新建共享表格', f'新建「{name}」(id={rid})', cur)
+            log_operation('需求统计管理', '新建共享表格', f'新建「{name}」(id={rid})', cur)
             flash(f'共享表格「{name}」已创建', 'ok')
             return redirect(url_for('univer_sheet.open_room', rid=rid))
         except Exception as e:
@@ -191,7 +191,7 @@ def rename_room(rid):
         try:
             db.execute('UPDATE univer_rooms SET name=? WHERE id=?', (name, rid))
             db.commit()
-            log_operation('云文档表格', '重命名表格', '「%s」→「%s」(id=%s)' % (old, name, rid), cur)
+            log_operation('需求统计管理', '重命名表格', '「%s」→「%s」(id=%s)' % (old, name, rid), cur)
             flash('已重命名为「%s」' % name, 'ok')
         except Exception as e:
             db.rollback()
@@ -218,7 +218,7 @@ def delete_room(rid):
     db.execute('UPDATE univer_rooms SET deleted=1, deleted_at=?, deleted_by=? WHERE id=?',
                (now, _username(), rid))
     db.commit()
-    log_operation('云文档表格', '删除共享表格(入回收站)',
+    log_operation('需求统计管理', '删除共享表格(入回收站)',
                   f'删除「{room["name"]}」(id={rid})，已入回收站', _username())
     flash(f'共享表格「{room["name"]}」已删除，可在回收站恢复', 'ok')
     return redirect(url_for('univer_sheet.index'))
@@ -262,7 +262,7 @@ def restore_room(rid):
                    (room['name'] + '（恢复）', rid))
     db.execute('UPDATE univer_rooms SET deleted=0, deleted_at=NULL, deleted_by=NULL WHERE id=?', (rid,))
     db.commit()
-    log_operation('云文档表格', '恢复共享表格', f'恢复「{room["name"]}」(id={rid})', _username())
+    log_operation('需求统计管理', '恢复共享表格', f'恢复「{room["name"]}」(id={rid})', _username())
     flash(f'共享表格「{room["name"]}」已恢复', 'ok')
     return redirect(url_for('univer_sheet.recycle'))
 
@@ -279,7 +279,7 @@ def purge_room(rid):
     db = get_db()
     db.execute('DELETE FROM univer_rooms WHERE id=?', (rid,))
     db.commit()
-    log_operation('云文档表格', '彻底删除共享表格',
+    log_operation('需求统计管理', '彻底删除共享表格',
                   f'彻底删除「{room["name"]}」(id={rid})', _username())
     flash(f'共享表格「{room["name"]}」已彻底删除（不可恢复）', 'ok')
     return redirect(url_for('univer_sheet.recycle'))
@@ -362,7 +362,7 @@ def save_state(rid):
             'updated_by=? WHERE id=?',
             (state, new_version, now, cur, rid))
     db.commit()
-    log_operation('云文档表格', '保存表格', f'保存「{room["name"]}」(id={rid}) v{new_version}', cur)
+    log_operation('需求统计管理', '保存表格', f'保存「{room["name"]}」(id={rid}) v{new_version}', cur)
     return jsonify({'ok': 1, 'version': new_version, 'updated_at': now})
 
 # ------------------------------------------------------------ 导出 ----
@@ -373,21 +373,29 @@ def _snapshot_to_matrix(state):
     """把 Univer Workbook 快照 JSON 转成 (rows, cols, matrix) 矩阵。
 
     matrix[r][c] = 单元格显示值（v 字段或公式结果），r/c 均为 0 起整数。
+    v12.7.9：畸形快照/空快照统一返回 (rows, -1)，不再抛异常（空表导出 CSV 500）。
     """
     try:
         snap = json.loads(state) if state else None
     except Exception:
         snap = None
-    if not snap or not isinstance(snap, dict) or not snap.get('sheets'):
-        return [], []
+    if not snap or not isinstance(snap, dict):
+        return [], -1
+    sheets = snap.get('sheets')
+    if not isinstance(sheets, dict) or not sheets:
+        return [], -1
     first_sheet = None
-    for _k, _s in snap['sheets'].items():
+    for _k, _s in sheets.items():
         first_sheet = _s
         break
-    cell_data = (first_sheet or {}).get('cellData') or {}
+    cell_data = (first_sheet or {}).get('cellData')
+    if not isinstance(cell_data, dict):
+        return [], -1
     rows, cols = [], []
     max_r, max_c = -1, -1
     for rk, row_map in cell_data.items():
+        if not isinstance(row_map, dict):
+            continue
         try:
             r = int(rk)
         except Exception:
@@ -397,7 +405,7 @@ def _snapshot_to_matrix(state):
                 c = int(ck)
             except Exception:
                 continue
-            v = (cell or {}).get('v')
+            v = _cell_text(cell)
             if v is None and (cell or {}).get('s'):
                 v = ''
             if v is None:
@@ -410,16 +418,92 @@ def _snapshot_to_matrix(state):
             if c > max_c:
                 max_c = c
     if max_r < 0:
-        return rows, cols
+        return rows, -1
     return rows, max_c
 
 
+def _seg_text(seg):
+    """从富文本段中提取文本（v12.7.8 补全 Univer 真实结构：body.dataStream）。
+
+    Univer 单元格富文本段落实际结构为
+    {'type':'document','body':{'dataStream':'第一行\\r\\n第二行\\r\\n', ...}}，
+    此前只取 t/v，导致这类单元格导出 Excel / 供 AI 读取时内容整体丢失。
+    同时兼容简化结构（str / {'t':..} / {'v':..} / 嵌套段）。
+    """
+    if seg is None:
+        return ''
+    if isinstance(seg, str):
+        return seg
+    if isinstance(seg, (int, float)):
+        return str(seg)
+    if not isinstance(seg, dict):
+        return ''
+    body = seg.get('body')
+    if isinstance(body, dict):
+        ds = body.get('dataStream')
+        if ds:
+            # 原样返回（含段尾 \r\n）；由 _cell_text 对最终结果统一去尾部换行，
+            # 多段拼接时段间换行得以保留（v12.7.9）
+            return ds
+        t = body.get('t')
+        if t:
+            return t
+        if body.get('children'):
+            return ''.join(_seg_text(ch) for ch in body['children'])
+    t = seg.get('t')
+    if t:
+        return t
+    v = seg.get('v')
+    if v is not None:
+        return str(v)
+    sub = seg.get('p')
+    if isinstance(sub, list):
+        return ''.join(_seg_text(x) for x in sub)
+    if isinstance(sub, dict):
+        return _seg_text(sub)
+    return ''
+
+
+def _cell_text(cell):
+    """单元格显示文本（v12.7.6 修复换行内容缺失；v12.7.8 补 dataStream 富文本；
+    v12.7.9 多段拼接保留段间换行）：
+    优先取 v；v 为空但存在富文本段落 p 时（Univer 中带换行/粘贴内容常存于此），
+    从段落中提取文本拼接，避免导出 Excel / AI 读取时内容整体丢失。
+    """
+    if not cell or not isinstance(cell, dict):
+        return None
+    v = cell.get('v')
+    if v is not None:
+        return v
+    p = cell.get('p')
+    if p is None:
+        return None
+    if isinstance(p, str):
+        return p
+    if isinstance(p, (int, float)):
+        return str(p)
+    if isinstance(p, dict):
+        txt = _seg_text(p)
+        return txt.rstrip('\r\n') if txt else None
+    if isinstance(p, list):
+        txt = ''.join(_seg_text(x) for x in p)
+        return txt.rstrip('\r\n') if txt else None
+    return None
+
+
 def _cell_to_display(v):
-    """单元格值 → 可写入文件的值（数字保持数字、公式结果取 v、True/False 转文本）"""
+    """单元格值 → 可写入文件的值（数字保持数字、公式结果取 v、True/False 转文本）。
+
+    v12.7.9 防公式注入（OWASP CSV Injection）：以 = + - @ 开头的字符串
+    加前缀 '，避免导出文件在 Excel/WPS 打开时被当作公式执行；
+    加前缀不影响显示（Excel 打开仍显示原文）。
+    """
     if v is None:
         return ''
     if isinstance(v, bool):
         return 'TRUE' if v else 'FALSE'
+    if isinstance(v, str) and v and v[0] in '=+-@':
+        return "'" + v
     return v
 
 
@@ -432,31 +516,44 @@ def _snapshot_to_sheets(state):
         snap = json.loads(state) if state else None
     except Exception:
         snap = None
-    if not snap or not isinstance(snap, dict) or not snap.get('sheets'):
+    if not snap or not isinstance(snap, dict):
+        return []
+    sheets = snap.get('sheets')
+    if not isinstance(sheets, dict) or not sheets:
         return []
     out = []
-    for _k, _s in snap['sheets'].items():
-        cd = (_s or {}).get('cellData') or {}
-        rows = {}
-        max_c = -1
-        for rk, row_map in cd.items():
-            try:
-                r = int(rk)
-            except Exception:
-                continue
-            row = {}
-            for ck, cell in row_map.items():
+    for _k, _s in sheets.items():
+        if not isinstance(_s, dict):
+            continue
+        cd = _s.get('cellData')
+        if not isinstance(cd, dict) or not cd:
+            # 空/畸形 sheet：仍导出空表头，不抛异常
+            rows, max_c = {}, -1
+        else:
+            rows = {}
+            max_c = -1
+            for rk, row_map in cd.items():
+                if not isinstance(row_map, dict):
+                    continue
                 try:
-                    c = int(ck)
+                    r = int(rk)
                 except Exception:
                     continue
-                v = (cell or {}).get('v')
-                if v is None and (cell or {}).get('s'):
-                    v = ''
-                row[c] = v
-                if c > max_c:
-                    max_c = c
-            rows[r] = row
+                row = {}
+                for ck, cell in row_map.items():
+                    try:
+                        c = int(ck)
+                    except Exception:
+                        continue
+                    v = _cell_text(cell)
+                    if v is None and (cell or {}).get('s'):
+                        v = ''
+                    if v is None:
+                        continue
+                    row[c] = v
+                    if c > max_c:
+                        max_c = c
+                rows[r] = row
         # 合并区（0-based → Excel 1-based）
         merges = []
         for m in (_s or {}).get('mergeData') or []:
@@ -569,9 +666,16 @@ def export_room(rid):
                 if v == '':
                     continue
                 try:
-                    ws.cell(row=r + 1, column=c + 1, value=v)
+                    cell = ws.cell(row=r + 1, column=c + 1, value=v)
                 except Exception:
-                    ws.cell(row=r + 1, column=c + 1, value=str(v))
+                    cell = ws.cell(row=r + 1, column=c + 1, value=str(v))
+                # v12.7.6：含换行的单元格打开自动换行显示，避免导出后内容被折叠/截断
+                if isinstance(v, str) and '\n' in v:
+                    try:
+                        from openpyxl.styles import Alignment
+                        cell.alignment = Alignment(wrap_text=True, vertical='top')
+                    except Exception:
+                        pass
         # 合并单元格还原
         for (r1, r2, c1, c2) in sh['merges']:
             try:
@@ -606,8 +710,8 @@ def _summary_for_ai(db, max_chars=6000):
         'SELECT id,name,state,version,updated_at,updated_by FROM univer_rooms '
         'ORDER BY COALESCE(updated_at, created_at) DESC, id DESC').fetchall()
     if not rooms:
-        return '【云文档表格】共 0 张'
-    lines = ['【云文档表格】共 %d 张：' % len(rooms)]
+        return '【需求统计管理】共 0 张'
+    lines = ['【需求统计管理】共 %d 张：' % len(rooms)]
     budget_total = max_chars
     base = max(300, budget_total // max(len(rooms), 1))
     for room in rooms:

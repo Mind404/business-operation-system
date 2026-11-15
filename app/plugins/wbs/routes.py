@@ -56,13 +56,68 @@ def _wbs_project_editable(db, pid):
     return False, '仅项目负责人、参与人员或管理员可编辑'
 
 
+def _wbs_project_approved(db, pid):
+    """项目审批态校验（v13.0.0.11）：非管理员写任务前，项目本身必须是「已通过」。
+
+    驳回/待审批的项目，其任务可能仍保留此前的「已通过」标记，
+    只看任务审批态会让成员继续写入已驳回项目，这里按项目态再兜一层。"""
+    p = db.execute('SELECT name, approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return False, '项目不存在'
+    st = (p['approval_status'] or '').strip()
+    if st != '已通过':
+        return False, '项目《%s》当前审批状态为「%s」，任务不可编辑' % (p['name'], st or '未提交')
+    return True, ''
+
+
 def _fmt_date(v):
-    """日期归一化：datetime/date/带时间的字符串 → YYYY-MM-DD（v12.5.11）"""
-    from datetime import datetime, date
-    if isinstance(v, (datetime, date)):
+    """日期归一化（v12.7.6 多格式容错）：任意常见格式 → YYYY-MM-DD；无法解析返回 None。
+
+    支持：
+    - datetime / date 对象
+    - Excel 数值日期序列号（1900 系，如 45701）
+    - 字符串：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 /
+      20261105 / 2026-11-05 10:30（自动截取日期部分）
+    非法值（如 2026-13-99、abc）返回 None，由调用方给出明确错误提示。
+    """
+    from datetime import datetime, date, timedelta
+    if isinstance(v, datetime):
         return v.strftime('%Y-%m-%d')
-    s = str(v or '').strip()
-    return s[:10] if len(s) >= 10 else s
+    if isinstance(v, date):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, (int, float)):
+        try:
+            return (date(1899, 12, 30) + timedelta(days=int(v))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    s = str(v or '').strip().strip('\'"').strip()
+    if not s:
+        return None
+    if _re.fullmatch(r'\d{8}', s):  # 20261105
+        try:
+            return date(int(s[0:4]), int(s[4:6]), int(s[6:8])).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    # 年在前：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 2026-11-5
+    m = _re.search(r'(\d{4})\s*[-/年月.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})(?:日)?', s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(s, fmt).strftime('%Y-%m-%d')
+        except Exception:
+            continue
+    # 美式 MM/DD/YYYY（避免歧义：仅在年月无法匹配时尝试）
+    m = _re.fullmatch(r'(\d{1,2})/(\d{1,2})/(\d{4})', s)
+    if m and 1 <= int(m.group(1)) <= 12:
+        try:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2))).strftime('%Y-%m-%d')
+        except Exception:
+            return None
+    return None
 
 
 def _all_active_users(db):
@@ -163,6 +218,28 @@ def _insert_dup_rows(db, table, rows):
 
 
 # ============================================================
+def _resolve_display(text):
+    """登录名串（逗号分隔）→ 显示名串；查不到的登录名原样保留（v12.7.7）"""
+    if not text:
+        return text
+    names = [x.strip() for x in str(text).split(',') if x.strip()]
+    if not names:
+        return text
+    db = get_db()
+    placeholders = ','.join('?' * len(names))
+    rows = db.execute('SELECT username, display_name FROM users WHERE username IN (%s)'
+                      % placeholders, names).fetchall()
+    m = {r['username']: (r['display_name'] or r['username']) for r in rows}
+    return ','.join(m.get(n, n) for n in names)
+
+
+def _with_owner_disp(row):
+    """任务行 → dict + owner_disp（预警看板负责人列显示名）"""
+    d = dict(row)
+    d['owner_disp'] = _resolve_display(row['owner'])
+    return d
+
+
 @blueprint.route('/wbs', strict_slashes=False)
 def wbs_projects():
     from datetime import date, timedelta
@@ -174,14 +251,16 @@ def wbs_projects():
         SUM(CASE WHEN parent_id=0 THEN 1 ELSE 0 END) AS phase_count
         FROM wbs_tasks GROUP BY project_id''').fetchall()
     count_map = {r['project_id']: (r['task_count'], r['phase_count']) for r in counts}
-    rows = [dict(r, task_count=count_map.get(r['id'], (0,0))[0], phase_count=count_map.get(r['id'], (0,0))[1]) for r in rows]
+    rows = [dict(r, task_count=count_map.get(r['id'], (0,0))[0], phase_count=count_map.get(r['id'], (0,0))[1],
+                 owner_disp=_resolve_display(r['owner']), participants_disp=_resolve_display(r['participants'])) for r in rows]
     # 预警统计
     today = date.today().isoformat()
     soon3 = (date.today() + timedelta(days=3)).isoformat()
     soon7 = (date.today() + timedelta(days=7)).isoformat()
-    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today,)).fetchone()[0]
-    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (today, soon3)).fetchone()[0]
-    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL)", (soon3, soon7)).fetchone()[0]
+    # 口径与预警看板统一：只统计任务级(parent_id>0或NULL)审批已通过的任务，待审批/已驳回不纳入
+    overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today,)).fetchone()[0]
+    due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today, soon3)).fetchone()[0]
+    due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (soon3, soon7)).fetchone()[0]
     return render_template('wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today)
 
 
@@ -195,23 +274,23 @@ def wbs_alerts():
     soon3 = (today + timedelta(days=3)).isoformat()
     soon7 = (today + timedelta(days=7)).isoformat()
     # 逾期（只统计任务级审批通过的任务，待审批/已驳回的不纳入预警）
-    overdue = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    overdue = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end!='' AND t.plan_end<? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (today_s,)).fetchall()
+        ORDER BY t.plan_end ASC''', (today_s,)).fetchall()]
     # 3天内
-    due3 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    due3 = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>=? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()
+        ORDER BY t.plan_end ASC''', (today_s, soon3)).fetchall()]
     # 7天内
-    due7 = db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
+    due7 = [_with_owner_disp(r) for r in db.execute('''SELECT t.*, p.name as project_name, p.id as project_id FROM wbs_tasks t
         JOIN wbs_projects p ON t.project_id=p.id
         WHERE t.plan_end>? AND t.plan_end<=? AND t.status NOT IN ('已完成','已取消') AND (t.parent_id>0 OR t.parent_id IS NULL)
           AND t.approval_status='已通过'
-        ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()
+        ORDER BY t.plan_end ASC''', (soon3, soon7)).fetchall()]
     return render_template('wbs_alerts.html', overdue=overdue, due3=due3, due7=due7, today=today_s)
 
 
@@ -428,6 +507,9 @@ def wbs_project_detail(pid):
     p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
     if not p:
         return redirect(url_for('wbs.wbs_projects'))
+    p = dict(p)
+    p['owner_disp'] = _resolve_display(p.get('owner'))
+    p['participants_disp'] = _resolve_display(p.get('participants'))
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     # 自然排序：按 WBS 编号的数字分段排序（1.10 排在 1.2 之后），同编号按 id 稳定
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
@@ -581,7 +663,12 @@ def wbs_import(pid):
         flash('请选择文件', 'error')
         return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     import openpyxl
-    wb = openpyxl.load_workbook(f, data_only=True)
+    # v12.7.10.18 修复：上传 CSV / 改了后缀的文本 / 损坏文件时，openpyxl 会抛 BadZipFile 直接 500
+    try:
+        wb = openpyxl.load_workbook(f, data_only=True)
+    except Exception:
+        flash('文件打不开：请上传 Excel（.xlsx）格式的 WBS 导入模板（CSV 请先用 Excel 另存为 .xlsx）', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     ws = wb.active
     db = get_db()
     is_admin = session.get('user_role') in ('admin', 'platform_admin')
@@ -594,7 +681,13 @@ def wbs_import(pid):
     inserted = []  # (row_id, wbs_code)
     updated = []   # (row_id, wbs_code)
     skip = 0
+    # ===== v12.7.6 预检：先全量解析校验，任何一行有问题都不写库（冗余设计）=====
+    parsed = []    # [(row_idx, code, name, work_content, owner, collab, p_start, p_end,
+    #               deliverable, status, progress, remark)]
+    errors = []    # 格式错误清单：'第 N 行：计划开始「xxx」无法识别为日期'
+    row_idx = 1    # Excel 行号（表头占第 1 行，数据从第 2 行起）
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
+        row_idx += 1
         if not row or not row[0]:
             continue
         code = str(row[0]).strip()
@@ -606,6 +699,14 @@ def wbs_import(pid):
         collab = str(row[4] or '').strip()
         p_start = _fmt_date(row[5])
         p_end = _fmt_date(row[6])
+        if row[5] is not None and str(row[5]).strip() != '' and p_start is None:
+            errors.append('第 %d 行：计划开始「%s」无法识别为日期，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 20261105'
+                          % (row_idx, str(row[5]).strip()))
+        if row[6] is not None and str(row[6]).strip() != '' and p_end is None:
+            errors.append('第 %d 行：计划结束「%s」无法识别为日期（格式同上）'
+                          % (row_idx, str(row[6]).strip()))
+        if p_start and p_end and p_start > p_end:
+            errors.append('第 %d 行：计划开始 %s 晚于计划结束 %s' % (row_idx, p_start, p_end))
         deliverable = str(row[7] or '').strip()
         # 新旧格式识别：第9列（索引8）是状态关键字 → 新 12 列格式（状态|进度|备注）
         # 旧 9 列格式：第9列（索引8）是备注（任意文本）
@@ -614,10 +715,22 @@ def wbs_import(pid):
             status = str(row[8]).strip()
             remark = str(row[10] or '').strip() if len(row) > 10 else ''
             raw_p = (str(row[9]).strip() if row[9] is not None else '')
-            try:
-                progress = int(float(raw_p.rstrip('%')))
-            except Exception:
+            # v12.7.10.10：进度列留空是常态（Excel 里刚排的任务还没填），默认按 0 处理，不再报错
+            if not raw_p:
                 progress = 0
+            else:
+                try:
+                    progress = int(float(raw_p.rstrip('%').strip()))
+                except Exception:
+                    # 兼容 "50%" / "50 ％" / "５０" / "完成一半" 之类
+                    import re as _re
+                    m = _re.search(r'\d+', raw_p)
+                    if m:
+                        progress = int(m.group(0))
+                    else:
+                        errors.append('第 %d 行：进度「%s」无法识别为 0-100 的数字（留空则按 0 处理）'
+                                      % (row_idx, raw_p))
+                        progress = 0
         else:
             status = ''
             remark = str(row[8] or '').strip() if len(row) > 8 else ''
@@ -625,6 +738,19 @@ def wbs_import(pid):
         if status not in ('未开始', '进行中', '已完成', '阻塞'):
             status = '未开始'
         progress = max(0, min(100, progress))
+        parsed.append((row_idx, code, name, work_content, owner, collab,
+                       p_start, p_end, deliverable, status, progress, remark))
+    if errors:
+        head = '导入未执行：发现 %d 处格式问题，请修正后重新导入。' % len(errors)
+        for e in errors[:10]:
+            head += '<br>· ' + e
+        if len(errors) > 10:
+            head += '<br>· …共 %d 处' % len(errors)
+        flash(head, 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    # ===== 预检通过，正式写入 =====
+    for (row_idx, code, name, work_content, owner, collab,
+         p_start, p_end, deliverable, status, progress, remark) in parsed:
         if code in existing:
             if is_admin:
                 # 批量更新：替换内容、状态、进度、备注（保留审批状态、进展、产出物、附件）
@@ -684,7 +810,7 @@ def wbs_task_inline(tid):
     t = db.execute('SELECT * FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'ok': False, 'msg': '任务不存在'}), 404
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     field = data.get('field')
     value = data.get('value', '')
     admin = session.get('user_role') in ('admin', 'platform_admin')
@@ -695,6 +821,9 @@ def wbs_task_inline(tid):
         allowed = editable_admin
     elif member:
         # 项目成员（普通用户）：仅已通过任务的执行字段
+        okp, msgp = _wbs_project_approved(db, t['project_id'])
+        if not okp:
+            return jsonify({'ok': False, 'msg': msgp}), 403
         if t['approval_status'] != '已通过':
             return jsonify({'ok': False, 'msg': '任务待审批通过后才能编辑'}), 403
         allowed = {'status','progress','remark'}
@@ -710,6 +839,17 @@ def wbs_task_inline(tid):
             value = 0
     if field in ('plan_start', 'plan_end'):
         value = _fmt_date(value)
+        if value is None:
+            return jsonify({'ok': False, 'msg': '日期格式无法识别，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日'}), 400
+    # v12.7.10.22 修复：行内保存 WBS 编号必须做同项目唯一校验，否则会出现两行同编号、层级挂接歧义
+    if field == 'wbs_code':
+        value = (value or '').strip()
+        if value:
+            dup = db.execute('SELECT id, name FROM wbs_tasks WHERE project_id=? AND wbs_code=? AND id!=?',
+                             (t['project_id'], value, tid)).fetchone()
+            if dup:
+                return jsonify({'ok': False,
+                                'msg': f'WBS编号「{value}」已被任务「{dup["name"]}」占用，请换一个编号'}), 400
     old_value = t[field]
     db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
     db.commit()
@@ -815,14 +955,18 @@ def wbs_project_tasks_resubmit(pid):
 def wbs_task_notes_data(tid):
     import json
     db = get_db()
-    t = db.execute('SELECT notes, approval_status FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    t = db.execute('SELECT notes, approval_status, project_id FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if not t:
         return jsonify({'notes': [], 'approval_ok': False})
     try:
         notes = json.loads(t['notes']) if t['notes'] else []
     except Exception:
         notes = []
-    return jsonify({'notes': notes, 'approval_ok': t['approval_status'] == '已通过'})
+    approved = t['approval_status'] == '已通过'
+    if not _wbs_is_admin():
+        okp, _ = _wbs_project_approved(db, t['project_id'])
+        approved = approved and okp
+    return jsonify({'notes': notes, 'approval_ok': approved})
 
 
 @blueprint.route('/wbs/task/<int:tid>/note', methods=['POST'])
@@ -838,7 +982,11 @@ def wbs_task_add_note(tid):
     ok, msg = _wbs_project_editable(db, t['project_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg}), 403
-    data = request.get_json(force=True)
+    if session.get('user_role') not in ('admin', 'platform_admin'):
+        okp, msgp = _wbs_project_approved(db, t['project_id'])
+        if not okp:
+            return jsonify({'ok': False, 'msg': msgp}), 403
+    data = request.get_json(silent=True) or {}
     content = (data.get('content') or '').strip()
     if not content:
         return jsonify({'ok': False, 'msg': '内容为空'}), 400
@@ -870,7 +1018,7 @@ def wbs_task_update_note(tid):
     ok, msg = _wbs_project_editable(db, t['project_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg}), 403
-    data = request.get_json(force=True)
+    data = request.get_json(silent=True) or {}
     try:
         idx = int(data.get('index', -1))
     except (TypeError, ValueError):
@@ -967,7 +1115,7 @@ def wbs_template():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注']
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始(YYYY-MM-DD)','计划结束(YYYY-MM-DD)','交付物/判定标准','状态','进度','备注']
     header_fill = PatternFill('solid', fgColor='2B579A')
     header_font = Font(color='FFFFFF', bold=True, size=11)
     thin = Side(style='thin', color='D0D7E5')
@@ -995,6 +1143,18 @@ def wbs_template():
             cell.alignment = Alignment(vertical='center', wrap_text=True)
             if '.' not in str(row[0]):
                 cell.fill = PatternFill('solid', fgColor='D6E4F5')
+    # 日期格式说明批注（v12.7.6：时间格式容错提示）
+    try:
+        from openpyxl.comments import Comment
+        for rr in range(2, 2 + len(samples)):
+            c6 = ws.cell(row=rr, column=6)
+            c7 = ws.cell(row=rr, column=7)
+            note = Comment('日期支持：2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 20261105；'
+                           '也支持 Excel 日期类型直接填写。', '业务高效运转系统', height=90, width=320)
+            c6.comment = note
+            c7.comment = note
+    except Exception:
+        pass
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -1013,7 +1173,10 @@ def wbs_export(pid):
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'WBS计划'
-    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注']
+    # v12.7.10.12：补上页面有、导出缺的两列「进展」「产出物」。
+    # 注意：导入是按列位置解析的（第9列必须是状态关键字），因此新列只能追加在最后，
+    # 导入端读到多出来的列会忽略，导出文件原样导回不会错列。
+    headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注','进展','产出物']
     header_fill = PatternFill('solid', fgColor='2B579A')
     thin = Side(style='thin', color='D0D7E5')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -1021,26 +1184,68 @@ def wbs_export(pid):
         c = ws.cell(row=1, column=i, value=h)
         c.fill = header_fill; c.font = Font(color='FFFFFF', bold=True, size=11)
         c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True); c.border = border
-    widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20]
+    widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20, 42, 24]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     r = 2
     for t in tasks:
         is_phase = '.' not in (t['wbs_code'] or '')
+        notes_txt = _notes_export_text(t['notes'])
         vals = [t['wbs_code'], _xlsx_safe(t['name']), _xlsx_safe(t['work_content']), _xlsx_safe(t['owner'] or ''), _xlsx_safe(t['collaborators'] or ''),
                 t['plan_start'] or '', t['plan_end'] or '', _xlsx_safe(t['deliverable'] or ''),
-                t['status'] or '未开始', t['progress'] or 0, _xlsx_safe(t['remark'] or '')]
+                t['status'] or '未开始', t['progress'] or 0, _xlsx_safe(t['remark'] or ''),
+                _xlsx_safe(notes_txt), _xlsx_safe(_attach_export_text(t['attachment_path']))]
         for c, v in enumerate(vals, 1):
             cell = ws.cell(row=r, column=c, value=v)
             cell.border = border
             cell.alignment = Alignment(vertical='center', wrap_text=True)
             if is_phase:
                 cell.fill = PatternFill('solid', fgColor='D6E4F5')
+        # 进展是多行流水：按行数把行高撑开，避免 Excel 里只看到第一行
+        n_lines = notes_txt.count('\n') + 1 if notes_txt else 1
+        if n_lines > 1:
+            ws.row_dimensions[r].height = min(15.0 * n_lines + 3, 160)
         r += 1
     from io import BytesIO
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     fname = f'WBS_{p["name"]}.xlsx'.replace('/', '_')
     return _send_bytes(buf.getvalue(), fname)
+
+
+def _notes_export_text(raw):
+    """v12.7.10.12 把 wbs_tasks.notes（JSON 流水）合并成多行文本：时间 登记人：内容"""
+    if not raw:
+        return ''
+    try:
+        notes = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return ''
+    if not isinstance(notes, list):
+        return ''
+    lines = []
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        d = str(n.get('date') or '').strip()
+        a = str(n.get('author') or '').strip()
+        c = str(n.get('content') or '').replace('\r', '').strip()
+        head = ' '.join(x for x in (d, a) if x)
+        lines.append(f'{head}：{c}' if head else c)
+    return '\n'.join(lines)
+
+
+def _attach_export_text(raw):
+    """v12.7.10.12 attachment_path（分号分隔，可能带目录）→ 只取文件名，用「、」连接"""
+    if not raw:
+        return ''
+    out = []
+    for x in str(raw).split(';'):
+        x = x.strip()
+        if not x:
+            continue
+        base = os.path.basename(x.replace('\\', '/'))
+        out.append(base or x)
+    return '、'.join(out)
 
 
 def _xlsx_safe(v):

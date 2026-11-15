@@ -1,9 +1,16 @@
 {% extends "base.html" %}
 {% block title %}用户管理 - 业务运转系统{% endblock %}
 {% block content %}
-<div class="page-header">
-    <h1>👥 用户管理</h1>
-    <p class="page-desc">创建用户、分配角色权限、启停账号、重置密码</p>
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+    <div>
+        <h1>👥 用户管理</h1>
+        <p class="page-desc">创建用户、分配角色权限、启停账号、重置密码</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <a href="{{ url_for('admin_users_export') }}" class="btn"
+           style="padding:8px 16px;background:#fff;border:1px solid #2563eb;color:#2563eb;border-radius:6px;font-size:13px;text-decoration:none;white-space:nowrap;"
+           title="导出全部人员在册信息，CSV 可直接用 Excel 打开">⬇ 导出全部人员（{{ users|length }} 人）</a>
+    </div>
 </div>
 
 <!-- 创建用户 -->

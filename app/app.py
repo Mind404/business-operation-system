@@ -8,16 +8,33 @@ import sys
 # 便携版兼容：确保脚本所在目录（app\）在模块搜索路径中。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sqlite3
+import json
+import re
+import secrets
 import random
 import io
 import gzip
+import importlib
 from datetime import datetime, date, timedelta
 import time
+import threading
+
+# v13.0.0 恢复闸门：整库恢复时若其它线程仍在读写同一库，SQLite 在线 backup 会与活动事务冲突，
+# 抛 disk I/O error 并把后续请求打成 500（用户侧表现为"点恢复没反应、系统坏掉"）。
+# 恢复期间短暂拦住新请求，完成后必定放行。
+_RESTORE_GATE = threading.Event()
+_RESTORE_LOCK = threading.Lock()
+
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, session, flash, send_file, send_from_directory, current_app, Response
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+
+try:
+    from config import APP_VERSION
+except Exception:
+    APP_VERSION = '13.0.0.11'
 
 # v12.7.2 性能优化：WSGI 层 gzip 压缩中间件（静态文件也能压缩，15MB manifest→~4MB）
 class GzipMiddleware:
@@ -30,18 +47,24 @@ class GzipMiddleware:
         if 'gzip' not in accept_encoding.lower():
             return self.wsgi_app(environ, start_response)
 
-        self._do_gzip = False
+        # v12.7.5 修复：gzip 决策必须为「每次请求独立」的局部状态。
+        # 原实现用 self._do_gzip（实例属性）跨请求共享，waitress 多线程下并发请求会互相污染：
+        # 大响应（>1KB 置 True）与小响应（保存接口约 57 字节）同时进入时，小响应被误压缩
+        # 但响应头未更新（Content-Length 未移除、无 Content-Encoding），
+        # 导致 waitress 报 "application-written content exceeded ... Content-Length header" 并截断响应体，
+        # 前端解析保存结果失败 → 数据看似丢失。改为 __call__ 内局部容器，每请求独立。
+        state = {'do_gzip': False}
         def custom_start_response(status, headers, exc_info=None):
             headers_list = list(headers)
             headers_dict = dict(headers_list)
             content_type = headers_dict.get('Content-Type', '')
-            content_length = int(headers_dict.get('Content-Length', 0))
+            content_length = int(headers_dict.get('Content-Length', 0) or 0)
             compressible = (content_type.startswith('text/') or
                             'application/json' in content_type or
                             'application/javascript' in content_type or
                             'application/xml' in content_type)
             if compressible and content_length > 1024:
-                self._do_gzip = True
+                state['do_gzip'] = True
                 # 移除 Content-Length（压缩后大小变了），加 gzip 头
                 headers_list = [(k, v) for k, v in headers_list if k.lower() != 'content-length']
                 headers_list.append(('Content-Encoding', 'gzip'))
@@ -49,7 +72,7 @@ class GzipMiddleware:
             return start_response(status, headers_list, exc_info)
 
         result = self.wsgi_app(environ, custom_start_response)
-        if self._do_gzip:
+        if state['do_gzip']:
             data = b''.join(result)
             compressed = gzip.compress(data, compresslevel=6)
             return [compressed]
@@ -185,14 +208,241 @@ def _limit_body_size():
         return jsonify({'ok': False, 'msg': '请求体过大（超过 64MB 上限）'}), 413
 
 
+# ============================================================
+# v12.7.10.10 单账号单设备登录（挤下线）
+#   一个账号在库里只保留一个有效令牌；新设备登录只覆盖令牌，
+#   旧设备的令牌立即不匹配，下一次请求就被登出并提示"已在另一处登录"。
+# ============================================================
+def _bind_login_session(user_id):
+    """登录成功时绑定本次会话令牌，覆盖该账号的旧令牌（= 把旧设备挤下线）。"""
+    token = secrets.token_hex(16)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ip = (request.headers.get('X-Forwarded-For') or request.remote_addr or '')[:64]
+    ua = (request.headers.get('User-Agent') or '')[:120]
+    try:
+        db = get_db()
+        db.execute(
+            'INSERT INTO user_sessions (user_id, token, ip, user_agent, login_at, last_seen) '
+            'VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+            'token=excluded.token, ip=excluded.ip, user_agent=excluded.user_agent, '
+            'login_at=excluded.login_at, last_seen=excluded.last_seen',
+            (user_id, token, ip, ua, now, now))
+        db.commit()
+    except Exception as e:
+        # 令牌表异常不能让登录不可用：退化为不校验（记日志）
+        print('=== _bind_login_session error ===', e)
+    session['sess_token'] = token
+    return token
+
+
+def _clear_login_session(user_id):
+    try:
+        db = get_db()
+        db.execute('DELETE FROM user_sessions WHERE user_id=?', (user_id,))
+        db.commit()
+    except Exception:
+        pass
+
+
+def _session_is_current():
+    """当前会话令牌是否仍是该账号的有效令牌（False = 已被其他地方登录挤掉）。"""
+    uid = session.get('user_id')
+    if not uid:
+        return False
+    token = session.get('sess_token')
+    if not token:
+        # 升级前建立的老会话：认领为当前令牌，升级后不打断在线用户
+        _bind_login_session(uid)
+        return True
+    try:
+        row = get_db().execute('SELECT token FROM user_sessions WHERE user_id=?', (uid,)).fetchone()
+    except Exception:
+        return True
+    if not row:
+        _bind_login_session(uid)
+        return True
+    return row['token'] == token
+
+
+# ============================================================
+# v12.7.10.10 导航排序（平台管理员拖拽后保存，所有用户生效）
+# ============================================================
+NAV_ADMIN_ITEMS = [
+    {'id': 'admin_users',    'name': '用户管理',     'icon': '👥', 'endpoint': 'admin_users',    'nav_path': '/admin/users'},
+    {'id': 'admin_plugins',  'name': '插件管理',     'icon': '🧩', 'endpoint': 'admin_plugins',  'nav_path': '/admin/plugins'},
+    {'id': 'admin_backup',   'name': '数据备份',     'icon': '💾', 'endpoint': 'admin_backup',   'nav_path': '/admin/backup'},
+    {'id': 'admin_ai',       'name': 'AI 智能分析',  'icon': '🤖', 'endpoint': 'ai_admin.index', 'nav_path': '/admin/ai'},
+]
+_NAV_KEY_RE = re.compile(r'^[a-z0-9_-]{1,40}$')
+
+
+def _nav_order():
+    try:
+        row = get_db().execute("SELECT v FROM ui_prefs WHERE k='nav_order'").fetchone()
+        if row and row['v']:
+            data = json.loads(row['v'])
+            return [k for k in data if isinstance(k, str) and _NAV_KEY_RE.match(k)]
+    except Exception:
+        pass
+    return []
+
+
+def _apply_nav_order(items, order):
+    """按保存的顺序重排；未记录的项排在后面，保持原有相对顺序。"""
+    if not order:
+        return items
+    idx = {k: i for i, k in enumerate(order)}
+    return sorted(items, key=lambda it: idx.get(it.get('id'), len(order) + 1))
+
+
+@app.route('/plugin-shell/<pid>')
+def plugin_shell(pid):
+    """v12.7.10.10 外来插件外壳页：顶部固定"返回平台"，内容区 iframe 嵌入插件首页。
+
+    外来插件（上传安装 / 目录发现）通常不继承平台 base.html，直接进页面后没有导航，
+    用户无法回到平台；统一走这里就能保证任何外来插件都有明确的返回入口。
+    """
+    man = plugin_system.plugin_manifest(pid)
+    if not man:
+        flash('插件不存在或不是外部插件', 'error')
+        return redirect(url_for('index'))
+    home = plugin_system.plugin_home_url(pid)
+    # v13.0.0.7：目录型插件自带平台导航，不再套外壳页，避免"外壳 + 平台导航"双层结构；
+    # 旧链接（/plugin-shell/<dir插件>）直接转跳到插件首页，行为等价且更轻。
+    if home.startswith('/plugin-shell'):
+        home = man.get('url_prefix') or ('/' + pid)
+    if not plugin_system.plugin_is_external(pid):
+        return redirect(home)
+    return render_template('plugin_shell.html', pid=pid,
+                           plugin_name=man.get('name', pid), plugin_icon=man.get('icon', '🧩'),
+                           home_url=home)
+
+
+@app.route('/admin/nav/order', methods=['POST'])
+def admin_nav_order():
+    """保存导航项顺序（仅平台管理员）。"""
+    if session.get('user_role') != 'platform_admin':
+        return jsonify({'ok': False, 'msg': '仅平台管理员可调整导航顺序'}), 403
+    keys = (request.get_json(silent=True) or {}).get('keys') or []
+    keys = [k for k in keys if isinstance(k, str) and _NAV_KEY_RE.match(k)][:60]
+    try:
+        db = get_db()
+        _ensure_ui_prefs(db)
+        db.execute("INSERT INTO ui_prefs (k, v, updated_at) VALUES ('nav_order', ?, ?) "
+                   "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
+                   (json.dumps(keys), datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        db.commit()
+        return jsonify({'ok': True, 'keys': keys})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': '保存失败：%s' % e})
+
+
+@app.route('/admin/nav/order/reset', methods=['POST'])
+def admin_nav_order_reset():
+    if session.get('user_role') != 'platform_admin':
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    try:
+        db = get_db()
+        _ensure_ui_prefs(db)
+        db.execute("DELETE FROM ui_prefs WHERE k='nav_order'")
+        db.commit()
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': '重置失败：%s' % e})
+
+
+# v12.7.10.22：补一个轻量健康检查端点（部署监控/脚本探活都在找它，此前缺失返回 404）
+@app.route('/healthz')
+def healthz():
+    from flask import jsonify as _jsonify
+    try:
+        from config import APP_VERSION
+    except Exception:
+        APP_VERSION = '13.0.0.11'
+    ok = True
+    try:
+        get_db().execute('SELECT 1').fetchone()
+    except Exception:
+        ok = False
+    return _jsonify({'ok': ok, 'db': ok, 'version': APP_VERSION}), (200 if ok else 503)
+
+
+# v12.7.10.23：405 兜底 —— 停用插件的"只接受提交"路由用浏览器直接打开时，
+# Flask 在方法匹配阶段就返回 405（before_request 还没跑），用户会看到英文错误页。
+# 这里识别插件归属：插件已停用 → 中文提示并回工作台；其余情况给中文说明页。
+@app.errorhandler(405)
+def _handle_405(e):
+    pid = None
+    try:
+        pid = plugin_system._plugin_id_for_path(request.path) \
+            or plugin_system._manifest_prefix_plugin(request.path)
+    except Exception:
+        pid = None
+    pname = pid or ''
+    if pid:
+        try:
+            row = get_db().execute('SELECT name, enabled FROM plugin_registry WHERE id=?', (pid,)).fetchone()
+            if row is not None:
+                pname = row['name'] or pid
+                if not row['enabled']:
+                    flash('插件「%s」当前已停用，该操作不可用。可在「插件管理」里启用后再试。' % pname, 'warning')
+                    return redirect(url_for('index'))
+        except Exception:
+            pass
+    from flask import jsonify as _j
+    if request.path.startswith('/api/') or request.path.endswith('/__openapi/rows'):
+        return _j({'ok': False, 'msg': '该地址不支持当前请求方式'}), 405
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+            '<title>操作方式不支持</title>'
+            '<div style="font:15px/1.8 system-ui;padding:40px;max-width:640px;margin:0 auto">'
+            '<h2 style="margin:0 0 12px">这个地址不支持直接打开</h2>'
+            '<p style="color:#555">当前请求方式（GET）在该地址上不可用，通常说明它需要从页面里点按钮提交。</p>'
+            '<p style="color:#555">建议回到对应页面操作；如果刚才点的是插件入口，可能该插件已停用。</p>'
+            '<p><a href="/">← 返回工作台</a></p></div></html>'), 405
+
+
+@app.errorhandler(404)
+def _handle_404(e):
+    """v12.7.10.24：地址不存在时给中文说明页，避免非技术用户看到英文 404（插件被卸载/改名后最常见）"""
+    from flask import jsonify as _j
+    if request.path.startswith('/api/') or request.path.endswith('/__openapi/rows'):
+        return _j({'ok': False, 'msg': '接口不存在'}), 404
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+            '<title>页面不存在</title>'
+            '<div style="font:15px/1.8 system-ui;padding:40px;max-width:640px;margin:0 auto">'
+            '<h2 style="margin:0 0 12px">这个页面不存在</h2>'
+            '<p style="color:#555">地址可能已经变更；如果它原来属于某个插件，也可能是该插件已被停用或卸载。</p>'
+            '<p style="color:#555">可以从下面回到工作台，再从导航里重新选择功能。</p>'
+            '<p><a href="/">← 返回工作台</a></p></div></html>'), 404
+
+
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
     ep = request.endpoint or ''
-    if ep in ('login', 'static') or ep.endswith('.static'):
+    if ep in ('login', 'static', 'healthz') or ep.endswith('.static'):
         return None
     if 'user_id' not in session:
         return redirect(url_for('login', next=request.path))
+    # v12.7.10.10 单账号单设备：令牌不一致 = 该账号已在别处登录，本会话作废
+    if not _session_is_current():
+        session.clear()
+        return redirect(url_for('login', kicked=1))
+    # v12.7.10.18 安全修复：账号被停用/删除后，已登录的会话必须立即失效（原来只校验令牌）
+    try:
+        _u = get_db().execute("SELECT is_active, COALESCE(deleted,0) AS d FROM users WHERE id=?",
+                              (session.get('user_id'),)).fetchone()
+    except Exception:
+        _u = 'skip'
+    if _u != 'skip':
+        if _u is None:
+            session.clear()
+            flash('登录信息已失效（账号不存在），请重新登录', 'error')
+            return redirect(url_for('login'))
+        if not _u['is_active'] or _u['d']:
+            session.clear()
+            flash('该账号已被停用，请联系平台管理员', 'error')
+            return redirect(url_for('login', disabled=1))
     # 权限校验：检查当前角色是否有权限访问该模块
     endpoint = request.endpoint or ''
     # 工作台和登录相关页面所有角色都可以访问
@@ -231,12 +481,22 @@ def inject_user():
     """所有模板可访问当前用户 + 插件导航上下文"""
     ctx = {'current_user': session.get('user_name'), 'current_role': session.get('user_role')}
     try:
-        ctx.update(plugin_system.inject_nav_context())
+        nav = plugin_system.inject_nav_context()
+        # v12.7.10.10：导航按平台管理员保存的顺序渲染（所有用户生效）
+        order = _nav_order()
+        if order:
+            for key in ('nav_core', 'nav_biz', 'nav_ext'):
+                if nav.get(key):
+                    nav[key] = _apply_nav_order(nav[key], order)
+        ctx.update(nav)
+        ctx['nav_admin'] = _apply_nav_order(list(NAV_ADMIN_ITEMS), order)
+        ctx['nav_order'] = order
     except Exception as e:
         import traceback
         print('=== inject_nav_context error ===')
         traceback.print_exc()
-        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_all_plugins': [], 'user_subscribed': set()})
+        ctx.update({'nav_core': [], 'nav_biz': [], 'nav_ext': [], 'nav_all_plugins': [], 'user_subscribed': set(),
+                    'nav_admin': list(NAV_ADMIN_ITEMS), 'nav_order': []})
     return ctx
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -263,6 +523,8 @@ def login():
             session['user_name'] = user['display_name'] or user['username']
             session['user_role'] = user['role']
             session['username'] = user['username']
+            # v12.7.10.10：绑定本次登录令牌，同账号在其他设备的旧会话随即失效
+            _bind_login_session(user['id'])
             _record_login_success(username)
             log_operation('系统', '登录', f'{user["username"]} 登录系统', user['username'])
             return redirect(next_url if next_url else '/')
@@ -270,12 +532,15 @@ def login():
             _record_login_fail(username)
             error = '用户名或密码错误'
             return render_template('login.html', error=error, next=next_url)
-    return render_template('login.html', next=request.args.get('next', '/'))
+    kicked_msg = '该账号已在其他设备登录，当前设备已下线。如非本人操作，请立即修改密码。' \
+        if request.args.get('kicked') else None
+    return render_template('login.html', next=request.args.get('next', '/'), error=kicked_msg)
 
 @app.route('/logout')
 def logout():
     username = session.get('username', 'unknown')
     log_operation('系统', '登出', f'{username} 退出系统', username)
+    _clear_login_session(session.get('user_id'))
     session.clear()
     return redirect(url_for('login'))
 
@@ -312,6 +577,33 @@ def admin_users():
     db = get_db()
     users = db.execute('SELECT * FROM users WHERE COALESCE(deleted,0)=0 ORDER BY id').fetchall()
     return render_template('user_manage.html', users=users, current_username=session.get('username'))
+
+@app.route('/admin/users/export')
+def admin_users_export():
+    """v12.7.10.10 批量导出人员信息（CSV，Excel 双击可开，UTF-8 BOM 防中文乱码）。"""
+    if not _require_admin():
+        flash('无权限导出人员信息', 'error')
+        return redirect(url_for('index'))
+    db = get_db()
+    rows = db.execute(
+        'SELECT username, display_name, role, is_active, department, created_at '
+        'FROM users WHERE COALESCE(deleted,0)=0 ORDER BY id').fetchall()
+    role_cn = {'platform_admin': '平台管理员', 'admin': '管理员', 'user': '普通用户'}
+    import csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['登录账号', '显示名称', '角色', '状态', '部门', '创建时间'])
+    for r in rows:
+        w.writerow([
+            r['username'], r['display_name'] or '', role_cn.get(r['role'], r['role'] or ''),
+            '启用' if r['is_active'] else '停用', r['department'] or '', r['created_at'] or '',
+        ])
+    data = ('\ufeff' + buf.getvalue()).encode('utf-8')
+    fname = '人员信息_%s.csv' % datetime.now().strftime('%Y%m%d_%H%M')
+    log_operation('系统', '导出', '导出人员信息 %d 条' % len(rows), session.get('username', ''))
+    return send_file(io.BytesIO(data), mimetype='text/csv; charset=utf-8',
+                     as_attachment=True, download_name=fname)
+
 
 @app.route('/admin/users/create', methods=['POST'])
 def admin_user_create():
@@ -473,7 +765,11 @@ def admin_user_update(uid):
     display_name = request.form.get('display_name', '').strip() or user['username']
     role = request.form.get('role', user['role'])
     department = request.form.get('department', '').strip()
-    is_active = 1 if request.form.get('is_active') == '1' else 0
+    # v12.7.10.24：表单若不带启用状态字段（如只改部门/角色），保持原状态，避免误停用
+    if 'is_active' in request.form:
+        is_active = 1 if request.form.get('is_active') == '1' else 0
+    else:
+        is_active = user['is_active']
     if role not in ('platform_admin', 'admin', 'user'):
         role = user['role']
     # 不允许停用最后一个平台管理员
@@ -580,13 +876,17 @@ def admin_user_rename(uid):
             db.execute('UPDATE wbs_projects SET owner=?, participants=? WHERE id=?',
                        (no, np_, p['id']))
     # 同步需求收集子表：创建人/更新人/参与人员
-    for b in db.execute('SELECT id, created_by, updated_by, editors FROM reqcollect_books').fetchall():
-        nc = _swap_name_in_list(b['created_by'], old, new_name)
-        nu = _swap_name_in_list(b['updated_by'], old, new_name)
-        ne = _swap_name_in_list(b['editors'], old, new_name)
-        if nc != b['created_by'] or nu != b['updated_by'] or ne != b['editors']:
-            db.execute('UPDATE reqcollect_books SET created_by=?, updated_by=?, editors=? WHERE id=?',
-                       (nc, nu, ne, b['id']))
+    # v12.7.10.10 修复：本版本基线未安装需求收集插件时该表不存在，不能因此让改名整体 500
+    try:
+        for b in db.execute('SELECT id, created_by, updated_by, editors FROM reqcollect_books').fetchall():
+            nc = _swap_name_in_list(b['created_by'], old, new_name)
+            nu = _swap_name_in_list(b['updated_by'], old, new_name)
+            ne = _swap_name_in_list(b['editors'], old, new_name)
+            if nc != b['created_by'] or nu != b['updated_by'] or ne != b['editors']:
+                db.execute('UPDATE reqcollect_books SET created_by=?, updated_by=?, editors=? WHERE id=?',
+                           (nc, nu, ne, b['id']))
+    except Exception as e:
+        print('[用户改名] 跳过需求收集子表同步:', e)
     db.commit()
     # 若改的是当前登录账号，同步会话登录名（user_name 一并刷新）
     if old == session.get('username'):
@@ -634,11 +934,20 @@ def admin_plugins():
     integrity_warnings, integrity_infos = plugin_system.check_plugin_tables_integrity()
     # v12.1.2 待重启生效提示：上传安装的插件在重启系统前，蓝图未注册（Flask 限制），导航/入口暂不出现
     registered = set(current_app.view_functions.keys())
-    pending = [p for p in plugins if p.get('install_type') == 'upload'
+    pending = [p for p in plugins if p.get('install_type') in ('upload', 'dir')
                and p.get('endpoint') not in registered]
+    # v12.7.10.10 上传插件的数据开放接口状态（供管理页显示是否达标）
+    open_status = {}
+    for _p in plugins:
+        if _p.get('install_type') in ('upload', 'dir'):
+            try:
+                open_status[_p['id']] = plugin_system.plugin_openapi_status(_p['id'])
+            except Exception:
+                pass
     return render_template('admin_plugins.html', plugins=plugins,
                            role_permissions=ROLE_PERMISSIONS, pending_restart=pending,
-                           integrity_warnings=integrity_warnings, integrity_infos=integrity_infos)
+                           integrity_warnings=integrity_warnings, integrity_infos=integrity_infos,
+                           open_status=open_status)
 
 @app.route('/admin/db-cleanup')
 def admin_db_cleanup():
@@ -775,8 +1084,17 @@ def _load_uploaded_plugin(plugin_id, target):
         if man.get('id') != plugin_id:
             return False, f'manifest.id（{man.get("id")}）与目录名（{plugin_id}）不一致'
         plugin_system.register_uploaded_plugin(plugin_id, man, mod.blueprint)
+        # v12.7.10.10 数据开放接口检查：不阻断安装，但必须让管理员当场看到是否达标
+        try:
+            _st = plugin_system.plugin_openapi_status(plugin_id)
+            if _st.get('supported'):
+                _open_msg = '数据开放接口已实现（平台 AI 可读取其全部数据集）'
+            else:
+                _open_msg = '数据开放接口未实现（%s），平台 AI 将直读独立库兜底；请按《插件开发规范》§13 补齐' % _st.get('reason', '原因未知')
+        except Exception as _e:
+            _open_msg = '数据开放接口检查失败：%s' % _e
         log_operation('插件管理', '安装', f'上传安装插件 {plugin_id}（{man.get("name", plugin_id)}）', session.get('username'))
-        return True, f'{man.get("name", plugin_id)} 已启用'
+        return True, f'{man.get("name", plugin_id)} 已启用；{_open_msg}'
     except Exception as e:
         return False, f'加载失败：{e}'
 
@@ -790,22 +1108,130 @@ def _backup_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
 
 
+def _db_rowcount(path):
+    """统计一个库里所有业务表的总行数（用于恢复前后对比提示）。失败返回 -1。"""
+    try:
+        c = sqlite3.connect(path, timeout=30)
+        try:
+            names = [r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'")]
+            n = 0
+            for t in names:
+                try:
+                    n += c.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0]
+                except Exception:
+                    pass
+            return n
+        finally:
+            c.close()
+    except Exception:
+        return -1
+
+
+def _backup_groups():
+    """v13.0.0.11：把备份文件按「同一时间戳的一套」归堆。
+
+    一次「立即备份全部数据」会产出同一 ts 的多个文件（主库 + 各插件库 + 插件包快照），
+    物理上必须分开（插件数据独立库），逻辑上是一套。这里按 ts 归组，页面上以「备份组」
+    为单位呈现，避免同一套文件在列表里被拆成互不相干的几行。
+    「恢复前自动保护」的时间戳与所恢复的备份组不同，不做强行归组，统一放进保护留档区。
+    返回 {'groups': [...], 'protects': [...], 'stats': {...}}
+    """
+    import re as _re
+    bdir = _backup_dir()
+    stats = {'count': 0, 'size': 0, 'latest': '', 'latest_n': 0}
+    if not os.path.isdir(bdir):
+        return {'groups': [], 'protects': [], 'stats': stats}
+    _pat = _re.compile(r'^(?P<pre>.+?)_(?P<tag>备份|保护)_(?P<d>\d{8})_(?P<t>\d{6})\.(?P<ext>db|zip)$')
+    groups = {}
+    protects = {}
+    for f in sorted(os.listdir(bdir)):
+        if not (f.endswith('.db') or f.endswith('.zip')):
+            continue
+        m = _pat.match(f)
+        if not m:
+            continue
+        fp = os.path.join(bdir, f)
+        try:
+            size = os.path.getsize(fp)
+        except OSError:
+            continue
+        if size <= 0:
+            continue
+        pre, tag, ext = m.group('pre'), m.group('tag'), m.group('ext')
+        ts = '%s_%s' % (m.group('d'), m.group('t'))
+        when = '%s-%s-%s %s:%s:%s' % (m.group('d')[:4], m.group('d')[4:6], m.group('d')[6:],
+                                     m.group('t')[:2], m.group('t')[2:4], m.group('t')[4:])
+        if ext == 'zip':
+            lib, label = 'pack', '插件包'
+        elif pre == 'business':
+            lib, label = 'main', '主库'
+        else:
+            lib, label = 'plugin', '插件库'
+        item = {'name': f, 'size': size, 'lib': lib, 'label': label,
+                'pre': pre, 'ts': ts, 'when': when, 'is_pack': ext == 'zip'}
+        bucket = protects if tag == '保护' else groups
+        g = bucket.setdefault(ts, {'ts': ts, 'when': when, 'items': [],
+                                   'size': 0, 'plugins': [], 'main': None, 'pack': None})
+        g['items'].append(item)
+        g['size'] += size
+        if lib == 'plugin':
+            g['plugins'].append(pre)
+        elif lib == 'main':
+            g['main'] = item
+        else:
+            g['pack'] = item
+
+    for g in groups.values():
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+    for g in protects.values():
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+
+    gl = sorted(groups.values(), key=lambda x: x['ts'], reverse=True)
+    pl = sorted(protects.values(), key=lambda x: x['ts'], reverse=True)
+    stats['count'] = len(gl)
+    stats['size'] = sum(g['size'] for g in gl)
+    if gl:
+        stats['latest'] = gl[0]['when']
+        stats['latest_n'] = len(gl[0]['items'])
+    return {'groups': gl, 'protects': pl, 'stats': stats}
+
+
 def _backup_list():
     """返回备份文件列表（按时间倒序）：名称/大小/修改时间/类型"""
     bdir = _backup_dir()
     if not os.path.isdir(bdir):
         return []
     out = []
+    import re as _re
     for f in os.listdir(bdir):
-        if not f.endswith('.db') or '_备份_' not in f:
+        if not (f.endswith('.db') or f.endswith('.zip')):
+            continue
+        if '_备份_' not in f and '_保护_' not in f:
             continue
         fp = os.path.join(bdir, f)
         try:
             st = os.stat(fp)
-            pre = f.split('_备份_')[0]
-            kind = '主库' if pre == 'business' else f'插件库({pre})'
+            if st.st_size <= 0:
+                continue
+            pre = _re.split(r'_备份_|_保护_', f)[0]
+            _is_prot = '_保护_' in f
+            if f.endswith('.zip'):
+                kind = '插件包(含插件本体)'
+            else:
+                kind = '主库' if pre == 'business' else f'插件库({pre})'
+            if _is_prot:
+                kind += '〔恢复前自动保护〕'
+            # v13.0.0.9：生成时间取文件名里的时间戳（xxx_备份_20261114_004506.db），
+            # 导入的旧备份也显示它当初的生成时刻，不会再出现"文件名 11-14、时间列 11-13"的矛盾
+            _tm = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime))
+            _mm = _re.search(r'_(?:备份|保护)_(\d{8})_(\d{6})\.(?:db|zip)$', f)
+            if _mm:
+                _d, _t = _mm.group(1), _mm.group(2)
+                _tm = f'{_d[:4]}-{_d[4:6]}-{_d[6:]} {_t[:2]}:{_t[2:4]}:{_t[4:]}'
             out.append({'name': f, 'size': st.st_size,
-                        'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(st.st_mtime)),
+                        'mtime': _tm,
                         'kind': kind})
         except Exception:
             pass
@@ -813,14 +1239,73 @@ def _backup_list():
     return out
 
 
+def _extract_plugin_pack(zip_path):
+    """v12.7.10.11 还原插件包快照：只允许写入 plugins/ 下的文件（拒绝绝对路径与 .. 穿越）。
+    返回 (写入文件数, 涉及插件 id 列表)。"""
+    import zipfile
+    app_root = os.path.dirname(os.path.abspath(__file__))
+    n = 0
+    pids = []
+    skipped = []
+    # v12.7.10.18：平台自带的插件（WBS / 云文档表格）代码随版本走，不能被旧备份回退，
+    # 否则用旧备份恢复插件包会把新版本修好的代码覆盖回旧版（实测会重现旧缺陷）。
+    _protected = set()
+    try:
+        _protected = {p['id'] for p in plugin_system.PLUGINS} | set(getattr(plugin_system, 'BUNDLED_DIR_PLUGINS', set()))
+    except Exception:
+        _protected = {'wbs', 'univer_sheet'}
+    # v12.7.10.18：恢复插件包只补回“缺失的插件”，不覆盖已存在的插件目录。
+    # 原因：插件包备份会把发布时的插件代码一起打包，升级后再恢复旧备份会把平台对插件的修复覆盖回旧版
+    # （实测：合同插件的表头校验被回退，脏数据再次写进库并导致列表页 500）。
+    _existing = []
+    try:
+        for _d in os.listdir(os.path.join(app_root, 'plugins')):
+            if os.path.isfile(os.path.join(app_root, 'plugins', _d, '__init__.py')):
+                _existing.append(_d)
+    except Exception:
+        pass
+
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            name = info.filename.replace('\\', '/')
+            parts = name.split('/')
+            if not name.startswith('plugins/') or '..' in parts:
+                continue
+            if len(parts) >= 2 and (parts[1] in _protected or parts[1] in _existing):
+                if parts[1] not in skipped:
+                    skipped.append(parts[1])
+                continue
+            path = os.path.join(app_root, *parts)
+            if info.is_dir():
+                os.makedirs(path, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with z.open(info) as src, open(path, 'wb') as dst:
+                dst.write(src.read())
+            n += 1
+            if len(parts) >= 3 and parts[1] and parts[1] not in pids:
+                pids.append(parts[1])
+    return n, pids, skipped
+
+
 @app.route('/admin/backup')
 def admin_backup():
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
-    files = _backup_list()
-    return render_template('admin_backup.html', files=files,
-                           current_db=os.path.basename(app.config['DATABASE']))
+    grouped = _backup_groups()
+    try:
+        from config import APP_VERSION
+    except Exception:
+        APP_VERSION = '13.0.0.11'
+    return render_template('admin_backup.html', files=_backup_list(),
+                           groups=grouped['groups'], protects=grouped['protects'],
+                           stats=grouped['stats'],
+                           current_db=os.path.basename(app.config['DATABASE']),
+                           app_version=APP_VERSION)
+
+
+_LAST_MANUAL_BACKUP = {'ts': 0.0}
 
 
 @app.route('/admin/backup/run', methods=['POST'])
@@ -828,6 +1313,13 @@ def admin_backup_run():
     if not _require_admin():
         flash('无权限', 'error')
         return redirect(url_for('index'))
+    # v12.7.10.19：连点会生成多套同名/同秒备份，10 秒内只处理第一次
+    _now = time.time()
+    if _now - _LAST_MANUAL_BACKUP.get('ts', 0.0) < 10:
+        _left = int(10 - (_now - _LAST_MANUAL_BACKUP.get('ts', 0.0))) + 1
+        flash(f'刚刚已经备份过了，请 {_left} 秒后再点（每点一次会生成一整套备份，连点会产生多套重复备份）', 'warning')
+        return redirect(url_for('admin_backup'))
+    _LAST_MANUAL_BACKUP['ts'] = _now
     try:
         ok, msg, made = perform_backup('手动')
         flash(f'💾 备份成功：{msg}' if ok else f'备份未执行：{msg}', 'success' if ok else 'error')
@@ -842,8 +1334,10 @@ def admin_backup_download(fname):
         flash('无权限', 'error')
         return redirect(url_for('index'))
     import re
-    if (not fname.endswith('.db') or '_备份_' not in fname
-            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+    if (not fname.endswith(('.db', '.zip'))
+            or ('_备份_' not in fname and '_保护_' not in fname)
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('非法的备份文件名', 'error')
         return redirect(url_for('admin_backup'))
     bdir = _backup_dir()
@@ -855,6 +1349,23 @@ def admin_backup_download(fname):
 
 @app.route('/admin/backup/restore', methods=['POST'])
 def admin_backup_restore():
+    """v13.0.0：恢复期间关闸。
+    备份恢复是整库覆盖；若此时其它请求线程仍在读写同一个库，SQLite 在线 backup 会与活动事务
+    冲突，抛 disk I/O error 并把后续所有请求打成 500（用户侧表现就是"点恢复没反应、系统坏掉"）。
+    这里先拦住新请求、等在途请求收尾，再执行覆盖，最后无论成败必定开闸。"""
+    if _RESTORE_GATE.is_set():
+        flash('已有恢复任务正在进行，请稍候再试。', 'warning')
+        return redirect(url_for('admin_backup'))
+    with _RESTORE_LOCK:
+        _RESTORE_GATE.set()
+        try:
+            time.sleep(0.5)
+            return _admin_backup_restore_body()
+        finally:
+            _RESTORE_GATE.clear()
+
+
+def _admin_backup_restore_body():
     """从备份列表恢复：先把当前库另存为保护备份 → checkpoint → 覆盖目标库 → 清 wal/shm。
     运行时覆盖受文件占用影响时给出明确指引（先停止系统再恢复）。"""
     if not _require_admin():
@@ -862,8 +1373,10 @@ def admin_backup_restore():
         return redirect(url_for('index'))
     fname = (request.form.get('backup_file') or '').strip()
     import re
-    if (not fname.endswith('.db') or '_备份_' not in fname
-            or '/' in fname or '\\' in fname or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.db', fname)):
+    if (not fname.endswith(('.db', '.zip'))
+            or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
         flash('请选择有效的备份文件', 'error')
         return redirect(url_for('admin_backup'))
     bdir = _backup_dir()
@@ -871,6 +1384,35 @@ def admin_backup_restore():
     if not os.path.exists(src):
         flash('备份文件不存在，无法恢复', 'error')
         return redirect(url_for('admin_backup'))
+
+    # v12.7.10.11：插件包快照（zip）单独还原 —— 把 plugins/<id> 目录写回去
+    if fname.endswith('.zip'):
+        try:
+            ok, _msg, _ = perform_backup('恢复前保护', only='pluginpack')
+        except Exception:
+            ok = False
+        if not ok:
+            flash('还原中止：现场保护备份失败。请先停止系统，再手动把该 zip 解压到 app/plugins/ 后启动。', 'error')
+            return redirect(url_for('admin_backup'))
+        try:
+            n, pids, skipped_pids = _extract_plugin_pack(src)
+            if not n and skipped_pids:
+                flash(f'该插件包里只有已安装的插件（{", ".join(skipped_pids)}），本次没有新增内容——它们现在的版本比备份旧版更新，不做覆盖。如需回退，请先在插件管理里卸载，再还原这个备份。', 'warning')
+            elif not n:
+                flash('该压缩包里没有可还原的插件文件（正确结构应为 plugins/<插件id>/…）', 'error')
+            else:
+                plugin_system.invalidate_openapi_cache()
+                log_operation('数据备份', '还原插件包', f'{fname}（{", ".join(pids)}）', session.get('username'))
+                _skip_tip = ''
+                if skipped_pids:
+                    _skip_tip = (f'；已跳过 {", ".join(skipped_pids)}'
+                                 f'（这些插件当前已存在，为避免用旧备份覆盖新版本代码，本次不改动它们；如需用备份覆盖，请先在插件管理里卸载该插件再还原）')
+                flash(f'✅ 已还原插件包：{", ".join(pids) or "-"}（共 {n} 个文件）{_skip_tip}。'
+                      f'请重启系统（停止.bat → 启动.bat）后插件才会出现在导航里。', 'success')
+        except Exception as e:
+            flash(f'还原插件包失败：{e}', 'error')
+        return redirect(url_for('admin_backup'))
+
     # 确定目标库
     pre = fname.split('_备份_')[0]
     if pre == 'business':
@@ -882,34 +1424,429 @@ def admin_backup_restore():
         kind = f'插件库({pre})'
     # 恢复前自动保护现场（生成新的保护备份）
     try:
-        ok, msg, _ = perform_backup('恢复前保护')
+        ok, msg, _ = perform_backup('恢复前保护', only=pre)
     except Exception:
         ok, msg = False, '保护备份失败'
     if not ok:
         flash(f'恢复中止：现场保护备份失败（{msg}）。请先停止系统，手动用备份文件替换 business.db 后重启。', 'error')
         return redirect(url_for('admin_backup'))
     try:
-        # 先 checkpoint 当前目标库，把 wal 数据合并，避免覆盖后丢最近未落盘数据
-        try:
-            c = sqlite3.connect(target)
-            c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-            c.close()
-        except Exception:
-            pass
-        import shutil
-        shutil.copy2(src, target)
-        for suffix in ('-wal', '-shm'):
+        # v13.0.0：两种恢复方式。老备份（旧版本做的）请用「只恢复数据」，
+        # 它只搬业务数据，当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变。
+        mode = (request.form.get('mode') or 'full').strip().lower()
+        if mode == 'data':
             try:
-                os.remove(target + suffix)
+                _fresh = False
+                _names = []
+                if pre == 'business':
+                    _ensure_all_tables()   # 先把懒创建的表建齐，否则备份里同名的数据会被整张跳过
+                    # 判断当前是不是"刚装好还没人用"的空库：是的话把备份里的账号也一并搬回来
+                    try:
+                        _c = sqlite3.connect(target, timeout=30)
+                        _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                        _c.close()
+                        _fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
+                    except Exception:
+                        _fresh = False
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=_fresh)
+                if pre != 'business':
+                    # 插件库只搬数据，随后按当前代码补表/补列，避免旧备份结构影响新版
+                    _reinit_plugin_schema(pre)
+            except Exception as e:
+                print(f'[数据恢复] 搬迁失败：{e}')
+                raise
+            _tip = ''
+            if no_such:
+                _tip += f'（备份里这 {len(no_such)} 张表当前版本没有，已跳过：{"、".join(no_such)}）'
+            if defaulted:
+                _more = '…' if len(defaulted) > 8 else ''
+                _tip += f'（备份里缺 {len(defaulted)} 个新列，已按当前表定义取默认值：{"、".join(defaulted[:8])}{_more}）'
+            log_operation('数据备份', '恢复数据', f'{kind} ← {fname}', session.get('username'))
+            if _fresh:
+                # 账号跟着搬回来了，当前登录态指向的账号可能已变，清掉会话让人按备份里的账号重登
+                session.clear()
+                flash(f'✅ 已导入旧数据（表结构保持当前版本）：{fname}。'
+                      f'本次搬迁 {len(moved)} 张表：{"、".join(moved) or "无"}。'
+                      f'因为这是新装系统，账号也一并从备份导入（{len(_names)} 个），'
+                      f'请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
+                      f'表结构 / 索引 / 插件登记 / 模型配置仍是当前版本，一个都没动。{_tip}', 'warning')
+                return redirect(url_for('login'))
+            flash(f'✅ 已恢复数据（表结构保持当前版本）：{fname}。'
+                  f'本次搬迁 {len(moved)} 张业务表：{"、".join(moved) or "无"}。'
+                  f'表结构 / 索引 / 账号 / 插件登记 / 模型配置都未改动，无需重启，也不会被踢下线。{_tip}', 'success')
+            return redirect(url_for('admin_backup'))
+        # v12.7.10.19：改用 SQLite 在线备份 API 覆盖目标库，不再用“复制文件替换”。
+        # 原因：系统运行中数据库文件被进程占用（Windows 上尤其明显），shutil.copy2 会抛 PermissionError，
+        # 用户看到的就是“点恢复没反应 / 数据回不来”。在线 backup 走数据库事务写进同一个库，
+        # 不替换文件，运行中即可完成并立即生效。
+        from pathlib import Path
+        try:
+            _c0 = sqlite3.connect(target, timeout=30)
+            try:
+                _c0.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             except Exception:
                 pass
-        flash(f'✅ 已从备份恢复{kind}：{fname}。恢复前当前数据已另存保护备份。'
-              f'请重启系统（停止.bat → 启动.bat）后完全生效。', 'success')
+            _c0.close()
+        except Exception:
+            pass
+        _src = sqlite3.connect(Path(os.path.abspath(src)).as_uri() + '?mode=ro', uri=True)
+        _dst = sqlite3.connect(target, timeout=60)
+        try:
+            _src.backup(_dst)
+            try:
+                _dst.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+            except Exception:
+                pass
+        finally:
+            _dst.close()
+            _src.close()
+        # v13.0.0：覆盖完成后立刻补建表结构。老备份里的库结构是旧的，恢复回来可能缺新版本
+        # 新增的表（如 ui_prefs），用户不重启就会在界面上看到 "no such table"。
+        # 必须放在后面任何 return（含"要求重新登录"那条）之前，否则会被跳过。
+        # 整库覆盖会把结构一起退回：覆盖完成后按当前版本补表 + 补列 + 补懒加载表，
+        # 否则老库回来会缺表缺列（no such table / no such column）。
+        _ensure_all_tables()
+        if pre != 'business':
+            _reinit_plugin_schema(pre)
+
+        # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
+        pack_msg = ''
+        if pre == 'business':
+            ts2 = fname.split('_备份_')[1].rsplit('.', 1)[0]
+            pack = os.path.join(bdir, f'pluginpack_备份_{ts2}.zip')
+            if os.path.exists(pack):
+                try:
+                    n2, pids2, _ = _extract_plugin_pack(pack)
+                    if n2:
+                        plugin_system.invalidate_openapi_cache()
+                        pack_msg = f' 同批次的 {len(pids2)} 个插件包也已还原（{", ".join(pids2)}）。'
+                except Exception as e:
+                    pack_msg = f' 但插件包还原失败：{e}，可单独对 pluginpack_备份_{ts2}.zip 点还原。'
+        log_operation('数据备份', '恢复', f'{kind} ← {fname}', session.get('username'))
+        # v12.7.10.16：主库恢复会把会话表一起还原，当前登录态必然失效。
+        # 与其静默跳到登录页让人以为"恢复没成功"，不如明确提示并按备份里的账号重新登录。
+        if pre == 'business':
+            _tok = session.get('sess_token')
+            _still = False
+            try:
+                _c = sqlite3.connect(src)
+                if _tok and _c.execute('SELECT 1 FROM user_sessions WHERE token=?', (_tok,)).fetchone():
+                    _still = True
+                _c.close()
+            except Exception:
+                _still = False
+            if not _still:
+                session.clear()
+                flash('主库已恢复（数据已覆盖成功）。登录信息也随主库一起还原了，请重新登录——'
+                      '账号用备份里的（例如 admin / admin123），登录后再恢复插件库和插件包。', 'warning')
+                return redirect(url_for('login'))
+        _need_restart = ' 插件包代码已同步，建议重启一次（停止.bat → 启动.bat）让插件界面完全刷新。' if pack_msg else ' 数据已即时生效，无需重启。'
+        flash(f'✅ 已从备份恢复{kind}：{fname}，数据已立即生效（无需停止服务）。'
+              f'恢复前当前数据已另存保护备份。{pack_msg}{_need_restart}', 'success')
     except OSError as e:
         flash(f'恢复{kind}失败（{e}）：可能系统正在占用数据库文件。'
               f'请先停止系统，再点恢复；或手动把 backups/{fname} 复制替换 business.db（插件库对应 data/{pre}.db）后重启。', 'error')
     except Exception as e:
         flash(f'恢复失败：{e}（不影响现有数据，现场保护备份已生成）', 'error')
+    return redirect(url_for('admin_backup'))
+
+
+@app.route('/admin/backup/download-group/<ts>')
+def admin_backup_download_group(ts):
+    """v13.0.0.11：把一整套备份（同一时间戳的主库 + 各插件库 + 插件包）打包成一个 zip 下载，
+    内含 manifest.json（版本、时间、每个文件的库归属/大小/SHA256），便于归档和校验。"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    import re as _re
+    import zipfile
+    import hashlib
+    import tempfile
+    from flask import after_this_request
+    if not _re.fullmatch(r'\d{8}_\d{6}', ts or ''):
+        flash('备份组参数无效', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    if not os.path.isdir(bdir):
+        flash('备份目录不存在', 'error')
+        return redirect(url_for('admin_backup'))
+    pat = _re.compile(r'^(.+?)_备份_%s\.(db|zip)$' % _re.escape(ts))
+    picked = []
+    for f in sorted(os.listdir(bdir)):
+        m = pat.match(f)
+        if not m:
+            continue
+        fp = os.path.join(bdir, f)
+        try:
+            if os.path.getsize(fp) <= 0:
+                continue
+        except OSError:
+            continue
+        pre, ext = m.group(1), m.group(2)
+        picked.append((f, fp, pre, ext))
+    if not picked:
+        flash('该备份组已经没有可下载的文件', 'error')
+        return redirect(url_for('admin_backup'))
+
+    out = tempfile.NamedTemporaryFile(suffix='.zip', prefix='bkgroup_', delete=False)
+    out.close()
+    manifest = {'app_version': APP_VERSION, 'group_ts': ts,
+                'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'), 'files': []}
+    try:
+        with zipfile.ZipFile(out.name, 'w', zipfile.ZIP_DEFLATED) as z:
+            for f, fp, pre, ext in picked:
+                if ext == 'zip':
+                    lib = 'pluginpack'
+                elif pre == 'business':
+                    lib = 'business'
+                else:
+                    lib = 'plugin:%s' % pre
+                data = open(fp, 'rb').read()
+                z.writestr(f, data, zipfile.ZIP_DEFLATED)
+                manifest['files'].append({
+                    'name': f, 'library': lib, 'size': len(data),
+                    'sha256': hashlib.sha256(data).hexdigest()})
+                if ext == 'zip':
+                    manifest['pluginpack'] = f
+                elif lib == 'business':
+                    manifest['main'] = f
+                else:
+                    manifest.setdefault('plugins', []).append(pre)
+            manifest['scope'] = '一次完整备份：主库 + 全部插件库 + 插件包快照'
+            z.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+    except Exception as e:
+        try:
+            os.remove(out.name)
+        except Exception:
+            pass
+        flash(f'打包备份组失败：{e}', 'error')
+        return redirect(url_for('admin_backup'))
+
+    log_operation('数据备份', '整组下载', '备份组 %s（%d 个文件）' % (ts, len(picked)),
+                  session.get('username'))
+
+    @after_this_request
+    def _cleanup(resp):
+        try:
+            os.remove(out.name)
+        except Exception:
+            pass
+        return resp
+    return send_file(out.name, as_attachment=True,
+                     download_name='business-backup-group-%s.zip' % ts,
+                     mimetype='application/zip')
+
+
+@app.route('/admin/backup/restore-group', methods=['POST'])
+def admin_backup_restore_group():
+    """v13.0.0.11：整组恢复（一次恢复一套备份里的全部数据库）。
+    仍然走「只恢复数据」：只搬业务数据，当前版本的表结构/账号体系/插件登记不动。
+    插件包代码不在此覆盖（避免用旧代码盖掉新版本），需要回退插件代码请到单库高级操作里单独还原。"""
+    if _RESTORE_GATE.is_set():
+        flash('已有恢复任务正在进行，请稍候再试。', 'warning')
+        return redirect(url_for('admin_backup'))
+    with _RESTORE_LOCK:
+        _RESTORE_GATE.set()
+        try:
+            time.sleep(0.5)
+            return _admin_restore_group_body()
+        finally:
+            _RESTORE_GATE.clear()
+
+
+def _admin_restore_group_body():
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('index'))
+    import re as _re
+    ts = (request.form.get('group_ts') or '').strip()
+    if not _re.fullmatch(r'\d{8}_\d{6}', ts or ''):
+        flash('备份组参数无效', 'error')
+        return redirect(url_for('admin_backup'))
+    bdir = _backup_dir()
+    pat = _re.compile(r'^(.+?)_备份_%s\.db$' % _re.escape(ts))
+    entries = []
+    for f in sorted(os.listdir(bdir)):
+        m = pat.match(f)
+        if m:
+            entries.append((m.group(1), os.path.join(bdir, f), f))
+    if not entries:
+        flash('该备份组里没有可恢复的数据库文件', 'error')
+        return redirect(url_for('admin_backup'))
+    # 先恢复插件库、最后恢复主库：主库恢复会替换会话表把当前登录踢掉，
+    # 放最后才能保证前面几个库在同一请求里顺利恢复完。
+    entries.sort(key=lambda e: (0 if e[0] != 'business' else 1))
+
+    # 跨版本兼容：老版本可能带当前版本已卸载/未安装的插件库（如 v13.0.0.0 的 version_plan_lt），
+    # 这类库不恢复——否则会在 data/ 下留一个没有任何插件认领的孤儿库。跳过并明确提示。
+    known = {'business'}
+    try:
+        _kc = sqlite3.connect(app.config['DATABASE'], timeout=10)
+        for (_pid,) in _kc.execute('SELECT id FROM plugin_registry').fetchall():
+            known.add(_pid)
+        _kc.close()
+    except Exception:
+        pass
+    skipped = []
+
+    rows = []
+    for pre, src, fname in entries:
+        if pre not in known:
+            skipped.append('%s（%s）' % (pre, fname))
+            continue
+        if pre == 'business':
+            target = app.config['DATABASE']
+            kind = '主库'
+        else:
+            target = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '%s.db' % pre)
+            kind = '插件库(%s)' % pre
+        before = _db_rowcount(target)
+        try:
+            ok, msg, _ = perform_backup('恢复前保护', only=pre)
+        except Exception as e:
+            ok, msg = False, str(e)
+        if not ok:
+            flash('整组恢复已中止：恢复 %s 前生成保护备份失败（%s）。'
+                  '已恢复的库：%s。未恢复的库仍保持原样，可稍后重试或先停止系统再恢复。'
+                  % (kind, msg, '、'.join(r['kind'] for r in rows) or '无'), 'error')
+            return redirect(url_for('admin_backup'))
+        try:
+            fresh = False
+            if pre == 'business':
+                _ensure_all_tables()
+                try:
+                    _c = sqlite3.connect(target, timeout=30)
+                    _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                    _c.close()
+                    fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
+                except Exception:
+                    fresh = False
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=fresh)
+            else:
+                moved, no_such, defaulted = _restore_data_only(src, target, include_users=False)
+                _reinit_plugin_schema(pre)
+        except Exception as e:
+            flash('整组恢复已中止：恢复 %s 失败（%s）。已恢复的库：%s。'
+                  '失败原因可查看服务日志，当前库已由保护备份留档，可回退。'
+                  % (kind, e, '、'.join(r['kind'] for r in rows) or '无'), 'error')
+            return redirect(url_for('admin_backup'))
+        after = _db_rowcount(target)
+        rows.append({'kind': kind, 'file': fname, 'before': before, 'after': after,
+                     'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such)})
+
+    if not rows:
+        flash('该备份组里没有可恢复的库：%s。这些库属于当前版本未安装的插件，'
+              '文件仍保留在 backups/ 中，安装对应插件后再单独恢复即可。'
+              % ('、'.join(skipped),), 'warning')
+        return redirect(url_for('admin_backup'))
+
+    try:
+        log_operation('数据备份', '整组恢复',
+                      '备份组 %s（%d 个库：%s%s）' % (ts, len(rows), '、'.join(r['kind'] for r in rows),
+                                                  ('；跳过 ' + '、'.join(skipped)) if skipped else ''),
+                      session.get('username'))
+    except Exception:
+        pass
+
+    _fresh_any = any(r['fresh'] for r in rows)
+    _detail = '；'.join('%s %s → %s' % (r['kind'], r['before'], r['after']) for r in rows)
+    _skip_note = ('已跳过（当前版本未安装该插件，文件仍保留）：%s。' % '、'.join(skipped)) if skipped else ''
+    if _fresh_any:
+        session.clear()
+        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。%s'
+              '这是新装系统，账号也随主库一起导入，请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
+              % (ts, _detail, len(rows), _skip_note), 'warning')
+        return redirect(url_for('login'))
+    session.clear()
+    flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
+          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s'
+          '主库连账号会话一起还原了，请重新登录（admin / admin123）。'
+          % (ts, _detail, len(rows), _skip_note), 'warning')
+    return redirect(url_for('login'))
+
+
+@app.route('/admin/backup/delete', methods=['POST'])
+def admin_backup_delete():
+    """v12.7.10.11 删除单个备份文件（只删 backups/ 里的副本，不动正在使用的数据）"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('admin_backup'))
+    import re
+    fname = (request.form.get('backup_file') or '').strip()
+    if (not fname.endswith(('.db', '.zip'))
+            or ('_备份_' not in fname and '_保护_' not in fname)
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
+        flash('请选择要删除的备份文件', 'error')
+        return redirect(url_for('admin_backup'))
+    fp = os.path.join(_backup_dir(), fname)
+    if not os.path.exists(fp):
+        flash('备份文件不存在（可能已被清理）', 'error')
+        return redirect(url_for('admin_backup'))
+    try:
+        size = os.path.getsize(fp)
+        os.remove(fp)
+        log_operation('数据备份', '删除备份', f'{fname}（{size} 字节）', session.get('username'))
+        flash(f'🗑 已删除备份：{fname}（{size / 1024:.1f} KB）。仅删除备份副本，正在使用的数据不受影响。', 'success')
+    except Exception as e:
+        flash(f'删除失败：{e}', 'error')
+    return redirect(url_for('admin_backup'))
+
+
+@app.route('/admin/backup/upload', methods=['POST'])
+def admin_backup_upload():
+    """导入外部备份文件（v12.7.10 跨版本迁移恢复用）：
+    换新版本后，旧版备份在旧目录/本地，新版 backups/ 是空的——
+    上传旧版备份 .db 到 backups/ → 即可在恢复列表一键恢复到新版。
+    校验：文件名符合备份规范（business_备份_*.db / <插件id>_备份_*.db）、
+    大小 ≤ 512MB、且是有效 SQLite 库。"""
+    if not _require_admin():
+        flash('无权限', 'error')
+        return redirect(url_for('admin_backup'))
+    import re
+    f = request.files.get('backup_file')
+    if not f or not getattr(f, 'filename', None):
+        flash('请先选择要导入的备份文件', 'error')
+        return redirect(url_for('admin_backup'))
+    fname = (f.filename or '').strip()
+    if (not fname.endswith(('.db', '.zip'))
+            or '_备份_' not in fname
+            or '/' in fname or '\\' in fname
+            or not re.fullmatch(r'[\w\u4e00-\u9fff\-_]+\.(db|zip)', fname)):
+        flash('文件名不符合备份规范（应为 xxx_备份_时间.db 或 xxx_备份_时间.zip），已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    pre = fname.split('_备份_')[0]
+    if fname.endswith('.db') and pre != 'business' and not re.fullmatch(r'[a-z0-9_]{2,64}', pre):
+        flash('备份前缀无法识别（只支持 business 或插件库名），已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    MAX = 512 * 1024 * 1024  # 512MB 上限
+    data = f.read(MAX + 1)
+    if len(data) > MAX:
+        flash('备份文件超过 512MB 上限，已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    if fname.endswith('.zip'):
+        # v12.7.10.11 插件包快照：必须是 zip，且至少含一个 plugins/ 条目
+        try:
+            import zipfile, io
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                names = [n.replace('\\', '/') for n in z.namelist()]
+            if not any(n.startswith('plugins/') for n in names):
+                flash('压缩包里没有 plugins/ 目录结构，不是插件包备份，已拒绝导入', 'error')
+                return redirect(url_for('admin_backup'))
+        except Exception:
+            flash('文件不是有效的 zip 压缩包，已拒绝导入', 'error')
+            return redirect(url_for('admin_backup'))
+    elif len(data) < 16 or data[:16] != b'SQLite format 3\x00':
+        flash('文件不是有效的 SQLite 数据库备份，已拒绝导入', 'error')
+        return redirect(url_for('admin_backup'))
+    try:
+        bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+        os.makedirs(bdir, exist_ok=True)
+        with open(os.path.join(bdir, fname), 'wb') as out:
+            out.write(data)
+        flash(f'✅ 已导入备份文件：{fname}。现在可在下方列表选择它进行「恢复」。', 'success')
+    except Exception as e:
+        flash(f'导入失败：{e}', 'error')
     return redirect(url_for('admin_backup'))
 
 # ============================================================
@@ -1109,6 +2046,11 @@ def inject_permissions():
 # 数据库工具
 # ============================================================
 def get_db():
+    if _RESTORE_GATE.is_set():
+        # v13.0.0：正在整库恢复，等它完成（最多 10 秒）再读库
+        _t0 = time.time()
+        while _RESTORE_GATE.is_set() and time.time() - _t0 < 10:
+            time.sleep(0.05)
     if 'db' not in g:
         # v12.2.0 并发加固：WAL 模式（读写不互相阻塞）+ busy_timeout（写锁等待）+ 连接超时
         # v12.5.28 性能修复：WAL 已持久化在数据库文件头，无需每请求重设；
@@ -1127,6 +2069,14 @@ def close_db(exception):
     db = g.pop('db', None)
     if db is not None:
         db.close()
+    # v13.0.0.6：插件独立库连接同样在请求结束后关闭，避免恢复/备份时残留打开句柄造成 WAL I/O 冲突
+    for key in [k for k in list(getattr(g, '__dict__', {}).keys()) if k.startswith('pdb_')]:
+        pdb_conn = g.pop(key, None)
+        if pdb_conn is not None:
+            try:
+                pdb_conn.close()
+            except Exception:
+                pass
 
 def init_db():
     """初始化数据库表结构（从schema.sql读取）"""
@@ -1155,6 +2105,192 @@ def init_db():
             VALUES ('product','product123','产品经理','user',1);
         """)
     db.commit()
+
+def _ensure_schema_tables(db_path=None):
+    """v13.0.0：幂等补建全部表结构（schema.sql 里全是 CREATE TABLE IF NOT EXISTS）。
+    为什么需要：整库"恢复"只是把数据覆盖回来，老备份里的库结构也一并回退了。
+    若那之后新版本加了表（例如 v12.7.10.10 的 ui_prefs），恢复完就会缺表，
+    用户点功能看到的是 "no such table"，必须重启才能好。这里恢复成功即补建。"""
+    path = db_path or app.config['DATABASE']
+    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+    ok = False
+    try:
+        c = sqlite3.connect(path, timeout=30)
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            c.executescript(f.read())
+        c.commit()
+        c.close()
+        ok = True
+    except Exception as e:
+        print(f'[表结构补建] 失败：{e}')
+    # v13.0.0：补表只能补"整张表"，补不了"表里新增的列"（CREATE TABLE IF NOT EXISTS 遇到已存在的表直接跳过）。
+    # 老备份恢复回来后 users 可能缺 deleted/department 等列，必须再跑一遍增量迁移才能补齐。
+    try:
+        from db_migrations import run_migrations
+        run_migrations()
+    except Exception as e:
+        print(f'[表结构补建] 增量迁移跳过：{e}')
+    return ok
+
+
+# v13.0.0：恢复时"系统表"不参与数据搬迁。
+# 理由：这些表属版本登记 / 账号 / 插件登记 / 模型配置，恢复成旧值轻则插件消失、
+# 重则把当前账号和可用的模型配置一起退掉。业务数据表不在此列，照常搬迁。
+_RESTORE_DATA_SKIP = {
+    'user_sessions',     # 在线会话：搬了就把所有人踢下线
+    'schema_version',    # 结构版本号：保持当前
+    'plugin_registry',   # 插件登记：搬了可能缺 enabled/install_type，插件会"消失"或读不到数据
+    'plugin_tables',     # 插件表登记：同上
+    'users',             # 账号：搬了密码/权限会退回备份时刻
+    'user_plugins',      # 用户与插件的关系：跟账号绑定
+    'ai_providers',      # 模型接口配置：旧 key 可能已失效，搬了 AI 反而不可用
+}
+
+
+def _restore_data_only(src_path, dst_path, include_users=False):
+    """只把备份里的业务数据搬进当前库，一行表结构都不改。
+
+    做法：把备份以只读方式 ATTACH 进来，逐张表按"两边都有的列"覆盖当前库的数据。
+    - 备份里没有的新表 / 新列：保持当前（不回退结构）
+    - 备份里缺的列：插入时取当前表定义的默认值（不会报 no such column）
+    返回 (搬迁的表, 跳过的表, 被兜底为默认值的列)
+    """
+    import sqlite3 as _sq
+    import shutil
+    import tempfile
+    conn = _sq.connect(dst_path, timeout=60, isolation_level=None)
+    moved, no_such, defaulted = [], [], []
+    tmp_bak = None
+    try:
+        # SQLite 的 ATTACH 不认 file: URI，所以先把备份复制成一份临时副本再挂进来，
+        # 保证原始备份文件一个字节都不会被改动。
+        fd, tmp_bak = tempfile.mkstemp(suffix='.db', prefix='restore_src_')
+        os.close(fd)
+        shutil.copy2(src_path, tmp_bak)
+        conn.execute('PRAGMA foreign_keys = OFF')
+        conn.execute('PRAGMA busy_timeout = 30000')
+        conn.execute('ATTACH DATABASE ? AS bak', (tmp_bak,))
+        curry = set(r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"))
+        bakry = set(r[0] for r in conn.execute(
+            "SELECT name FROM bak.sqlite_master WHERE type='table'"))
+        conn.execute('BEGIN IMMEDIATE')
+        _skip = set(_RESTORE_DATA_SKIP)
+        if include_users:
+            # 空库导入旧数据时连账号一起搬回来，否则用户得在新版本里手工重建所有人
+            _skip.discard('users')
+            _skip.discard('user_plugins')
+        for t in sorted(bakry):
+            if t.startswith('sqlite_') or t in _skip:
+                continue
+            if t not in curry:
+                no_such.append(t)
+                continue
+            cur_cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')]
+            bak_cols = [r[1] for r in conn.execute(f'PRAGMA bak.table_info("{t}")')]
+            common = [c for c in cur_cols if c in bak_cols]
+            if not common:
+                no_such.append(t)
+                continue
+            for c in cur_cols:
+                if c not in bak_cols:
+                    defaulted.append(f'{t}.{c}')
+            cols = ','.join(f'"{c}"' for c in common)
+            conn.execute(f'DELETE FROM "{t}"')
+            conn.execute(f'INSERT INTO "{t}" ({cols}) SELECT {cols} FROM bak."{t}"')
+            moved.append(t)
+        # 自增序号按搬迁后的真实最大值重设，避免旧的序号偏小导致后续插入主键冲突
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'").fetchone():
+            for t in moved:
+                mx = conn.execute(f'SELECT COALESCE(MAX(rowid), 0) FROM "{t}"').fetchone()[0]
+                conn.execute('DELETE FROM sqlite_sequence WHERE name = ?', (t,))
+                if mx:
+                    conn.execute('INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)', (t, mx))
+        conn.commit()
+        try:
+            conn.execute('DETACH DATABASE bak')
+        except Exception:
+            pass
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        if tmp_bak:
+            try:
+                os.remove(tmp_bak)
+            except Exception:
+                pass
+    return moved, no_such, defaulted
+
+
+def _ensure_all_tables():
+    """v13.0.0：把"按功能懒创建"的表也建齐。
+
+    新装版本第一次启动只建核心表；univer_rooms / wbs_recycle / ai_conversations 这些
+    要等对应功能第一次被打开才创建。此时直接导入老备份，这些表还不存在，
+    备份里同名数据会被当成"当前版本没有这张表"整张跳过 —— 数据静默丢失。
+    所以搬数据之前，先把它们建出来。
+    """
+    _ensure_schema_tables()
+    for mod, fn in (('plugin_system', 'init_plugin_tables'),
+                    ('plugins.univer_sheet.routes', '_init_tables'),
+                    ('plugins.wbs.routes', '_init_recycle_tables')):
+        try:
+            m = __import__(mod, fromlist=[fn])
+            getattr(m, fn)()
+        except Exception as e:
+            print(f'[补建懒加载表] {mod}.{fn} 跳过：{e}')
+    try:
+        import ai_routes
+        _c = sqlite3.connect(app.config['DATABASE'], timeout=30)
+        try:
+            ai_routes._init_tables(_c)
+            _c.commit()
+        except Exception:
+            pass
+        finally:
+            _c.close()
+    except Exception as e:
+        print(f'[补建懒加载表] ai_routes 跳过：{e}')
+
+
+def _reinit_plugin_schema(pid):
+    """恢复插件库后，按当前代码补表、补列并跑插件自带迁移。
+
+    老备份整库覆盖后可能把插件表结构带回旧版本；这里在不覆盖业务数据的前提下
+    对齐当前版本结构，避免升级恢复后出现 no such table / no such column。
+    """
+    if not pid:
+        return
+    try:
+        mod = importlib.import_module(f'plugins.{pid}.routes')
+        pdb = plugin_system._db_for_plugin_id(pid)
+        setattr(g, f'pdb_{pid}', pdb)
+        if hasattr(mod, '_ensure_tables'):
+            mod._ensure_tables()
+        # 迁移必须显式传插件库连接：恢复上下文里没有插件 endpoint，get_db() 会误路由到主库
+        if hasattr(mod, '_migrate'):
+            mod._migrate(pdb)
+        plugin_system.invalidate_openapi_cache()
+    except Exception as e:
+        print(f'[插件库结构补全] {pid} 跳过：{e}')
+
+
+def _ensure_ui_prefs(db):
+    """v13.0.0：导航顺序保存前的兜底建表，避免老库/恢复后缺表直接报 no such table。"""
+    try:
+        db.execute('CREATE TABLE IF NOT EXISTS ui_prefs (k TEXT PRIMARY KEY, v TEXT, updated_at TEXT)')
+        db.commit()
+    except Exception:
+        pass
+
 
 # ============================================================
 # 输入校验工具
@@ -1202,7 +2338,8 @@ def index():
         'wbs_tasks_pending': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE approval_status='待审批'").fetchone()[0],
         'wbs_tasks_active': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status IN ('进行中','待开始') AND approval_status='已通过'").fetchone()[0],
         'wbs_tasks_done': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status='已完成'").fetchone()[0],
-        'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status NOT IN ('已完成','已取消') AND plan_end < date('now','localtime')").fetchone()[0],
+        # v12.7.3 口径统一：与 WBS 预警看板一致（叶子任务 + 审批已通过 + 截止<今天 + 非完成/取消 + 截止非空）
+        'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end < date('now','localtime') AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'").fetchone()[0],
     }
     # v12.5.39：最近动态仅平台管理员可见（非 platform_admin 不取数）
     recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall() if session.get('user_role') == 'platform_admin' else []
@@ -1212,11 +2349,19 @@ def index():
     my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
+    # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
+    # 这里把 WBS 的启用状态传给模板，停用时不渲染对应入口。
+    wbs_on = True
+    try:
+        _row = db.execute("SELECT enabled FROM plugin_registry WHERE id='wbs'").fetchone()
+        wbs_on = bool(_row and _row['enabled'])
+    except Exception:
+        wbs_on = True
     return render_template('index.html', stats=stats,
                            recent_logs=recent_logs,
                            my_tasks=my_tasks, my_tasks_count=my_tasks_count,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
-                           now_date=now.strftime('%Y-%m-%d'))
+                           now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
 
 # ============================================================
 # 启动
@@ -1389,9 +2534,59 @@ def api_global_search():
 # 反向规划模块1：软件版本规划（根据用户需求反向规划版本升级）
 # ============================================================
 
-def perform_backup(label='启动'):
+import shutil
+
+
+def _sha256_file(path):
+    """文件内容指纹（用于判断"这份数据是不是已经备份过"）"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _latest_backup(bdir, prefix, tag):
+    """同前缀、同类别（备份 / 保护）里最新的一份 .db"""
+    import glob
+    cands = glob.glob(os.path.join(bdir, f'{prefix}_{tag}_*.db'))
+    if not cands:
+        return None
+    try:
+        return max(cands, key=lambda p: os.path.getmtime(p))
+    except Exception:
+        return None
+
+
+def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped):
+    """把一个库复制进 backups/。v13.0.0.9 两个修正：
+    1) 用 copyfile + utime，让备份文件的修改时间等于"生成时刻"。
+       原先 copy2 会把源库的旧修改时间一起带过来，列表里的"生成时间"显示成几天前，
+       按修改时间保留 7 份的清理也会排错序，结果备份只增不减。
+    2) 与同前缀最近一份内容完全一致（sha256 相同）时不再生成新文件，
+       避免同一份数据每启动/每恢复一次就多复制一套。"""
+    dst = os.path.join(bdir, f'{prefix}_{tag}_{ts}.db')
+    latest = _latest_backup(bdir, prefix, tag)
+    if latest and os.path.exists(latest):
+        try:
+            if _sha256_file(src) == _sha256_file(latest):
+                skipped.append(prefix)
+                return None
+        except Exception:
+            pass
+    shutil.copyfile(src, dst)
+    os.utime(dst, None)
+    made.append(os.path.basename(dst))
+    return dst
+
+
+def perform_backup(label='启动', only=None):
     """数据备份核心（v12.1.2 启动自动备份 / v12.7.1 管理页手动备份共用）：
-    主库 + 全部插件独立库（v12.7.0 方案B）→ backups/，各前缀保留最近 7 份。
+    主库 + 全部插件独立库（v12.7.0 方案B）→ backups/，各库各保留最近 7 份。
+
+    only：None=全量；'business'=只主库；'<插件id>'=只该插件库；'pluginpack'=只插件包快照。
+         恢复某个库之前的"保护现场"只备份被覆盖的那一个库，不再把全部库都复制一遍。
     返回 (ok, msg, [本次生成的备份文件名])"""
     import shutil
     src = app.config['DATABASE']
@@ -1407,38 +2602,176 @@ def perform_backup(label='启动'):
     bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
     os.makedirs(bdir, exist_ok=True)
     ts = time.strftime('%Y%m%d_%H%M%S')
+    # v12.7.10.19：恢复前自动保护现场的那一份，单独用“保护”命名并在列表里标注
+    tag = '保护' if label == '恢复前保护' else '备份'
     made = []
-    dst = os.path.join(bdir, f'business_备份_{ts}.db')
-    shutil.copy2(src, dst)
-    made.append(os.path.basename(dst))
-    # v12.7.0 数据隔离（方案B）：上传插件的独立库一并备份
+    skipped = []
+    # ---- 主库 ----
+    if only in (None, 'business'):
+        _save_db_backup(src, bdir, 'business', tag, ts, made, skipped)
+    # ---- 上传插件的独立库 ----
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-    if os.path.isdir(data_dir):
+    if os.path.isdir(data_dir) and (only is None or only not in ('business', 'pluginpack')):
         for f in sorted(os.listdir(data_dir)):
-            if f.endswith('.db'):
-                pdst = os.path.join(bdir, f.replace('.db', f'_备份_{ts}.db'))
+            if not f.endswith('.db'):
+                continue
+            if only and f[:-3] != only:
+                continue   # 只保护被恢复的那一个库
+            src_db = os.path.join(data_dir, f)
+            try:
+                if os.path.getsize(src_db) <= 0:
+                    continue  # v12.7.10.15：空库（内置插件遗留）不生成备份，避免误恢复
+            except OSError:
+                continue
+            # v13.0.0.6：插件库同样先 checkpoint，避免 WAL 未落盘记录被备份漏掉
+            try:
+                _pc = sqlite3.connect(src_db)
+                _pc.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                _pc.close()
+            except Exception:
+                pass
+            try:
+                _save_db_backup(src_db, bdir, f[:-3], tag, ts, made, skipped)
+            except Exception as _e:
+                print(f'[数据防护] 插件库备份失败 {f}: {_e}')
+    # ---- 插件包本体快照 ----
+    # v12.7.10.11：只备份库、不备份插件目录时，恢复后会出现"数据在、插件没了"。
+    # v13.0.0.9：插件代码没变时不再重复打包（签名一致就跳过），避免同一个插件包无限复制。
+    if only is None or only == 'pluginpack':
+        try:
+            import zipfile
+            import hashlib
+            app_root = os.path.dirname(os.path.abspath(__file__))
+            try:
+                pack_ids = sorted(plugin_system._upload_plugin_ids())
+            except Exception:
+                pack_ids = []
+            if not pack_ids:
+                # 启动早期（init_db/插件加载之前）registry 还读不到：用 data/<插件id>.db 反推
                 try:
-                    shutil.copy2(os.path.join(data_dir, f), pdst)
-                    made.append(os.path.basename(pdst))
+                    if os.path.isdir(data_dir):
+                        pack_ids = sorted(
+                            f[:-3] for f in os.listdir(data_dir)
+                            if f.endswith('.db')
+                            and os.path.getsize(os.path.join(data_dir, f)) > 0
+                            and os.path.isdir(os.path.join(app_root, 'plugins', f[:-3])))
+                except Exception:
+                    pack_ids = []
+            if pack_ids:
+                sig_parts = []
+                for pid in pack_ids:
+                    pdir = os.path.join(app_root, 'plugins', pid)
+                    if not os.path.isdir(pdir):
+                        continue
+                    for root, _dirs, files in os.walk(pdir):
+                        if '__pycache__' in root:
+                            continue
+                        for fn in sorted(files):
+                            if fn.endswith(('.pyc', '.pyo')):
+                                continue
+                            fp = os.path.join(root, fn)
+                            try:
+                                st = os.stat(fp)
+                            except OSError:
+                                continue
+                            sig_parts.append('%s|%d|%d' % (
+                                os.path.relpath(fp, app_root).replace(os.sep, '/'),
+                                st.st_size, int(st.st_mtime)))
+                sig = hashlib.md5('\n'.join(sorted(sig_parts)).encode('utf-8')).hexdigest()
+                sig_file = os.path.join(bdir, '.pluginpack.sig')
+                prev_sig = ''
+                try:
+                    if os.path.exists(sig_file):
+                        prev_sig = open(sig_file, encoding='utf-8').read().strip()
+                except Exception:
+                    prev_sig = ''
+                import glob as _glob
+                has_zip = bool(_glob.glob(os.path.join(bdir, 'pluginpack_%s_*.zip' % tag)))
+                if prev_sig == sig and has_zip:
+                    skipped.append('pluginpack')
+                else:
+                    pz = os.path.join(bdir, f'pluginpack_{tag}_{ts}.zip')
+                    n_pack = 0
+                    with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
+                        for pid in pack_ids:
+                            pdir = os.path.join(app_root, 'plugins', pid)
+                            if not os.path.isdir(pdir):
+                                continue
+                            for root, _dirs, files in os.walk(pdir):
+                                if '__pycache__' in root:
+                                    continue
+                                for fn in files:
+                                    if fn.endswith(('.pyc', '.pyo')):
+                                        continue
+                                    fp = os.path.join(root, fn)
+                                    z.write(fp, os.path.relpath(fp, app_root).replace(os.sep, '/'))
+                                    n_pack += 1
+                    if n_pack:
+                        os.utime(pz, None)
+                        made.append(os.path.basename(pz))
+                        try:
+                            with open(sig_file, 'w', encoding='utf-8') as sf:
+                                sf.write(sig)
+                        except Exception:
+                            pass
+                    else:
+                        os.remove(pz)
+        except Exception as e:
+            print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
+    # v12.7.10.15：清掉备份目录里被顺带打开的 -wal/-shm（0 字节残留，易被误当成"空备份"）
+    try:
+        for f in os.listdir(bdir):
+            if f.endswith(('-wal', '-shm')) and ('_备份_' in f or '_保护_' in f):
+                try:
+                    os.remove(os.path.join(bdir, f))
                 except Exception:
                     pass
-    # 只保留最近 7 份（business_ 与各 <插件id>_ 前缀各自保留 7 份），自动清理更旧的
+    except Exception:
+        pass
+    # 每个库的「备份」与「保护」分别保留最近 7 份（v13.0.0.9：按类别分组，
+    # 保护备份不会再挤掉用户手动备份的名额；排序按真实生成时间，最近 10 分钟内的不动）
     groups = {}
+    import re as _re
     for f in os.listdir(bdir):
-        if not f.endswith('.db') or '_备份_' not in f:
+        if not (f.endswith('.db') or f.endswith('.zip')):
             continue
-        pre = f.split('_备份_')[0]
-        groups.setdefault(pre, []).append(f)
-    for pre, fl in groups.items():
-        for f in sorted(fl)[:-7]:
+        if '_备份_' not in f and '_保护_' not in f:
+            continue
+        pre = _re.split(r'_备份_|_保护_', f)[0]
+        kind = '保护' if '_保护_' in f else '备份'
+        groups.setdefault((pre, kind), []).append(f)
+    for (_pre, _kind), fl in groups.items():
+        items = []
+        for f in fl:
+            fp = os.path.join(bdir, f)
             try:
+                items.append((os.path.getmtime(fp), f))
+            except Exception:
+                items.append((0, f))
+        items.sort(reverse=True)
+        for _mt, f in items[7:]:
+            try:
+                if time.time() - _mt < 60:
+                    continue   # 刚生成/正在恢复的文件不删（1 分钟窗口，保证上限及时生效）
                 os.remove(os.path.join(bdir, f))
             except Exception:
                 pass
-    msg = f'已备份主库 → backups/{os.path.basename(dst)}'
-    if len(made) > 1:
-        msg += f'，另含 {len(made) - 1} 份插件库备份'
-    msg += f'（各前缀保留最近 7 份）'
+    if not made:
+        why = '、'.join(skipped) if skipped else '无变化'
+        return True, f'数据与最近一份备份完全一致，未重复生成新备份（{why}）', []
+    msg = f'已备份 → backups/{made[0]}'
+    n_pack = sum(1 for x in made if x.endswith('.zip'))
+    n_db = len(made) - n_pack - 1
+    detail = []
+    if n_db > 0:
+        detail.append(f'{n_db} 份插件库')
+    if n_pack > 0:
+        detail.append(f'{n_pack} 份插件包快照（含插件本体）')
+    if detail:
+        msg += '，另含 ' + '、'.join(detail)
+    if skipped:
+        msg += f'；内容未变化的 {len(skipped)} 项已跳过'
+    msg += '（每个库各保留最近 7 份）'
     return True, msg, made
 
 
@@ -1460,6 +2793,45 @@ if __name__ == '__main__':
     # 插件建表 + 增量迁移（必须在 init_db() 之后：全新库先有 users 表与种子，再执行 v6 角色升级等迁移）
     with app.app_context():
         plugin_system.init_plugin_tables()
+        # v13.0.0.1 启动自愈：外部插件库缺失/空库→从 data/_seed 恢复，并主动建表
+        # （原实现要等用户首次打开插件页才建表，一旦库缺失，管理页会满屏"尚未建表"告警）
+        try:
+            _rep = plugin_system.ensure_external_plugin_tables()
+            for _r in _rep:
+                print(f'[插件自愈] {_r}')
+        except Exception as e:
+            print(f'[插件自愈] 执行异常（不影响启动）: {e}')
+        if '--selfcheck' in sys.argv:
+            print('='*60)
+            print('  自检报告 v13.0.0.9')
+            print('='*60)
+            try:
+                import sqlite3 as _sq
+                _db = _sq.connect(app.config['DATABASE'])
+                for _r in _db.execute("SELECT id, name, enabled, install_type FROM plugin_registry "
+                                      "WHERE install_type IN ('upload','dir') ORDER BY id").fetchall():
+                    print('  插件 %-16s 启用=%s  接入方式=%s' % (_r[0], '是' if _r[2] else '否(导航会隐藏)',
+                                                              _r[3]))
+                _db.close()
+                _dd = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+                for _f in sorted(os.listdir(_dd)):
+                    if _f.endswith('.db'):
+                        _p2 = os.path.join(_dd, _f)
+                        _c = _sq.connect(_p2)
+                        _n = len(_c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+                        _c.close()
+                        print('  库文件 %-28s %8d 字节  %d 张表' % (_f, os.path.getsize(_p2), _n))
+            except Exception as e:
+                print('  [自检] 读取状态失败：%s' % e)
+            try:
+                _w, _i = plugin_system.check_plugin_tables_integrity()
+                print('[自检] 表一致性告警 %d 条，提示 %d 条' % (len(_w), len(_i)))
+                for _x in _w[:5]:
+                    print('  - ' + _x)
+            except Exception as e:
+                print('[自检] 校验异常：%s' % e)
+            print('[自检] 完成。若仍有告警，请把上面内容截图给技术同学。')
+            sys.exit(0)
         # v12.4.5 插件表一致性校验：登记 vs 实际建表（冲突/未登记告警打印到启动日志）
         try:
             _warns, _infos = plugin_system.check_plugin_tables_integrity()
@@ -1472,7 +2844,39 @@ if __name__ == '__main__':
         except Exception as e:
             print(f'[插件表校验] 执行异常（不影响启动）: {e}')
     host, port, debug, https_mode = get_config()
+
+    # v13.0.0.1 端口占用自动顺延：避免"新版没起来、浏览器还在看旧的"这种假故障
+    def _port_free(p):
+        import socket
+        sk = socket.socket()
+        try:
+            sk.bind(('127.0.0.1', p))
+            return True
+        except OSError:
+            return False
+        finally:
+            sk.close()
+
+    if not _port_free(port):
+        _base = port
+        _switched = False
+        for _cand in range(_base + 1, _base + 11):
+            if _port_free(_cand):
+                port = _cand
+                _switched = True
+                break
+        if _switched:
+            print('='*60)
+            print(f'  [注意] 端口 {_base} 已被占用（多半是上次没关掉的旧窗口还在跑）。')
+            print(f'  本次自动改用端口 {port}，请用下面显示的新地址访问。')
+            print('  建议关掉多余的旧窗口，避免两个实例同时改同一份数据。')
+            print('='*60)
+        else:
+            print(f'  [错误] 端口 {_base}-{_base+10} 全部被占用，请关闭旧窗口后重试。')
+            sys.exit(1)
+
     print('='*60)
+    print(f'  数据目录: {os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")}')
     print('  业务高效运转系统')
     if https_mode:
         print(f'  本机访问: https://127.0.0.1:{port}  （自签证书，浏览器首次访问需点「高级→继续前往」）')

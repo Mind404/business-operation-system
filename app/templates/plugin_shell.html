@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ plugin_name }} - 业务运转系统</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#f4f6fa;font-family:-apple-system,"Microsoft YaHei",sans-serif;}
+  .shell-bar{
+    height:46px;display:flex;align-items:center;gap:12px;padding:0 14px;
+    background:#1f2d4d;color:#e8edf6;box-sizing:border-box;position:sticky;top:0;z-index:10;
+  }
+  .shell-bar .back{
+    display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;
+    background:#3b6fd4;color:#fff;text-decoration:none;font-size:13px;font-weight:600;white-space:nowrap;
+  }
+  .shell-bar .back:hover{background:#4b7fe4;}
+  .shell-bar .title{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .shell-bar .spacer{flex:1;}
+  .shell-bar .opt{font-size:12px;color:#c3cee4;text-decoration:none;padding:4px 8px;border-radius:5px;}
+  .shell-bar .opt:hover{background:rgba(255,255,255,.12);color:#fff;}
+  iframe{display:block;width:100%;height:calc(100vh - 46px);border:0;background:#eef2f7;opacity:0;transition:opacity .16s ease-out;}
+  /* 与平台主页面同一套跨页过渡，避免从导航跳进来时白一下 */
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root) { animation: vtOut .09s ease-out both; }
+  ::view-transition-new(root) { animation: vtIn .12s ease-out both; }
+  @keyframes vtOut { from { opacity:1 } to { opacity:.30 } }
+  @keyframes vtIn { from { opacity:.30 } to { opacity:1 } }
+  .shell-tip{position:fixed;left:0;right:0;top:46px;bottom:0;display:flex;align-items:center;justify-content:center;
+             color:#64748b;font-size:13px;background:#eef2f7;z-index:9;}
+</style>
+</head>
+<body>
+  <div class="shell-bar" id="shellBar">
+    <a class="back" href="/">← 返回平台</a>
+    <span class="title">{{ plugin_icon }} {{ plugin_name }}</span>
+    <span class="spacer"></span>
+    <a class="opt" href="{{ home_url }}" target="_self">刷新</a>
+    <a class="opt" href="{{ home_url }}" target="_blank" rel="noopener">新窗口打开</a>
+  </div>
+  <div class="shell-tip" id="shellTip">正在打开 {{ plugin_name }}…</div>
+  <iframe id="shellFrame" src="{{ home_url }}{{ '?' if '?' not in home_url else '&' }}embed=1" title="{{ plugin_name }}"></iframe>
+  <script>
+  /* 插件内容就绪后再淡入，加载过程看到的是同底色而不是白块 */
+  (function () {
+    /* 兜底：如果本页自己也被嵌进了另一个外壳页，就隐藏自带的返回栏，
+       避免出现两条一模一样的「返回平台 / 插件名 / 刷新」顶栏。 */
+    var selfEmbedded = false;
+    try { selfEmbedded = window.self !== window.top; } catch (e) { selfEmbedded = true; }
+    if (selfEmbedded) {
+      var bar = document.getElementById('shellBar');
+      if (bar) { bar.style.display = 'none'; }
+    }
+    var f = document.getElementById('shellFrame'), t = document.getElementById('shellTip'), shown = false;
+    function show() {
+      if (shown) return; shown = true;
+      f.style.opacity = '1'; if (selfEmbedded) { f.style.height = '100vh'; }
+      if (t) t.style.display = 'none';
+    }
+    f.addEventListener('load', function () { setTimeout(show, 40); });
+    setTimeout(show, 2500);   /* 兜底：慢插件也不至于一直空白 */
+  })();
+  </script>
+</body>
+</html>
