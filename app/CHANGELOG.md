@@ -1,3 +1,9 @@
+## v13.0.0.12 移除示例插件「合同台账」（2026-11-16）
+- 定位澄清：合同台账（contract_ledger）自始为示例/演示插件，用于插件机制与导入导出的模拟验证，不属于正式业务功能；本版整体移除。
+- 删除范围：`plugins/contract_ledger/`（5 个路由 + 1 个模板 + manifest）、独立库 `data/contract_ledger.db`、`plugin_registry` 与 `user_plugins` 中的登记；`base.html` 预渲染规则去掉 `/contract_ledger/*`，改为 `/version_plan/*`。
+- 行为变化：导航不再出现「合同台账」；访问 `/contract_ledger/*` 走 404 中文兜底页；AI 不再读取合同数据（插件 OpenAPI 自动发现机制无需改动，无硬编码依赖）。
+- 不涉及：历史备份文件与 CHANGELOG 历史条目保留原样；`users` / `operation_logs` 等核心表未触碰。
+
 ## v13.0.0.11 压测修复（2026-11-14）
 - 全平台全功能压测（7 批 244 条断言）通过后修复 1 处权限缺陷：WBS 项目被驳回（或待审批）时，项目负责人/参与人员此前仍可对「已通过」的任务做行内保存与写进展——项目审批态未参与校验，任务上的旧「已通过」标记成了绕过口。
   → 新增 `_wbs_project_approved()`，非管理员写任务前先校验项目审批态为「已通过」；`/wbs/task/<id>/inline`、`/wbs/task/<id>/note` 均拦截并返回 403；`/wbs/task/<id>/notes_data` 的 `approval_ok` 同步按项目态返回，前端直接转为只读。管理员仍可维护被驳回项目的任务。
