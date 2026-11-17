@@ -2359,6 +2359,15 @@ def index():
             todo_groups = []
     todo_total = sum(len(g['items']) for g in todo_groups)
     todo_overdue = sum(1 for g in todo_groups for it in g['items'] if it.get('level') == 'overdue')
+    # v13.0.0.16：面板头部四格统计（总数/逾期/3天内/7天内）+ 收起态预览
+    _all_todos = [it for g in todo_groups for it in g['items']]
+    todo_stats = {
+        'total': todo_total,
+        'overdue': todo_overdue,
+        'soon': sum(1 for it in _all_todos if it.get('level') == 'soon'),
+        'within7': sum(1 for it in _all_todos if it.get('level') in ('soon', 'near')),
+    }
+    todo_peek = _all_todos[:3]
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
@@ -2373,6 +2382,7 @@ def index():
                            recent_logs=recent_logs,
                            my_tasks=my_tasks, my_tasks_count=my_tasks_count,
                            todo_groups=todo_groups, todo_total=todo_total, todo_overdue=todo_overdue,
+                           todo_stats=todo_stats, todo_peek=todo_peek,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
 
