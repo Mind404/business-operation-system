@@ -54,7 +54,7 @@
     <div class="dash-panel">
         <div class="panel-head">
             <h3 class="panel-title">📌 我的待办</h3>
-            <span class="todo-total">共 {{ todo_total }} 项未完成</span>
+            <span class="todo-total">共 {{ todo_total }} 项未完成{% if todo_overdue %} · <b style="color:#dc2626">{{ todo_overdue }} 项已逾期</b>{% endif %}</span>
         </div>
         {% if todo_groups %}
         {% for g in todo_groups %}
@@ -74,7 +74,7 @@
                 </thead>
                 <tbody>
                 {% for t in g['items'][:12] %}
-                <tr class="todo-tr todo-{{ t['level'] }}" onclick='location.href={{ t["url"]|tojson }}'>
+                <tr class="todo-tr todo-{{ t['level'] }}" onclick='location.href={{ t["url"]|tojson|safe }}'>
                     <td class="todo-td-title"><span class="todo-code">{{ t['wbs_code'] }}</span>{{ t['title'] }}</td>
                     <td class="todo-td-dim">{{ t['project'] }}</td>
                     <td class="todo-td-dim">{{ t['status'] }}</td>
@@ -93,7 +93,13 @@
         </div>
         {% endfor %}
         {% else %}
-        <div class="empty-box"><div class="empty-text-lg">当前没有指派给你的未完成任务</div></div>
+        <div class="empty-box">
+            <div class="empty-text-lg">当前没有指派给你的未完成任务</div>
+            <div style="font-size:12.5px;color:#94a3b8;margin-top:8px;line-height:1.8">
+                这里只统计「负责人是你」且尚未完成的任务，逾期的一直保留，标记完成后才消失。<br>
+                负责人填账号或姓名都能识别；如果任务确实归你却没出现，到项目详情核对负责人是否正确。
+            </div>
+        </div>
         {% endif %}
     </div>
 

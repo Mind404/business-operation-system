@@ -298,6 +298,31 @@ def _todo_days_left(plan_end, today):
     return (d - today).days
 
 
+def _owner_aliases(db, u):
+    """一个用户可能出现在 owner 字段的写法：账号 + 显示名。
+
+    v13.0.0.14：存量任务负责人很多还是人名（没跑过迁移脚本），
+    只按账号精确匹配会让这些人的待办全部为空。这里把两种写法都收进来，
+    不要求用户先做数据转换也能看到自己的任务。
+    """
+    names = {u}
+    try:
+        rows = db.execute(
+            "SELECT username, display_name FROM users "
+            "WHERE username=? OR display_name=?", (u, u)).fetchall()
+        for r in rows:
+            un = (r['username'] or '').strip()
+            dn = (r['display_name'] or '').strip()
+            if un:
+                names.add(un)
+            if dn:
+                names.add(dn)
+    except Exception:
+        # 用户表不可用时退回只用账号匹配
+        pass
+    return [n for n in names if n]
+
+
 def my_todos(db, username):
     """我负责的、尚未完成的 WBS 任务（跨项目）。
 
@@ -308,17 +333,23 @@ def my_todos(db, username):
     u = (username or '').strip()
     if not u:
         return []
+    aliases = _owner_aliases(db, u)
+    owner_where = ' OR '.join(['t.owner = ?'] * len(aliases))
     today = date.today()
     rows = db.execute(
         "SELECT t.id, t.project_id, t.wbs_code, t.name, t.work_content, "
         "       t.status, t.plan_end, t.progress, "
         "       COALESCE(p.name,'') AS project_name "
         "FROM wbs_tasks t LEFT JOIN wbs_projects p ON p.id = t.project_id "
-        "WHERE t.owner = ? "
+        "WHERE (%s) "
         "  AND t.status NOT IN ('已完成','已取消') "
-        "  AND t.approval_status = '已通过' "
-        "  AND (t.parent_id > 0 OR t.parent_id IS NULL)",
-        (u,)).fetchall()
+        # 老数据 approval_status 可能是 NULL 或空串（迁移前的行），按已通过对待
+        "  AND COALESCE(NULLIF(t.approval_status,''),'已通过') = '已通过' "
+        # v13.0.0.14：用「没有子任务」判断任务行，取代 parent_id>0。
+        # 导入时父编号不存在会留下 parent_id=0 的孤立行，旧口径会把这类任务
+        # 当成阶段行过滤掉，导致导入了却永远进不了待办。
+        "  AND NOT EXISTS (SELECT 1 FROM wbs_tasks c WHERE c.parent_id = t.id)" % owner_where,
+        tuple(aliases)).fetchall()
 
     items = []
     for r in rows:

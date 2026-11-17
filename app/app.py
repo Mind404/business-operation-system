@@ -2345,17 +2345,20 @@ def index():
     # v12.5.39：最近动态仅平台管理员可见（非 platform_admin 不取数）
     recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall() if session.get('user_role') == 'platform_admin' else []
     # 我的待办任务
-    current_user = session.get('username', 'admin')
+    current_user = session.get('username', '')
     my_tasks = db.execute("SELECT * FROM tasks WHERE assignee=? AND status IN ('待处理','进行中') ORDER BY priority DESC, due_date ASC LIMIT 8", (current_user,)).fetchall()
     my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
     # v13.0.0.13 跨插件「我的待办」：遍历已启用插件，各自按 my_todos 契约返回，
     # 按插件分区块展示（不统一排序，区块内各插件自排）。
+    # v13.0.0.14：未登录态不能回退成 admin，否则会把管理员的待办显示给未识别用户。
     todo_groups = []
-    try:
-        todo_groups = plugin_system.collect_my_todos(db, current_user)
-    except Exception:
-        todo_groups = []
+    if current_user:
+        try:
+            todo_groups = plugin_system.collect_my_todos(db, current_user)
+        except Exception:
+            todo_groups = []
     todo_total = sum(len(g['items']) for g in todo_groups)
+    todo_overdue = sum(1 for g in todo_groups for it in g['items'] if it.get('level') == 'overdue')
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
@@ -2369,7 +2372,7 @@ def index():
     return render_template('index.html', stats=stats,
                            recent_logs=recent_logs,
                            my_tasks=my_tasks, my_tasks_count=my_tasks_count,
-                           todo_groups=todo_groups, todo_total=todo_total,
+                           todo_groups=todo_groups, todo_total=todo_total, todo_overdue=todo_overdue,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
 
