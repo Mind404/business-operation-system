@@ -233,11 +233,114 @@ def _resolve_display(text):
     return ','.join(m.get(n, n) for n in names)
 
 
+def _to_username_info(text):
+    """人名/账号 → (username, 状态)。状态：empty / account / display / multi / unmatched
+    v13.0.0.13：把自由文本负责人规范化为平台账号，供存档与个人待办按人聚合。
+    规则：① 已是 username 直接返回（幂等）② display_name 唯一命中才转 ③ 多义/未命中原样返回（不猜）
+    安全边界：含顿号/逗号视为多人填写不转；deleted=1 不参与匹配；停用账号照常匹配（保留历史事实）"""
+    raw = (text or '').strip()
+    if not raw:
+        return raw, 'empty'
+    if any(ch in raw for ch in ('，', ',', '、', ';', '；', '/')):
+        return raw, 'multi'
+    db = get_db()
+    row = db.execute('SELECT username FROM users WHERE username=? AND COALESCE(deleted,0)=0',
+                     (raw,)).fetchone()
+    if row:
+        return row['username'], 'account'
+    rows = db.execute('SELECT username FROM users WHERE display_name=? AND COALESCE(deleted,0)=0',
+                      (raw,)).fetchall()
+    if len(rows) == 1:
+        return rows[0]['username'], 'display'
+    return raw, 'unmatched'
+
+
+def _to_username(text):
+    """_to_username_info 的简化包装，返回转换后的 username 字符串"""
+    return _to_username_info(text)[0]
+
+
 def _with_owner_disp(row):
     """任务行 → dict + owner_disp（预警看板负责人列显示名）"""
     d = dict(row)
     d['owner_disp'] = _resolve_display(row['owner'])
     return d
+
+
+# ===== v13.0.0.13 跨插件「我的待办」契约（平台侧按需发现，未实现即跳过） =====
+# 契约：插件 routes 模块实现 my_todos(db, username) -> list[dict]
+# 每个 dict：title / url / due / level(overdue|soon|near|later|none) / status
+# 平台不规定排序，各插件区块内自排。
+TODO_LEVEL_ORDER = {'overdue': 0, 'soon': 1, 'near': 2, 'later': 3, 'none': 4}
+
+
+def _todo_days_left(plan_end, today):
+    """plan_end → 距今天数（负数=已逾期）；无法解析返回 None"""
+    s = str(plan_end or '').strip()
+    if not s:
+        return None
+    m = _re.match(r'(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})', s)
+    if not m:
+        return None
+    try:
+        d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    return (d - today).days
+
+
+def my_todos(db, username):
+    """我负责的、尚未完成的 WBS 任务（跨项目）。
+
+    口径与「到期预警」一致：未完成/未取消、审批已通过、只取任务级行
+    （parent_id>0 或历史数据 NULL）。不同点是不限 7 天窗口 ——
+    待办要回答"我还有哪些事"，逾期永不消失、完成才消失。
+    """
+    u = (username or '').strip()
+    if not u:
+        return []
+    today = date.today()
+    rows = db.execute(
+        "SELECT t.id, t.project_id, t.wbs_code, t.name, t.work_content, "
+        "       t.status, t.plan_end, t.progress, "
+        "       COALESCE(p.name,'') AS project_name "
+        "FROM wbs_tasks t LEFT JOIN wbs_projects p ON p.id = t.project_id "
+        "WHERE t.owner = ? "
+        "  AND t.status NOT IN ('已完成','已取消') "
+        "  AND t.approval_status = '已通过' "
+        "  AND (t.parent_id > 0 OR t.parent_id IS NULL)",
+        (u,)).fetchall()
+
+    items = []
+    for r in rows:
+        days = _todo_days_left(r['plan_end'], today)
+        if days is None:
+            level = 'none'
+        elif days < 0:
+            level = 'overdue'
+        elif days <= 3:
+            level = 'soon'
+        elif days <= 7:
+            level = 'near'
+        else:
+            level = 'later'
+        items.append({
+            'id': r['id'],
+            'title': r['name'] or '',
+            'project': r['project_name'],
+            'wbs_code': r['wbs_code'] or '',
+            'status': r['status'] or '',
+            'progress': r['progress'],
+            'due': str(r['plan_end'] or ''),
+            'days_left': days,
+            'level': level,
+            # 与「到期预警」同一跳转：进项目详情并定位高亮该任务行
+            'url': '/wbs/%d?task_highlight=%d' % (r['project_id'], r['id']),
+        })
+    items.sort(key=lambda x: (TODO_LEVEL_ORDER.get(x['level'], 9),
+                              x['days_left'] if x['days_left'] is not None else 9999,
+                              x['id']))
+    return items
 
 
 @blueprint.route('/wbs', strict_slashes=False)
@@ -513,6 +616,8 @@ def wbs_project_detail(pid):
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     # 自然排序：按 WBS 编号的数字分段排序（1.10 排在 1.2 之后），同编号按 id 稳定
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
+    # v13.0.0.13：任务负责人显示名（v13 起 owner 存 username，展示统一转人名）
+    tasks = [_with_owner_disp(t) for t in tasks]
     # 分组：父任务（阶段）和子任务
     phases = [t for t in tasks if t['parent_id'] == 0]
     pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
@@ -532,9 +637,15 @@ def wbs_project_detail(pid):
                 except OSError:
                     pass
     attach_mb = round(attach_bytes / 1024 / 1024, 1)
+    # v13.0.0.13：负责人下拉候选（在册启用全部用户，含停用以便修改历史任务）
+    pick_users = db.execute(
+        "SELECT username, display_name FROM users WHERE COALESCE(deleted,0)=0 "
+        "ORDER BY COALESCE(NULLIF(display_name,''), username)"
+    ).fetchall()
     return render_template('wbs_project_detail.html', p=p, tasks=tasks, phases=phases,
                            pending_count=pending_count, rejected_count=rejected_count,
-                           can_edit=can_edit, attach_mb=attach_mb, attach_count=attach_count)
+                           can_edit=can_edit, attach_mb=attach_mb, attach_count=attach_count,
+                           pick_users=pick_users)
 
 
 def _natural_key(code):
@@ -581,7 +692,8 @@ def wbs_task_add(pid):
          plan_start, plan_end, deliverable, priority, attachment_path, status, progress)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, request.form.get('wbs_code',''), parent_id, request.form.get('name',''),
-         request.form.get('work_content',''), request.form.get('owner',''), request.form.get('collaborators',''),
+         request.form.get('work_content',''), _to_username(request.form.get('owner','')),
+         request.form.get('collaborators',''),
          request.form.get('plan_start',''), request.form.get('plan_end',''),
          request.form.get('deliverable',''), request.form.get('priority','P2中'),
          attach, request.form.get('status','未开始'), int(request.form.get('progress',0))))
@@ -685,6 +797,7 @@ def wbs_import(pid):
     parsed = []    # [(row_idx, code, name, work_content, owner, collab, p_start, p_end,
     #               deliverable, status, progress, remark)]
     errors = []    # 格式错误清单：'第 N 行：计划开始「xxx」无法识别为日期'
+    unmatched_owners = []  # v13.0.0.13：负责人文本未匹配到平台用户的行，导入后提示
     row_idx = 1    # Excel 行号（表头占第 1 行，数据从第 2 行起）
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
         row_idx += 1
@@ -695,7 +808,11 @@ def wbs_import(pid):
         if not name:
             continue
         work_content = str(row[2] or '').strip()
-        owner = str(row[3] or '').strip()
+        owner_raw = str(row[3] or '').strip()
+        # v13.0.0.13：用户仍填人名，落库前翻译为平台账号；未匹配/多人填写保留原文
+        owner, owner_stat = _to_username_info(owner_raw)
+        if owner_stat in ('unmatched', 'multi'):
+            unmatched_owners.append((row_idx, owner_raw))
         collab = str(row[4] or '').strip()
         p_start = _fmt_date(row[5])
         p_end = _fmt_date(row[6])
@@ -789,11 +906,21 @@ def wbs_import(pid):
             parts.append(f'更新 {len(updated)} 条')
         if skip:
             parts.append(f'跳过 {skip} 条')
-        flash('导入完成：' + '，'.join(parts) + '。', 'success')
+        msg = '导入完成：' + '，'.join(parts) + '。'
+        if unmatched_owners:
+            picks = '、'.join(f'第{r}行「{n}」' for r, n in unmatched_owners[:8])
+            more = f' 等 {len(unmatched_owners)} 处' if len(unmatched_owners) > 8 else ''
+            msg += f'<br>以下负责人未匹配到平台用户，已按原文保存：{picks}{more}。可在任务行内编辑中改为平台人员。'
+        flash(msg, 'success')
         log_operation('WBS', '导入任务', f'P{pid} 新增{len(inserted)} 更新{len(updated)} 跳过{skip}', session.get('username','admin'))
     else:
-        flash(f'成功导入 {len(inserted)} 条任务' + (f'，跳过 {skip} 条已存在的任务' if skip else '')
-              + '，等待管理员审批通过后才能编辑状态、进度、进展和产出物。', 'success')
+        msg = (f'成功导入 {len(inserted)} 条任务' + (f'，跳过 {skip} 条已存在的任务' if skip else '')
+               + '，等待管理员审批通过后才能编辑状态、进度、进展和产出物。')
+        if unmatched_owners:
+            picks = '、'.join(f'第{r}行「{n}」' for r, n in unmatched_owners[:8])
+            more = f' 等 {len(unmatched_owners)} 处' if len(unmatched_owners) > 8 else ''
+            msg += f'<br>以下负责人未匹配到平台用户，已按原文保存：{picks}{more}。'
+        flash(msg, 'success')
     return redirect(url_for('wbs.wbs_project_detail', pid=pid))
 
 
@@ -841,6 +968,9 @@ def wbs_task_inline(tid):
         value = _fmt_date(value)
         if value is None:
             return jsonify({'ok': False, 'msg': '日期格式无法识别，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日'}), 400
+    # v13.0.0.13：行内改负责人也做账号规范化（手输人名自动转 username，未匹配保留原文）
+    if field == 'owner':
+        value = _to_username(value)
     # v12.7.10.22 修复：行内保存 WBS 编号必须做同项目唯一校验，否则会出现两行同编号、层级挂接歧义
     if field == 'wbs_code':
         value = (value or '').strip()
@@ -858,7 +988,9 @@ def wbs_task_inline(tid):
     disp = {'progress': lambda v: f'{v}%'}.get(field, lambda v: v)
     log_operation('WBS', '行内编辑', f'任务#{tid}「{t["name"]}」{field}: {disp(old_value)} → {disp(value)}',
                   session.get('username', ''))
-    return jsonify({'ok': True, 'value': value})
+    # v13.0.0.13：负责人回传显示名，页面即时切换为"余丽莎"而非账号
+    return jsonify({'ok': True, 'value': value,
+                    'disp': (_resolve_display(value) if field in ('owner', 'collaborators') else value)})
 
 
 def _sync_parent_dates(db, child_id):
@@ -912,7 +1044,7 @@ def wbs_task_quickadd(pid):
          plan_start, plan_end, deliverable, status, progress, approval_status, remark)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, code, parent_id, name,
-         request.form.get('work_content',''), request.form.get('owner',''),
+         request.form.get('work_content',''), _to_username(request.form.get('owner','')),
          request.form.get('collaborators',''), request.form.get('plan_start',''),
          request.form.get('plan_end',''), request.form.get('deliverable',''),
          '未开始', 0, approval, request.form.get('remark','')))

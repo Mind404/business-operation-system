@@ -181,8 +181,8 @@
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
                 {% if current_role in ('admin','platform_admin') %}
-                <span class="cell" data-field="owner" data-tid="{{ t.id }}">{{ t.owner or '' }}</span>
-                {% else %}{{ t.owner or '' }}{% endif %}
+                <span class="cell" data-field="owner" data-tid="{{ t.id }}">{{ t.owner_disp or '' }}</span>
+                {% else %}{{ t.owner_disp or '' }}{% endif %}
             </td>
             <td style="padding:7px 6px;border:1px solid #d0d7e5;">
                 {% if current_role in ('admin','platform_admin') %}
@@ -283,7 +283,7 @@
             <input id="nr_work" placeholder="工作内容" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
         </td>
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_owner" placeholder="负责人" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
+            <input id="nr_owner" placeholder="负责人（可搜索）" autocomplete="off" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
         </td>
         <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
             <input id="nr_collab" placeholder="协作" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
@@ -352,10 +352,31 @@ let currentTid = null;
             }
         };
         goToRow();
+        // v13.0.0.13：目标行若被折叠（父阶段收起 / 折叠完成 / 状态筛选）先展开，否则滚动落点为空
+        const ensureVisible = () => {
+            try {
+                for (let guard = 0; guard < 8 && row.style.display === 'none'; guard++) {
+                    const code = (row.getAttribute('data-code') || '').trim();
+                    const parts = code.split('.');
+                    let opened = false;
+                    for (let i = 1; i < parts.length && !opened; i++) {
+                        const anc = parts.slice(0, i).join('.');
+                        const ancRow = document.querySelector('tr[data-code="' + anc + '"]');
+                        const btn = ancRow && ancRow.querySelector('.wbs-toggle');
+                        if (btn && btn.textContent.trim() === '▶') { btn.click(); opened = true; }
+                    }
+                    if (!opened) break;
+                }
+                if (row.style.display === 'none' && typeof window.wbsExpandAll === 'function') {
+                    window.wbsExpandAll();
+                }
+            } catch (e) {}
+        };
+        const boot = () => { ensureVisible(); goToRow(); };
         // 页面渲染/缩放布局可能影响定位：兜底再补几次，确保最终落在可视区
-        setTimeout(goToRow, 120);
-        setTimeout(goToRow, 350);
-        setTimeout(goToRow, 800);
+        setTimeout(boot, 120);
+        setTimeout(boot, 350);
+        setTimeout(boot, 800);
         let n = 0;
         const timer = setInterval(() => {
             row.style.background = (n % 2 === 0) ? '#fff3b0' : '';
@@ -456,6 +477,80 @@ function openRemarkEditor(el, tid, old) {
     });
 }
 
+// ===== v13.0.0.13 负责人选择器：输入即筛（显示名/用户名均可命中），候选区灰字标唯一 username =====
+const PICK_USERS = {{ pick_users|tojson }};
+const pickEsc = (function(){
+    const d = document.createElement('div');
+    return function(s){ d.textContent = (s == null ? '' : String(s)); return d.innerHTML; };
+})();
+
+function attachPicker(input, onPick) {
+    if (!input) return null;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;width:100%;';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+    input.autocomplete = 'off';
+
+    const list = document.createElement('ul');
+    list.style.cssText = 'position:absolute;z-index:9999;left:0;right:0;top:100%;max-height:220px;overflow:auto;'
+        + 'background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 6px 16px rgba(0,0,0,.12);'
+        + 'margin:2px 0 0;padding:4px 0;list-style:none;display:none;';
+    wrap.appendChild(list);
+
+    let items = [], active = -1, picked = null;
+    const close = () => { list.style.display = 'none'; active = -1; };
+
+    function render(q) {
+        const key = (q || '').trim().toLowerCase();
+        items = (PICK_USERS || []).filter(u => {
+            if (!key) return true;
+            const dn = (u.display_name || '').toLowerCase();
+            return dn.indexOf(key) >= 0 || (u.username || '').toLowerCase().indexOf(key) >= 0;
+        }).slice(0, 20);
+        list.innerHTML = items.length
+            ? items.map((u, i) => '<li data-i="' + i + '" style="display:flex;justify-content:space-between;gap:10px;'
+                + 'padding:6px 10px;cursor:pointer;font-size:13px;">'
+                + '<span>' + pickEsc(u.display_name || u.username) + '</span>'
+                + '<span style="color:#94a3b8;font-size:11px;">' + pickEsc(u.username) + '</span></li>').join('')
+            : '<li style="padding:6px 10px;color:#94a3b8;font-size:12px;">无匹配人员（可直接保留原文）</li>';
+        list.style.display = 'block';
+        active = -1;
+    }
+
+    function choose(i) {
+        const u = items[i];
+        if (!u) return;
+        picked = u;
+        input.value = u.display_name || u.username;
+        close();
+        if (onPick) onPick(u);
+    }
+
+    input.addEventListener('focus', () => render(input.value));
+    input.addEventListener('input', () => { picked = null; render(input.value); });
+    input.addEventListener('keydown', e => {
+        if (list.style.display === 'none') { if (e.key === 'ArrowDown') render(input.value); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); }
+        else if (e.key === 'Enter') { if (active >= 0) { e.preventDefault(); choose(active); } }
+        else if (e.key === 'Escape') { close(); }
+        Array.from(list.children).forEach((li, i) => { li.style.background = (i === active) ? '#eff6ff' : ''; });
+    });
+    list.addEventListener('mousedown', e => {
+        const li = e.target.closest ? e.target.closest('li[data-i]') : null;
+        if (!li) return;
+        e.preventDefault();
+        choose(parseInt(li.getAttribute('data-i'), 10));
+    });
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    return { picked: () => picked };
+}
+
+// 快速新建行的负责人输入框接入选择器
+const nrOwnerEl = document.getElementById('nr_owner');
+if (nrOwnerEl) attachPicker(nrOwnerEl);
+
 // 行内编辑已有任务
 document.querySelectorAll('.cell').forEach(el => {
     el.addEventListener('click', () => {
@@ -472,7 +567,13 @@ document.querySelectorAll('.cell').forEach(el => {
         const input = document.createElement('input');
         input.value = old;
         input.style.cssText = 'width:100%;padding:4px;border:1px solid #2563eb;border-radius:4px;font-size:13px;box-sizing:border-box;';
-        el.innerHTML = ''; el.appendChild(input);
+        let pickedDisplay = '';
+        if (field === 'owner') {
+            attachPicker(input, u => { pickedDisplay = u.display_name || u.username; });
+            el.innerHTML = ''; el.appendChild(input.parentNode);
+        } else {
+            el.innerHTML = ''; el.appendChild(input);
+        }
         el.dataset.editing = '1'; input.focus();
         const save = () => {
             const v = input.value;
@@ -480,7 +581,7 @@ document.querySelectorAll('.cell').forEach(el => {
                 method:'POST', headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({field, value:v})
             }).then(r=>r.json()).then(res => {
-                if (res.ok) { el.textContent = v; }
+                if (res.ok) { el.textContent = res.disp || pickedDisplay || v; }
                 else { alert(res.msg||'保存失败'); el.textContent = old; }
                 el.dataset.editing = '';
             }).catch(()=>{ el.textContent = old; el.dataset.editing=''; });

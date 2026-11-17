@@ -1881,12 +1881,13 @@ def profile():
     # v10.5.0：订阅机制下线，个人中心改为展示账号信息 + 常用功能（WBS）
     user_info = db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
     todo_count = 0
+    # v13.0.0.13：原查询用的 assignee_id 在 tasks 表里并不存在，异常被静默吞掉，
+    # 这里始终显示 0。改为按 username 走跨插件待办契约，口径与工作台一致。
     try:
-        todo_count = db.execute(
-            "SELECT COUNT(*) FROM tasks WHERE assignee_id=? AND status NOT IN ('已完成','已关闭')",
-            (user_id,)).fetchone()[0]
+        todo_count = sum(len(g['items']) for g in
+                         plugin_system.collect_my_todos(db, session.get('username', '')))
     except Exception:
-        pass
+        todo_count = 0
     # 可用功能 = 核心 + WBS（所有登录用户）
     my_plugins = [p for p in plugin_system.PLUGINS if p['core'] or p['id'] == 'wbs']
     return render_template('profile.html',
@@ -2347,6 +2348,14 @@ def index():
     current_user = session.get('username', 'admin')
     my_tasks = db.execute("SELECT * FROM tasks WHERE assignee=? AND status IN ('待处理','进行中') ORDER BY priority DESC, due_date ASC LIMIT 8", (current_user,)).fetchall()
     my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
+    # v13.0.0.13 跨插件「我的待办」：遍历已启用插件，各自按 my_todos 契约返回，
+    # 按插件分区块展示（不统一排序，区块内各插件自排）。
+    todo_groups = []
+    try:
+        todo_groups = plugin_system.collect_my_todos(db, current_user)
+    except Exception:
+        todo_groups = []
+    todo_total = sum(len(g['items']) for g in todo_groups)
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
@@ -2360,6 +2369,7 @@ def index():
     return render_template('index.html', stats=stats,
                            recent_logs=recent_logs,
                            my_tasks=my_tasks, my_tasks_count=my_tasks_count,
+                           todo_groups=todo_groups, todo_total=todo_total,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
 

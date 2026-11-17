@@ -290,6 +290,49 @@ def _plugin_enabled(pid):
         return True
 
 
+def collect_my_todos(db, username):
+    """v13.0.0.13 跨插件「我的待办」聚合。
+
+    契约：插件在 plugins/<id>/routes.py 里提供 my_todos(db, username) -> list[dict]，
+    平台按已启用插件逐个发现并调用。未启用、未实现、抛错、无数据一律跳过，
+    单个插件出问题不影响其它插件的待办展示。
+    """
+    groups = []
+    import importlib
+    try:
+        enabled = _enabled_ids()
+    except Exception:
+        enabled = set()
+    for p in PLUGINS:
+        if p.get('core'):
+            continue
+        pid = p.get('id')
+        if not pid:
+            continue
+        if enabled and pid not in enabled:
+            continue
+        try:
+            mod = importlib.import_module('plugins.%s.routes' % pid)
+        except Exception:
+            continue
+        fn = getattr(mod, 'my_todos', None)
+        if not callable(fn):
+            continue
+        try:
+            items = fn(db, username) or []
+        except Exception:
+            continue
+        if not items:
+            continue
+        groups.append({
+            'plugin_id': pid,
+            'plugin_name': p.get('name') or pid,
+            'icon': p.get('icon') or '',
+            'items': items,
+        })
+    return groups
+
+
 _manifest_prefix_cache = {}
 
 

@@ -50,6 +50,53 @@
     </div>
     {% endif %}
 
+    <!-- 我的待办（v13.0.0.13：跨插件聚合，按插件分区块，逾期标红，点击跳转并定位） -->
+    <div class="dash-panel">
+        <div class="panel-head">
+            <h3 class="panel-title">📌 我的待办</h3>
+            <span class="todo-total">共 {{ todo_total }} 项未完成</span>
+        </div>
+        {% if todo_groups %}
+        {% for g in todo_groups %}
+        <div class="todo-group">
+            <div class="todo-group-head">
+                <span class="todo-group-name">{{ g.icon }} {{ g.plugin_name }}</span>
+                <span class="todo-group-count">{{ g['items']|length }}</span>
+            </div>
+            <table class="todo-table">
+                <thead>
+                <tr>
+                    <th style="width:46%">任务</th>
+                    <th style="width:26%">所属</th>
+                    <th style="width:14%">状态</th>
+                    <th style="width:14%">截止</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for t in g['items'][:12] %}
+                <tr class="todo-tr todo-{{ t['level'] }}" onclick='location.href={{ t["url"]|tojson }}'>
+                    <td class="todo-td-title"><span class="todo-code">{{ t['wbs_code'] }}</span>{{ t['title'] }}</td>
+                    <td class="todo-td-dim">{{ t['project'] }}</td>
+                    <td class="todo-td-dim">{{ t['status'] }}</td>
+                    <td class="todo-td-due">
+                        {% if t['days_left'] is not none and t['days_left'] < 0 %}
+                        <span class="due-red">逾期 {{ -t['days_left'] }} 天</span>
+                        {% elif t['due'] %}{{ t['due'][5:] }}{% else %}<span style="color:#9ca3af">未设</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% if g['items']|length > 12 %}
+            <div class="todo-more">另有 {{ g['items']|length - 12 }} 项未展开</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-box"><div class="empty-text-lg">当前没有指派给你的未完成任务</div></div>
+        {% endif %}
+    </div>
+
     <!-- 常用功能 -->
     <div class="dash-panel">
         <div class="panel-head">
@@ -189,6 +236,34 @@
 .todo-go:hover { background: #eff6ff; }
 .todo-more { font-size: 12px; color: #6b7280; text-align: center; padding-top: 6px; }
 .todo-more a { color: #2563eb; text-decoration: none; }
+
+/* v13.0.0.13 我的待办：按插件分区块 + 逾期标红 + 四列紧凑表格 */
+.todo-total { font-size: 12px; color: #6b7280; }
+.todo-group { margin-bottom: 14px; }
+.todo-group-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 2px; border-bottom: 1px solid #e5e7eb; margin-bottom: 6px;
+}
+.todo-group-name { font-size: 13px; font-weight: 600; color: #1f2937; }
+.todo-group-count { font-size: 11px; color: #6b7280; background: #f3f4f6; padding: 1px 7px; border-radius: 9px; }
+.todo-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.todo-table th {
+    font-size: 11px; color: #6b7280; font-weight: 500; text-align: left;
+    padding: 4px 6px; border-bottom: 1px solid #f1f5f9;
+}
+.todo-tr { cursor: pointer; border-bottom: 1px solid #f8fafc; }
+.todo-tr:hover { background: #f8fafc; }
+.todo-tr td { padding: 7px 6px; font-size: 12.5px; }
+.todo-td-title { color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-code { color: #9ca3af; font-size: 11px; margin-right: 5px; }
+.todo-td-dim { color: #6b7280; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-td-due { font-size: 12px; color: #374151; white-space: nowrap; }
+.todo-overdue { background: #fef2f2; }
+.todo-overdue:hover { background: #fee2e2; }
+.todo-soon { background: #fffbeb; }
+.todo-soon:hover { background: #fef3c7; }
+.todo-near { background: #fffdf5; }
+.todo-more { font-size: 12px; color: #9ca3af; text-align: center; padding: 6px 0; }
 
 /* 空状态 */
 .empty-box { text-align: center; padding: 28px 16px; }
