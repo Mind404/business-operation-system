@@ -227,8 +227,12 @@ def _resolve_display(text):
         return text
     db = get_db()
     placeholders = ','.join('?' * len(names))
-    rows = db.execute('SELECT username, display_name FROM users WHERE username IN (%s)'
-                      % placeholders, names).fetchall()
+    try:
+        rows = db.execute('SELECT username, display_name FROM users WHERE username IN (%s)'
+                          % placeholders, names).fetchall()
+    except Exception:
+        # 查库异常时退回原文，保证列表页/详情页不因显示名解析失败而白屏
+        return text
     m = {r['username']: (r['display_name'] or r['username']) for r in rows}
     return ','.join(m.get(n, n) for n in names)
 
@@ -243,13 +247,18 @@ def _to_username_info(text):
         return raw, 'empty'
     if any(ch in raw for ch in ('，', ',', '、', ';', '；', '/')):
         return raw, 'multi'
-    db = get_db()
-    row = db.execute('SELECT username FROM users WHERE username=? AND COALESCE(deleted,0)=0',
-                     (raw,)).fetchone()
-    if row:
-        return row['username'], 'account'
-    rows = db.execute('SELECT username FROM users WHERE display_name=? AND COALESCE(deleted,0)=0',
-                      (raw,)).fetchall()
+    # v13.0.0.13 兼容加固：查库失败（老库缺 deleted 列 / 表不存在 / 连接异常）时
+    # 一律降级为「按原文保存」，绝不阻断导入与新建——导入失败比负责人没转换严重得多
+    try:
+        db = get_db()
+        row = db.execute('SELECT username FROM users WHERE username=? AND COALESCE(deleted,0)=0',
+                         (raw,)).fetchone()
+        if row:
+            return row['username'], 'account'
+        rows = db.execute('SELECT username FROM users WHERE display_name=? AND COALESCE(deleted,0)=0',
+                          (raw,)).fetchall()
+    except Exception:
+        return raw, 'unmatched'
     if len(rows) == 1:
         return rows[0]['username'], 'display'
     return raw, 'unmatched'
@@ -637,15 +646,28 @@ def wbs_project_detail(pid):
                 except OSError:
                     pass
     attach_mb = round(attach_bytes / 1024 / 1024, 1)
-    # v13.0.0.13：负责人下拉候选（在册启用全部用户，含停用以便修改历史任务）
-    pick_users = db.execute(
-        "SELECT username, display_name FROM users WHERE COALESCE(deleted,0)=0 "
-        "ORDER BY COALESCE(NULLIF(display_name,''), username)"
-    ).fetchall()
+    # v13.0.0.13：负责人下拉候选（在册全部用户）
+    # 注意必须转成普通 dict 再传模板：sqlite3.Row 无法被 tojson 序列化，
+    # 渲染出的字符串带 HTML 实体（&#34;），会让整个 <script> 语法错误、页面所有按钮失效。
+    try:
+        pick_rows = db.execute(
+            "SELECT username, display_name FROM users WHERE COALESCE(deleted,0)=0 "
+            "ORDER BY COALESCE(NULLIF(display_name,''), username)"
+        ).fetchall()
+        pick_users = [{'username': (r['username'] or ''),
+                       'display_name': (r['display_name'] or '')} for r in pick_rows]
+    except Exception:
+        # 老库结构差异（如缺 deleted 列）时不让整页挂掉：下拉退化为纯手输
+        pick_users = []
+    # 直接生成已做 HTML 转义的 JSON 文本：Flask 的 tojson 返回普通字符串，
+    # 会被 autoescape 二次转义成 &#34;，在 <script> 里不解码 → 整段脚本语法错误。
+    pick_users_json = (json.dumps(pick_users, ensure_ascii=False)
+                       .replace('<', '\\u003c').replace('>', '\\u003e')
+                       .replace('&', '\\u0026').replace("'", '\\u0027'))
     return render_template('wbs_project_detail.html', p=p, tasks=tasks, phases=phases,
                            pending_count=pending_count, rejected_count=rejected_count,
                            can_edit=can_edit, attach_mb=attach_mb, attach_count=attach_count,
-                           pick_users=pick_users)
+                           pick_users=pick_users, pick_users_json=pick_users_json)
 
 
 def _natural_key(code):

@@ -478,7 +478,7 @@ function openRemarkEditor(el, tid, old) {
 }
 
 // ===== v13.0.0.13 负责人选择器：输入即筛（显示名/用户名均可命中），候选区灰字标唯一 username =====
-const PICK_USERS = {{ pick_users|tojson }};
+const PICK_USERS = {{ pick_users_json|safe }};
 const pickEsc = (function(){
     const d = document.createElement('div');
     return function(s){ d.textContent = (s == null ? '' : String(s)); return d.innerHTML; };
