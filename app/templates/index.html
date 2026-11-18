@@ -50,77 +50,61 @@
     </div>
     {% endif %}
 
-    <!-- 我的待办（v13.0.0.16：四格统计 + 默认收起预览 + 展开详情） -->
+    <!-- 我的待办（v13.0.0.18：分组标题 + 可点击筛选统计 + 筛选式清单） -->
     <div class="dash-panel">
         <div class="panel-head">
             <h3 class="panel-title">📌 我的待办</h3>
             {% if todo_groups %}
-            <button type="button" class="todo-toggle" id="todoToggle" onclick="toggleTodoBody()">展开详情 ▾</button>
+            <span class="todo-sum">共 {{ todo_stats.total }} 项未完成{% if todo_stats.overdue %} · <em>{{ todo_stats.overdue }} 项已逾期</em>{% endif %}</span>
             {% endif %}
         </div>
 
         {% if todo_groups %}
-        <div class="todo-stats">
-            <div class="todo-stat">
-                <span class="todo-stat-num">{{ todo_stats.total }}</span>
-                <span class="todo-stat-label">待办总数</span>
+        {% for g in todo_groups %}
+        <div class="todo-block" data-gid="{{ loop.index0 }}">
+            <div class="todo-block-head">
+                <span class="todo-block-name">{{ g.icon }} {{ g.plugin_name }} · 待办</span>
+                <span class="todo-block-hint">点数字筛选，点任务行跳转</span>
             </div>
-            <div class="todo-stat is-overdue">
-                <span class="todo-stat-num">{{ todo_stats.overdue }}</span>
-                <span class="todo-stat-label">已逾期</span>
-            </div>
-            <div class="todo-stat is-soon">
-                <span class="todo-stat-num">{{ todo_stats.soon }}</span>
-                <span class="todo-stat-label">3 天内到期</span>
-            </div>
-            <div class="todo-stat is-near">
-                <span class="todo-stat-num">{{ todo_stats.within7 }}</span>
-                <span class="todo-stat-label" title="含 3 天内到期的任务">7 天内到期</span>
-            </div>
-        </div>
 
-        <!-- 收起态：只显示最紧急的 3 条 -->
-        <div class="todo-peek" id="todoPeek">
-            {% for t in todo_peek %}
-            <div class="todo-peek-row" onclick='location.href={{ t["url"]|tojson|safe }}'>
-                <span class="todo-level-bar level-{{ t['level'] }}"></span>
-                <span class="todo-peek-code">{{ t['wbs_code'] }}</span>
-                <span class="todo-peek-title">{{ t['title'] }}</span>
-                <span class="todo-peek-proj">{{ t['project'] }}</span>
-                <span class="todo-peek-due">
-                    {% if t['days_left'] is not none and t['days_left'] < 0 %}
-                    <span class="due-red">逾期 {{ -t['days_left'] }} 天</span>
-                    {% elif t['due'] %}{{ t['due'][5:] }}{% else %}<span style="color:#9ca3af">未设</span>{% endif %}
-                </span>
+            <div class="todo-filters">
+                <button type="button" class="todo-filter f-all" onclick="todoFilter(this,'all')" aria-pressed="false">
+                    <span class="tf-num">{{ g.stats.total }}</span>
+                    <span class="tf-label">待办总数</span>
+                </button>
+                <button type="button" class="todo-filter f-overdue" onclick="todoFilter(this,'overdue')">
+                    <span class="tf-num">{{ g.stats.overdue }}</span>
+                    <span class="tf-label">已逾期</span>
+                </button>
+                <button type="button" class="todo-filter f-soon" onclick="todoFilter(this,'soon')">
+                    <span class="tf-num">{{ g.stats.soon }}</span>
+                    <span class="tf-label">3 天内到期</span>
+                </button>
+                <button type="button" class="todo-filter f-near" onclick="todoFilter(this,'within7')">
+                    <span class="tf-num">{{ g.stats.within7 }}</span>
+                    <span class="tf-label" title="含 3 天内到期的任务">7 天内到期</span>
+                </button>
             </div>
-            {% endfor %}
-            {% if todo_stats.total > todo_peek|length %}
-            <div class="todo-peek-more">另有 {{ todo_stats.total - todo_peek|length }} 项，点「展开详情」查看完整清单</div>
-            {% endif %}
-        </div>
 
-        <!-- 展开态：按插件分组的完整清单 -->
-        <div class="todo-full" id="todoFull">
-            {% for g in todo_groups %}
-            <div class="todo-group">
-                <div class="todo-group-head">
-                    <span class="todo-group-name">{{ g.icon }} {{ g.plugin_name }}</span>
-                    <span class="todo-group-count">{{ g['items']|length }} 项</span>
+            <div class="todo-list" id="todoList{{ loop.index0 }}">
+                <div class="todo-list-bar">
+                    <span class="todo-list-cur">全部任务</span>
+                    <span class="todo-list-count"><b class="todo-count-shown">{{ g.stats.total }}</b> 项</span>
                 </div>
                 <table class="todo-table">
                     <thead>
                     <tr>
-                        <th style="width:46%">任务</th>
-                        <th style="width:26%">所属项目</th>
-                        <th style="width:14%">状态</th>
-                        <th style="width:14%">截止</th>
+                        <th class="th-title">任务</th>
+                        <th class="th-proj">所属项目</th>
+                        <th class="th-status">状态</th>
+                        <th class="th-due">截止</th>
                     </tr>
                     </thead>
                     <tbody>
-                    {% for t in g['items'][:12] %}
-                    <tr class="todo-tr todo-{{ t['level'] }}" onclick='location.href={{ t["url"]|tojson|safe }}'>
+                    {% for t in g['items'] %}
+                    <tr class="todo-tr todo-{{ t['level'] }}" data-level="{{ t['level'] }}" onclick='location.href={{ t["url"]|tojson|safe }}'>
                         <td class="todo-td-title"><span class="todo-code">{{ t['wbs_code'] }}</span>{{ t['title'] }}</td>
-                        <td class="todo-td-dim">{{ t['project'] }}</td>
+                        <td class="todo-td-dim td-proj">{{ t['project'] }}</td>
                         <td class="todo-td-dim"><span class="todo-status-pill">{{ t['status'] }}</span></td>
                         <td class="todo-td-due">
                             {% if t['days_left'] is not none and t['days_left'] < 0 %}
@@ -131,12 +115,10 @@
                     {% endfor %}
                     </tbody>
                 </table>
-                {% if g['items']|length > 12 %}
-                <div class="todo-more">另有 {{ g['items']|length - 12 }} 项未展开</div>
-                {% endif %}
+                <div class="todo-empty">该分类下暂无任务</div>
             </div>
-            {% endfor %}
         </div>
+        {% endfor %}
         {% else %}
         <div class="empty-box">
             <div class="empty-text-lg">当前没有指派给你的未完成任务</div>
@@ -288,57 +270,54 @@
 .todo-more { font-size: 12px; color: #6b7280; text-align: center; padding-top: 6px; }
 .todo-more a { color: #2563eb; text-decoration: none; }
 
-/* v13.0.0.16 我的待办：四格统计 + 默认收起预览 + 展开详情 + 强分隔 */
-.todo-toggle {
-    font-size: 12px; color: #2563eb; background: #eff6ff; border: 1px solid #bfdbfe;
-    border-radius: 6px; padding: 4px 12px; cursor: pointer; font-weight: 500;
-}
-.todo-toggle:hover { background: #dbeafe; border-color: #93c5fd; }
+/* v13.0.0.18 我的待办：分组标题 + 可点击筛选统计 + 筛选式清单 */
+.todo-sum { font-size: 12px; color: #6b7280; }
+.todo-sum em { font-style: normal; color: #dc2626; font-weight: 600; }
 
-.todo-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
-.todo-stat {
-    border: 1px solid #e5e7eb; border-left: 3px solid #94a3b8; border-radius: 8px;
-    padding: 8px 12px; background: #fff;
-    display: flex; align-items: baseline; gap: 8px;
+.todo-block { border-top: 1px solid #eef1f5; padding-top: 12px; margin-top: 4px; }
+.todo-block-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.todo-block-name {
+    font-size: 13.5px; font-weight: 700; color: #1f2937;
+    padding-left: 9px; border-left: 3px solid #1e3a8a; line-height: 1.2;
 }
-.todo-stat-num { font-size: 19px; font-weight: 700; color: #111827; line-height: 1; }
-.todo-stat-label { font-size: 12px; color: #6b7280; white-space: nowrap; }
-.todo-stat.is-overdue { border-left-color: #dc2626; background: #fff6f6; }
-.todo-stat.is-overdue .todo-stat-num { color: #dc2626; }
-.todo-stat.is-soon { border-left-color: #f59e0b; background: #fffbf1; }
-.todo-stat.is-soon .todo-stat-num { color: #b45309; }
-.todo-stat.is-near { border-left-color: #2563eb; background: #f5f9ff; }
-.todo-stat.is-near .todo-stat-num { color: #1d4ed8; }
+.todo-block-hint { font-size: 11.5px; color: #9ca3af; }
 
-/* 收起态预览 */
-.todo-peek { display: flex; flex-direction: column; border-top: 1px solid #e5e7eb; }
-.todo-peek-row {
-    display: flex; align-items: center; gap: 10px; padding: 9px 4px;
-    border-bottom: 1px solid #eceff3; cursor: pointer;
+.todo-filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.todo-filter {
+    display: flex; align-items: baseline; gap: 7px; text-align: left;
+    padding: 9px 12px; background: #fff; border: 1px solid #e5e7eb;
+    border-left: 3px solid #94a3b8; border-radius: 8px; cursor: pointer;
+    font-family: inherit; transition: all .12s;
 }
-.todo-peek-row:hover { background: #f7f9fc; }
-.todo-level-bar { width: 3px; height: 15px; border-radius: 2px; background: #cbd5e1; flex-shrink: 0; }
-.todo-level-bar.level-overdue { background: #dc2626; }
-.todo-level-bar.level-soon { background: #f59e0b; }
-.todo-level-bar.level-near { background: #2563eb; }
-.todo-level-bar.level-later { background: #94a3b8; }
-.todo-peek-code { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
-.todo-peek-title { font-size: 13px; color: #111827; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-peek-proj { font-size: 11.5px; color: #6b7280; flex-shrink: 0; width: 200px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-peek-due { font-size: 12px; color: #374151; flex-shrink: 0; width: 86px; text-align: right; }
-.todo-peek-more { font-size: 12px; color: #94a3b8; padding: 9px 4px 0; }
+.todo-filter:hover { background: #f8fafc; border-color: #cbd5e1; }
+.tf-num { font-size: 19px; font-weight: 700; color: #111827; line-height: 1; }
+.tf-label { font-size: 12px; color: #6b7280; white-space: nowrap; }
+.todo-filter.f-overdue { border-left-color: #dc2626; }
+.todo-filter.f-overdue .tf-num { color: #dc2626; }
+.todo-filter.f-overdue.is-active { background: #fef2f2; border-color: #fca5a5; box-shadow: inset 0 0 0 1px #fca5a5; }
+.todo-filter.f-soon { border-left-color: #f59e0b; }
+.todo-filter.f-soon .tf-num { color: #b45309; }
+.todo-filter.f-soon.is-active { background: #fffbeb; border-color: #fcd34d; box-shadow: inset 0 0 0 1px #fcd34d; }
+.todo-filter.f-near { border-left-color: #2563eb; }
+.todo-filter.f-near .tf-num { color: #1d4ed8; }
+.todo-filter.f-near.is-active { background: #eff6ff; border-color: #93c5fd; box-shadow: inset 0 0 0 1px #93c5fd; }
+.todo-filter.f-all.is-active { background: #f7f9fc; border-color: #94a3b8; box-shadow: inset 0 0 0 1px #94a3b8; }
 
-/* 展开态 */
-.todo-full { display: none; margin-top: 14px; }
-.todo-full.open { display: block; }
-.todo-group { margin-bottom: 16px; }
-.todo-group-head {
+.todo-list { display: none; margin-top: 12px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; }
+.todo-list.open { display: block; }
+.todo-list-bar {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 10px; background: #eef2f7; border-left: 3px solid #1e3a8a; border-radius: 4px 4px 0 0;
+    padding: 7px 12px; background: #f3f6fa; border-bottom: 1px solid #dde3ea;
+    font-size: 11.5px; color: #4b5563;
 }
-.todo-group-name { font-size: 13px; font-weight: 700; color: #1f2937; }
-.todo-group-count { font-size: 11.5px; color: #1e40af; font-weight: 600; }
+.todo-list-count b { color: #1e3a8a; font-size: 12.5px; }
+.todo-empty { display: none; padding: 22px; text-align: center; font-size: 12.5px; color: #9ca3af; }
+
 .todo-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.todo-table .th-title { width: 46%; }
+.todo-table .th-proj { width: 26%; }
+.todo-table .th-status { width: 14%; }
+.todo-table .th-due { width: 14%; }
 .todo-table th {
     font-size: 11.5px; color: #374151; font-weight: 600; text-align: left;
     padding: 7px 10px; background: #f3f6fa; border-bottom: 1px solid #cfd6de;
@@ -352,7 +331,7 @@
 .todo-td-dim { color: #4b5563; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .todo-td-due { font-size: 12px; color: #374151; white-space: nowrap; }
 .todo-status-pill {
-    display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px;
+    display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; white-space: nowrap;
     background: #eef1f5; color: #4b5563; border: 1px solid #e2e6ec;
 }
 .todo-overdue { background: #fdf1f1; }
@@ -400,9 +379,14 @@
 .activity-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
 
 @media (max-width: 900px) {
-    /* 窄屏：统计四格改两列，预览行隐藏项目列 */
-    .todo-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    .todo-peek-proj { display: none; }
+    /* 窄屏：筛选项改两列，隐藏项目列，重排列宽 */
+    .todo-filters { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .todo-block-hint { display: none; }
+    .todo-table .th-proj, .td-proj { display: none; }
+    .todo-table .th-title { width: 54%; }
+    .todo-table .th-status { width: 22%; }
+    .todo-table .th-due { width: 24%; }
+    .todo-table th, .todo-tr td { padding: 7px 7px; font-size: 12px; }
     .todo-tr td + td { border-left: none; }
 
     .kpi-row { grid-template-columns: repeat(2, 1fr); }
@@ -412,36 +396,47 @@
 }
 </style>
 <script>
-// v13.0.0.16 我的待办：默认收起只显示前 3 条，点按钮展开完整清单
-function toggleTodoBody(forceOpen) {
-    var full = document.getElementById('todoFull');
-    var peek = document.getElementById('todoPeek');
-    var btn = document.getElementById('todoToggle');
-    if (!full) return;
-    var open;
-    if (forceOpen === true) { full.classList.add('open'); open = true; }
-    else if (forceOpen === false) { full.classList.remove('open'); open = false; }
-    else { open = full.classList.toggle('open'); }
-    if (peek) peek.style.display = open ? 'none' : '';
-    if (btn) {
-        btn.textContent = open ? '收起详情 ▴' : '展开详情 ▾';
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+// v13.0.0.18 我的待办：四个统计块即四个筛选，点击展开对应清单；再点同一块收起
+function todoFilter(btn, f) {
+    var block = btn.closest('.todo-block');
+    if (!block) return;
+    var list = block.querySelector('.todo-list');
+    var cur = block.querySelector('.todo-list-cur');
+
+    // 再次点击当前选中的块 = 收起清单
+    if (btn.classList.contains('is-active') && list.classList.contains('open')) {
+        list.classList.remove('open');
+        btn.classList.remove('is-active');
+        btn.setAttribute('aria-pressed', 'false');
+        return;
     }
-    try { localStorage.setItem('todoOpen', open ? '1' : '0'); } catch (e) {}
-}
-// 记住上次的展开状态，避免每次进工作台都要再点一次
-// 用 DOMContentLoaded 兜底：本页脚本可能早于待办区块渲染
-function restoreTodoState() {
-    try {
-        if (localStorage.getItem('todoOpen') === '1' && document.getElementById('todoFull')) {
-            toggleTodoBody(true);
-        }
-    } catch (e) {}
-}
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', restoreTodoState);
-} else {
-    restoreTodoState();
+
+    block.querySelectorAll('.todo-filter').forEach(function (b) {
+        b.classList.remove('is-active');
+        b.setAttribute('aria-pressed', 'false');
+    });
+    btn.classList.add('is-active');
+    btn.setAttribute('aria-pressed', 'true');
+
+    var rows = block.querySelectorAll('tr.todo-tr');
+    var shown = 0;
+    rows.forEach(function (r) {
+        var lv = r.getAttribute('data-level') || '';
+        var hit = (f === 'all') || (f === 'within7' ? (lv === 'soon' || lv === 'near') : lv === f);
+        r.style.display = hit ? '' : 'none';
+        if (hit) shown++;
+    });
+
+    var names = { all: '全部任务', overdue: '已逾期任务', soon: '3 天内到期', within7: '7 天内到期' };
+    if (cur) cur.textContent = names[f] || '全部任务';
+    var cnt = block.querySelector('.todo-count-shown');
+    if (cnt) cnt.textContent = shown;
+    var empty = block.querySelector('.todo-empty');
+    if (empty) empty.style.display = shown ? 'none' : 'block';
+    var table = block.querySelector('.todo-table');
+    if (table) table.style.display = shown ? '' : 'none';
+
+    list.classList.add('open');
 }
 
 function clearAllLogs() {
