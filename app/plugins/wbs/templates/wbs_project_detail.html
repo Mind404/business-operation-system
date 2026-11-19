@@ -354,13 +354,12 @@
 </div>
 
 {% if can_quickadd %}
-<!-- 底部留白：避免右下角悬浮球压住表格最后一屏的操作列 -->
-<div style="height:64px;"></div>
-<!-- 悬浮球：新建任务（v13.0.0.21：管理员 + 项目负责人可用） -->
+<!-- 悬浮球：新建任务（v13.0.0.21：管理员 + 项目负责人可用；v13.0.0.22 起纯悬浮，不再预留页面高度） -->
 <button id="fabNewTask" type="button" onclick="openNewTaskDrawer()" title="新建任务" aria-label="新建任务"
-    style="position:fixed;right:26px;bottom:26px;width:56px;height:56px;border-radius:50%;border:none;
-    background:#2563eb;color:#fff;font-size:28px;line-height:1;cursor:pointer;z-index:9000;
-    box-shadow:0 6px 18px rgba(37,99,235,.35);display:flex;align-items:center;justify-content:center;">+</button>
+    style="position:fixed;right:22px;bottom:22px;width:52px;height:52px;border-radius:50%;border:none;
+    background:#2563eb;color:#fff;font-size:27px;line-height:1;cursor:pointer;z-index:9000;
+    box-shadow:0 6px 16px rgba(37,99,235,.32);display:flex;align-items:center;justify-content:center;
+    opacity:.9;transition:opacity .15s,transform .15s;">+</button>
 
 <!-- 新建任务抽屉 -->
 <div id="newTaskMask" onclick="if(event.target===this)closeNewTaskDrawer()"
@@ -839,6 +838,13 @@ if (nrOwnerEl) attachPicker(nrOwnerEl);
 const ntOwnerEl = document.getElementById('nt_owner');
 if (ntOwnerEl) attachPicker(ntOwnerEl);
 function ntEscHandler(e){ if(e.key === 'Escape') closeNewTaskDrawer(); }
+(function () {
+    const fab = document.getElementById('fabNewTask');
+    if (!fab) return;
+    fab.addEventListener('mouseenter', function () { fab.style.opacity = '1'; fab.style.transform = 'scale(1.06)'; });
+    fab.addEventListener('mouseleave', function () { fab.style.opacity = '.9'; fab.style.transform = 'scale(1)'; });
+})();
+
 function openNewTaskDrawer(){
     const mask = document.getElementById('newTaskMask');
     if (!mask) return;
