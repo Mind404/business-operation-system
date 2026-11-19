@@ -1491,8 +1491,8 @@ def _admin_backup_restore_body():
                     try:
                         _c = sqlite3.connect(target, timeout=30)
                         _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                        _fresh = _db_looks_fresh(_c)
                         _c.close()
-                        _fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
                     except Exception:
                         _fresh = False
                 moved, no_such, defaulted = _restore_data_only(src, target, include_users=_fresh)
@@ -1822,8 +1822,8 @@ def _admin_restore_group_body():
                 try:
                     _c = sqlite3.connect(target, timeout=30)
                     _names = [r[0] for r in _c.execute('SELECT username FROM users').fetchall()]
+                    fresh = _db_looks_fresh(_c)
                     _c.close()
-                    fresh = len(_names) <= 2 and all(n in ('admin', 'product') for n in _names)
                 except Exception:
                     fresh = False
                 moved, no_such, defaulted = _restore_data_only(src, target, include_users=fresh)
@@ -1862,12 +1862,14 @@ def _admin_restore_group_body():
               '这是新装系统，账号也随主库一起导入，请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
               % (ts, _detail, len(rows), _skip_note), 'warning')
         return redirect(url_for('login'))
-    session.clear()
+    # v13.0.0.32：整组恢复走的也是「只恢复数据」——user_sessions 不搬，登录态本不该失效。
+    # 旧代码在这里无条件 session.clear() + 跳登录页，于是一次纯数据恢复也会把人踢下线，
+    # 与页面上「不会把你踢下线」的说明矛盾。
     flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
           '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s'
-          '主库连账号会话一起还原了，请重新登录（admin / admin123）。'
-          % (ts, _detail, len(rows), _skip_note), 'warning')
-    return redirect(url_for('login'))
+          '账号与会话未改动，当前登录仍然有效，无需重新登录。'
+          % (ts, _detail, len(rows), _skip_note), 'success')
+    return redirect(url_for('admin_backup'))
 
 
 @app.route('/admin/backup/delete', methods=['POST'])
@@ -2268,6 +2270,36 @@ _RESTORE_DATA_SKIP = {
     'user_plugins',      # 用户与插件的关系：跟账号绑定
     'ai_providers',      # 模型接口配置：旧 key 可能已失效，搬了 AI 反而不可用
 }
+
+
+def _db_looks_fresh(conn):
+    """v13.0.0.32：判断主库是不是「刚装好还没人用」。
+    原先只看账号数（<=2 且只有 admin/product），于是「只有 1 个 admin、但已经有一堆项目任务」的老系统
+    会被当成新装：恢复数据时把备份里的 accounts 一起搬回来并清会话，把人踢下线。
+    现在加上业务表是否为空：任意业务表有数据，就不算新装。"""
+    try:
+        names = [r[0] for r in conn.execute('SELECT username FROM users').fetchall()]
+    except Exception:
+        return False
+    if not (len(names) <= 2 and all(n in ('admin', 'product') for n in names)):
+        return False
+    skip_kw = ('user', 'session', 'log', 'pref', 'setting', 'meta', 'schema',
+               'registry', 'config', 'plugin', 'sqlite', 'task_link')
+    try:
+        tabs = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    except Exception:
+        return False
+    for tb in tabs:
+        low = str(tb).lower()
+        if any(k in low for k in skip_kw):
+            continue
+        try:
+            if conn.execute('SELECT COUNT(*) FROM "%s"' % tb).fetchone()[0] > 0:
+                return False
+        except Exception:
+            continue
+    return True
 
 
 def _restore_data_only(src_path, dst_path, include_users=False):
