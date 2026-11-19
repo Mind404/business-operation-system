@@ -78,11 +78,11 @@
                 </button>
                 <button type="button" class="todo-filter f-soon" onclick="todoFilter(this,'soon')">
                     <span class="tf-num">{{ g.stats.soon }}</span>
-                    <span class="tf-label">3 天内到期</span>
+                    <span class="tf-label">三天内到期</span>
                 </button>
                 <button type="button" class="todo-filter f-near" onclick="todoFilter(this,'within7')">
                     <span class="tf-num">{{ g.stats.within7 }}</span>
-                    <span class="tf-label" title="含 3 天内到期的任务">7 天内到期</span>
+                    <span class="tf-label" title="含三天内到期的任务">七天内到期</span>
                 </button>
             </div>
 
@@ -427,7 +427,7 @@ function todoFilter(btn, f) {
         if (hit) shown++;
     });
 
-    var names = { all: '全部任务', overdue: '已逾期任务', soon: '3 天内到期', within7: '7 天内到期' };
+    var names = { all: '全部任务', overdue: '已逾期任务', soon: '三天内到期', within7: '七天内到期' };
     if (cur) cur.textContent = names[f] || '全部任务';
     var cnt = block.querySelector('.todo-count-shown');
     if (cnt) cnt.textContent = shown;

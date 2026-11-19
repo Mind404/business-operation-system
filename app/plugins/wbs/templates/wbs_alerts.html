@@ -11,7 +11,7 @@
 </style>
 <div class="page-header">
     <h1>⚠️ 到期预警</h1>
-    <p class="page-desc">跨项目汇总未来7天内到期的任务节点，按紧急程度排序；点击任务名可跳转定位到该任务</p>
+    <p class="page-desc">跨项目汇总未来七天内到期的任务节点，按紧急程度排序；点击任务名可跳转定位到该任务</p>
 </div>
 
 <div class="wbs-toolbar" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:14px;">
@@ -55,7 +55,7 @@
 <!-- 3天内 -->
 {% if due3 %}
 <div style="margin-bottom:20px;">
-    <h3 style="color:#fd7e14;margin:0 0 10px;">🟠 3天内到期（{{ due3|length }}个任务）</h3>
+    <h3 style="color:#fd7e14;margin:0 0 10px;">🟠 三天内到期（{{ due3|length }}个任务）</h3>
     <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
         <thead><tr style="background:#ffe5d0;">
             <th style="padding:8px;border:1px solid #ffd0a8;text-align:left;">任务</th>
@@ -86,7 +86,7 @@
 <!-- 7天内 -->
 {% if due7 %}
 <div style="margin-bottom:20px;">
-    <h3 style="color:#0d6efd;margin:0 0 10px;">🔵 7天内到期（{{ due7|length }}个任务）</h3>
+    <h3 style="color:#0d6efd;margin:0 0 10px;">🔵 七天内到期（{{ due7|length }}个任务）</h3>
     <table class="alerts-table" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;">
         <thead><tr style="background:#dce9ff;">
             <th style="padding:8px;border:1px solid #b8d4fe;text-align:left;">任务</th>
