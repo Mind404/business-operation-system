@@ -889,39 +889,51 @@ def _parse_wbs_rows(ws):
     errors = []    # 格式错误清单：'第 N 行：计划开始「xxx」无法识别为日期'
     unmatched_owners = []  # v13.0.0.13：负责人文本未匹配到平台用户的行，导入后提示
     row_idx = 1    # Excel 行号（表头占第 1 行，数据从第 2 行起）
+
+    def _cell(r, i):
+        # v13.0.0.26：安全取列。用户上传的 Excel 列数不足（例如只有「编号/名称」两列）时，
+        # 原实现直接 row[i] 会抛 IndexError，整个导入 500。缺列一律按空值处理。
+        return r[i] if i < len(r) else None
+
     for row in ws.iter_rows(min_row=2, values_only=True):  # 第1行表头
         row_idx += 1
         if not row or not row[0]:
             continue
         code = str(row[0]).strip()
-        name = str(row[1] or '').strip()
+        name = str(_cell(row, 1) or '').strip()
         if not name:
             continue
-        work_content = str(row[2] or '').strip()
-        owner_raw = str(row[3] or '').strip()
+        if len(row) < 3:
+            # 连「工作内容」列都没有，说明不是平台模板：拒绝而不是静默建出一批空任务
+            errors.append('第 %d 行：只有 %d 列，列数不足，请先下载最新模板（11 列）再填写'
+                          % (row_idx, len(row)))
+            continue
+        work_content = str(_cell(row, 2) or '').strip()
+        owner_raw = str(_cell(row, 3) or '').strip()
         # v13.0.0.13：用户仍填人名，落库前翻译为平台账号；未匹配/多人填写保留原文
         owner, owner_stat = _to_username_info(owner_raw)
         if owner_stat in ('unmatched', 'multi'):
             unmatched_owners.append((row_idx, owner_raw))
-        collab = str(row[4] or '').strip()
-        p_start = _fmt_date(row[5])
-        p_end = _fmt_date(row[6])
-        if row[5] is not None and str(row[5]).strip() != '' and p_start is None:
+        collab = str(_cell(row, 4) or '').strip()
+        p_start = _fmt_date(_cell(row, 5))
+        p_end = _fmt_date(_cell(row, 6))
+        if _cell(row, 5) is not None and str(_cell(row, 5)).strip() != '' and p_start is None:
             errors.append('第 %d 行：计划开始「%s」无法识别为日期，支持 2026-11-05 / 2026/11/05 / 2026.11.05 / 2026年11月5日 / 20261105'
-                          % (row_idx, str(row[5]).strip()))
-        if row[6] is not None and str(row[6]).strip() != '' and p_end is None:
+                          % (row_idx, str(_cell(row, 5)).strip()))
+        if _cell(row, 6) is not None and str(_cell(row, 6)).strip() != '' and p_end is None:
             errors.append('第 %d 行：计划结束「%s」无法识别为日期（格式同上）'
-                          % (row_idx, str(row[6]).strip()))
+                          % (row_idx, str(_cell(row, 6)).strip()))
         if p_start and p_end and p_start > p_end:
             errors.append('第 %d 行：计划开始 %s 晚于计划结束 %s' % (row_idx, p_start, p_end))
-        deliverable = str(row[7] or '').strip()
+        deliverable = str(_cell(row, 7) or '').strip()
         # 新旧格式识别：第9列（索引8）是状态关键字 → 新 12 列格式（状态|进度|备注）
         # 旧 9 列格式：第9列（索引8）是备注（任意文本）
-        is_new = len(row) > 8 and str(row[8]).strip() in ('未开始', '进行中', '已完成', '阻塞')
+        _c8 = _cell(row, 8)
+        is_new = str(_c8).strip() in ('未开始', '进行中', '已完成', '阻塞')
         if is_new:
-            status = str(row[8]).strip()
-            remark = str(row[10] or '').strip() if len(row) > 10 else ''
-            raw_p = (str(row[9]).strip() if row[9] is not None else '')
+            status = str(_c8).strip()
+            remark = str(_cell(row, 10) or '').strip()
+            raw_p = (str(_cell(row, 9)).strip() if _cell(row, 9) is not None else '')
             # v12.7.10.10：进度列留空是常态（Excel 里刚排的任务还没填），默认按 0 处理，不再报错
             if not raw_p:
                 progress = 0
@@ -940,7 +952,7 @@ def _parse_wbs_rows(ws):
                         progress = 0
         else:
             status = ''
-            remark = str(row[8] or '').strip() if len(row) > 8 else ''
+            remark = str(_c8 or '').strip()
             progress = 0
         if status not in ('未开始', '进行中', '已完成', '阻塞'):
             status = '未开始'

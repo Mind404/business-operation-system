@@ -1362,6 +1362,13 @@ def admin_backup_restore():
             time.sleep(0.5)
             return _admin_backup_restore_body()
         finally:
+            # v13.0.0.26：开闸前先把库"预热"到可正常服务。整库覆盖 + WAL 合并刚完成时，
+            # 第一批新建连接可能撞上 disk I/O error，用户会看到 500。这里先自己试连几次，
+            # 失败就等 0.25 秒再试，最多 2 秒，确认库能正常读写了才放请求进来。
+            try:
+                _warm_db(app.config['DATABASE'])
+            except Exception:
+                pass
             _RESTORE_GATE.clear()
 
 
@@ -1500,6 +1507,40 @@ def _admin_backup_restore_body():
         finally:
             _dst.close()
             _src.close()
+        # v13.0.0.26：覆盖完成后不直接删 -wal / -shm。sidecar 文件正在被其他请求的连接使用，
+        # 手动 unlink 会让新连接打开时报 "disk I/O error"。WAL 合并统一交给下面的
+        # journal_mode 切换 + checkpoint 由 SQLite 自己完成。
+        # v13.0.0.26：覆盖后先做一次完整性自检。整库覆盖在极端并发下可能写坏页，
+        # 一旦自检不通过就立即用「恢复前保护」备份回滚，绝不把坏库留给用户。
+        _chk_ok, _chk_msg = _sqlite_integrity(target)
+        if not _chk_ok:
+            _prot = _latest_backup(bdir, pre, '保护')
+            _rb_err = ''
+            if _prot and os.path.exists(_prot):
+                try:
+                    _s2 = sqlite3.connect(Path(os.path.abspath(_prot)).as_uri() + '?mode=ro', uri=True)
+                    _d2 = sqlite3.connect(target, timeout=60)
+                    try:
+                        _s2.backup(_d2)
+                        try:
+                            _d2.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                        except Exception:
+                            pass
+                    finally:
+                        _d2.close()
+                        _s2.close()
+                    _ensure_all_tables()
+                    if pre != 'business':
+                        _reinit_plugin_schema(pre)
+                except Exception as _e:
+                    _rb_err = str(_e)
+            if _rb_err:
+                raise RuntimeError('恢复后数据库自检失败（%s），自动回滚也失败（%s）。'
+                                   '请停止系统后用 backups/%s 手动替换后重启。'
+                                   % (_chk_msg, _rb_err, os.path.basename(_prot or '')))
+            raise RuntimeError('恢复后数据库自检失败（%s），已自动回滚到恢复前的数据（回滚来源：%s）。'
+                               '本次恢复未生效，现有数据完好，请换一个备份文件重试。'
+                               % (_chk_msg, os.path.basename(_prot or '')))
         # v13.0.0：覆盖完成后立刻补建表结构。老备份里的库结构是旧的，恢复回来可能缺新版本
         # 新增的表（如 ui_prefs），用户不重启就会在界面上看到 "no such table"。
         # 必须放在后面任何 return（含"要求重新登录"那条）之前，否则会被跳过。
@@ -1508,6 +1549,25 @@ def _admin_backup_restore_body():
         _ensure_all_tables()
         if pre != 'business':
             _reinit_plugin_schema(pre)
+        # v13.0.0.26：收尾强制合并 WAL。整库覆盖只写了主数据文件，若有并发连接仍持有
+        # 覆盖前的 WAL 帧，它们会在稍后 checkpoint 时把旧数据写回新库，导致「点了恢复但
+        # 数据没变」。切到 DELETE 再切回 WAL 会强制所有连接释放并合并 WAL，清掉残留帧。
+        for _i in range(3):
+            try:
+                _cw = sqlite3.connect(target, timeout=15)
+                try:
+                    _cw.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                    _cw.execute('PRAGMA journal_mode=DELETE')
+                    _cw.execute('PRAGMA journal_mode=WAL')
+                finally:
+                    _cw.close()
+                break
+            except Exception:
+                time.sleep(0.15)
+        _chk2_ok, _chk2_msg = _sqlite_integrity(target)
+        if not _chk2_ok:
+            raise RuntimeError('恢复收尾自检失败（%s）：数据库可能在恢复过程中被并发写入干扰。'
+                               '已生成的「恢复前保护」备份可用于再次恢复，请稍后重试。' % _chk2_msg)
 
         # v12.7.10.11：主库恢复时，若同批次还有插件包快照，一并还原（否则会出现"数据在、插件没了"）
         pack_msg = ''
@@ -2056,13 +2116,30 @@ def get_db():
         # v12.2.0 并发加固：WAL 模式（读写不互相阻塞）+ busy_timeout（写锁等待）+ 连接超时
         # v12.5.28 性能修复：WAL 已持久化在数据库文件头，无需每请求重设；
         # PRAGMA journal_mode=WAL 每次执行需独占写锁，高并发下全部请求排队抢锁（100并发 P50≈26s→修复后大幅改善）
-        g.db = sqlite3.connect(app.config['DATABASE'], timeout=5.0)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute('PRAGMA foreign_keys = ON')
-        g.db.execute('PRAGMA busy_timeout = 5000')
-        # v12.5.28 性能修复：WAL 模式下 synchronous=NORMAL 为官方推荐（崩溃不损坏库，
-        # 仅可能丢失最近未 checkpoint 事务），提交无需每次 fsync，写吞吐显著提升
-        g.db.execute('PRAGMA synchronous = NORMAL')
+        # v13.0.0.26：恢复/备份切换瞬间 SQLite 可能短暂返回 disk I/O error（sidecar 正在重建）。
+        # 这类错误是瞬态的，重试几次即可，不能让用户看到 500。
+        conn = None
+        for _try in range(8):
+            try:
+                conn = sqlite3.connect(app.config['DATABASE'], timeout=5.0)
+                conn.row_factory = sqlite3.Row
+                conn.execute('PRAGMA foreign_keys = ON')
+                conn.execute('PRAGMA busy_timeout = 5000')
+                # v12.5.28 性能修复：WAL 模式下 synchronous=NORMAL 为官方推荐（崩溃不损坏库，
+                # 仅可能丢失最近未 checkpoint 事务），提交无需每次 fsync，写吞吐显著提升
+                conn.execute('PRAGMA synchronous = NORMAL')
+                g.db = conn
+                break
+            except sqlite3.OperationalError:
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
+                if _try == 7:
+                    raise
+                time.sleep(0.25)
     return g.db
 
 @app.teardown_appcontext
@@ -2576,6 +2653,44 @@ def _sha256_file(path):
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _warm_db(path, tries=8):
+    """v13.0.0.26：恢复开闸前的连接预热。返回 True 表示库已能被正常打开 + PRAGMA + 查询。"""
+    for _i in range(tries):
+        _c = None
+        try:
+            _c = sqlite3.connect(path, timeout=3.0)
+            _c.execute('PRAGMA busy_timeout = 3000')
+            _c.execute('PRAGMA synchronous = NORMAL')
+            _c.execute('SELECT 1').fetchone()
+            return True
+        except Exception:
+            time.sleep(0.25)
+        finally:
+            try:
+                if _c is not None:
+                    _c.close()
+            except Exception:
+                pass
+    return False
+
+
+def _sqlite_integrity(path):
+    """v13.0.0.26：恢复完成后的数据库完整性自检。返回 (ok, 说明)。
+    整库覆盖在极端并发下有概率写坏页，必须当场校验，坏库不能留给用户。"""
+    try:
+        _c = sqlite3.connect(path, timeout=10)
+        try:
+            _rows = _c.execute('PRAGMA integrity_check').fetchall()
+        finally:
+            _c.close()
+        _bad = [r[0] for r in (_rows or []) if r and str(r[0]).strip().lower() != 'ok']
+        if not _bad:
+            return True, 'ok'
+        return False, '; '.join(str(x) for x in _bad[:3])
+    except Exception as e:
+        return False, str(e)
 
 
 def _latest_backup(bdir, prefix, tag):
