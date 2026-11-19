@@ -56,6 +56,26 @@ def _wbs_project_editable(db, pid):
     return False, '仅项目负责人、参与人员或管理员可编辑'
 
 
+def _wbs_is_project_owner(db, pid):
+    """v13.0.0.21：项目负责人判定（用于「悬浮球新建任务」这类只给负责人的能力）。
+    管理员/平台管理员恒为 True；否则要求当前用户名/显示名出现在项目 owner 中。
+    项目没设负责人（owner 为空）时，只有管理员可见。"""
+    if _wbs_is_admin():
+        return True
+    user = session.get('username') or ''
+    display = session.get('user_name') or user
+    if not user:
+        return False
+    p = db.execute('SELECT owner FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not p:
+        return False
+    for n in str(p['owner'] or '').replace('，', ',').split(','):
+        n = n.strip()
+        if n and (n == user or n == display):
+            return True
+    return False
+
+
 def _wbs_project_approved(db, pid):
     """项目审批态校验（v13.0.0.11）：非管理员写任务前，项目本身必须是「已通过」。
 
@@ -663,6 +683,8 @@ def wbs_project_detail(pid):
     pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
     rejected_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='已驳回'", (pid,)).fetchone()[0]
     can_edit, _ = _wbs_project_editable(db, pid)
+    # v13.0.0.21：悬浮球新建任务 = 管理员 / 项目负责人（项目没设负责人则仅管理员）
+    can_quickadd = _wbs_is_project_owner(db, pid)
     # 系统附件总占用（uploads/wbs 目录）
     attach_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'wbs')
     attach_bytes = 0
@@ -695,9 +717,14 @@ def wbs_project_detail(pid):
     pick_users_json = (json.dumps(pick_users, ensure_ascii=False)
                        .replace('<', '\\u003c').replace('>', '\\u003e')
                        .replace('&', '\\u0026').replace("'", '\\u0027'))
+    # v13.0.0.21：项目名要进 JS 常量，按 pick_users_json 同样的方式预转义，避免 autoescape 变成 &#34;
+    project_name_json = (json.dumps(p['name'] or '', ensure_ascii=False)
+                         .replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026'))
     return render_template('wbs_project_detail.html', p=p, tasks=tasks, phases=phases,
+                           project_name_json=project_name_json,
                            pending_count=pending_count, rejected_count=rejected_count,
-                           can_edit=can_edit, attach_mb=attach_mb, attach_count=attach_count,
+                           can_edit=can_edit, can_quickadd=can_quickadd,
+                           attach_mb=attach_mb, attach_count=attach_count,
                            pick_users=pick_users, pick_users_json=pick_users_json)
 
 
@@ -917,8 +944,10 @@ def wbs_import(pid):
         if len(errors) > 10:
             head += '<br>· …共 %d 处' % len(errors)
         flash(head, 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid, snapshot=snapshot_name))
     # ===== 预检通过，正式写入 =====
+    # v13.0.0.21：写库前先把「导入前的计划」落一份快照，供用户对照/回退
+    snapshot_name = _save_import_snapshot(db, pid)
     for (row_idx, code, name, work_content, owner, collab,
          p_start, p_end, deliverable, status, progress, remark) in parsed:
         if code in existing:
@@ -953,6 +982,8 @@ def wbs_import(pid):
     # 导入后同步父任务时间：让阶段时间自动覆盖所有子任务
     for row_id, code in touched:
         _sync_parent_dates(db, row_id)
+    if snapshot_name:
+        flash(f'导入前的计划已自动备份：{snapshot_name}（页面顶部可下载，也可在服务器 uploads/snapshots 里找回）', 'success')
     if is_admin:
         parts = [f'新增 {len(inserted)} 条']
         if updated:
@@ -974,7 +1005,7 @@ def wbs_import(pid):
             more = f' 等 {len(unmatched_owners)} 处' if len(unmatched_owners) > 8 else ''
             msg += f'<br>以下负责人未匹配到平台用户，已按原文保存：{picks}{more}。'
         flash(msg, 'success')
-    return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    return redirect(url_for('wbs.wbs_project_detail', pid=pid, snapshot=snapshot_name))
 
 
 # ============ v9.4 行内编辑 AJAX 接口 ============
@@ -1071,10 +1102,11 @@ def _sync_parent_dates(db, child_id):
 
 @blueprint.route('/wbs/<int:pid>/task/quickadd', methods=['POST'])
 def wbs_task_quickadd(pid):
-    """Excel风格快速新建：按WBS编号自动判断父子层级。仅管理员/平台管理员可用
-    （普通用户（含项目负责人/参与人员）通过导入Excel添加任务）。"""
-    if session.get('user_role') not in ('admin', 'platform_admin'):
-        return jsonify({'ok': False, 'msg': '仅管理员和平台管理员可快速新建任务，普通用户可通过导入Excel添加任务'}), 403
+    """Excel风格快速新建：按WBS编号自动判断父子层级。
+    v13.0.0.21：权限放开给项目负责人（owner）；参与人员仍只能通过导入 Excel 添加。
+    管理员建的任务直接「已通过」；负责人建的任务进「待审批」，与导入 Excel 的规则一致。"""
+    if not _wbs_is_project_owner(get_db(), pid):
+        return jsonify({'ok': False, 'msg': '仅项目负责人、管理员可快速新建任务，其他成员可通过导入Excel添加'}), 403
     db = get_db()
     code = (request.form.get('wbs_code') or '').strip()
     name = (request.form.get('name') or '').strip()
@@ -1091,7 +1123,13 @@ def wbs_task_quickadd(pid):
                             (pid, parent_code)).fetchone()
         if parent:
             parent_id = parent['id']
-    approval = '已通过'
+    if _wbs_is_admin():
+        approval = '已通过'
+    else:
+        proj = db.execute('SELECT approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+        if not proj or proj['approval_status'] != '已通过':
+            return jsonify({'ok': False, 'msg': '项目待审批通过后才能新增任务'}), 403
+        approval = '待审批'
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
          plan_start, plan_end, deliverable, status, progress, approval_status, remark)
@@ -1108,7 +1146,7 @@ def wbs_task_quickadd(pid):
     log_operation('WBS', '快速新建', f'P{pid} 快速新建任务 WBS#{code}「{name}」(tid={new_id})',
                   session.get('username', ''))
     # v13.0.0.19：返回新任务 id，前端新建成功后直接跳转并高亮该行
-    return jsonify({'ok': True, 'tid': new_id})
+    return jsonify({'ok': True, 'tid': new_id, 'pending': (approval == '待审批')})
 
 
 @blueprint.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
@@ -1225,6 +1263,21 @@ def wbs_task_update_note(tid):
     db.commit()
     log_operation('WBS', '编辑进展', f'任务#{tid} 第{idx + 1}条进展已更新', session.get('username', ''))
     return jsonify({'ok': True, 'count': len(notes), 'updated': notes[idx]})
+
+
+@blueprint.route('/wbs/<int:pid>/snapshot/<path:fname>')
+def wbs_snapshot_download(pid, fname):
+    """v13.0.0.21：下载导入前自动生成的计划快照"""
+    db = get_db()
+    ok, msg = _wbs_project_editable(db, pid)
+    if not ok:
+        flash(msg, 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    safe = os.path.basename(fname)
+    if not safe.lower().endswith('.xlsx') or not os.path.isfile(os.path.join(_snapshot_dir(), safe)):
+        flash('快照文件不存在或已被清理（同一项目只保留最近 20 份）', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    return send_from_directory(_snapshot_dir(), safe, as_attachment=True)
 
 
 @blueprint.route('/wbs/task/<int:tid>/upload', methods=['POST'])
@@ -1347,21 +1400,18 @@ def wbs_template():
     return _send_bytes(buf.getvalue(), 'WBS_template.xlsx')
 
 
-@blueprint.route('/wbs/<int:pid>/export')
-def wbs_export(pid):
-    """导出当前项目WBS为Excel，含状态/进度列，与导入模板同格式"""
+def _build_wbs_workbook(db, pid):
+    """v13.0.0.21：导出与导入前快照共用同一套工作簿构建逻辑，保证快照可直接用于导入。"""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    db = get_db()
     p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
     if not p:
-        return redirect(url_for('wbs.wbs_projects'))
+        return None, ''
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = 'WBS计划'
     # v12.7.10.12：补上页面有、导出缺的两列「进展」「产出物」。
-    # 注意：导入是按列位置解析的（第9列必须是状态关键字），因此新列只能追加在最后，
-    # 导入端读到多出来的列会忽略，导出文件原样导回不会错列。
+    # 注意：导入是按列位置解析的（第9列必须是状态关键字），因此新列只能追加在最后。
     headers = ['WBS编号','阶段/任务','工作内容','负责人','协作/支撑','计划开始','计划结束','交付物/判定标准','状态','进度','备注','进展','产出物']
     header_fill = PatternFill('solid', fgColor='2B579A')
     thin = Side(style='thin', color='D0D7E5')
@@ -1387,14 +1437,59 @@ def wbs_export(pid):
             cell.alignment = Alignment(vertical='center', wrap_text=True)
             if is_phase:
                 cell.fill = PatternFill('solid', fgColor='D6E4F5')
-        # 进展是多行流水：按行数把行高撑开，避免 Excel 里只看到第一行
         n_lines = notes_txt.count('\n') + 1 if notes_txt else 1
         if n_lines > 1:
             ws.row_dimensions[r].height = min(15.0 * n_lines + 3, 160)
         r += 1
+    return wb, (p['name'] or ('项目%d' % pid))
+
+
+def _snapshot_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'snapshots')
+
+
+def _save_import_snapshot(db, pid):
+    """v13.0.0.21：导入前把当前计划落一份 xlsx 快照到服务器，返回文件名（失败返回空串）。
+    同一个项目只保留最近 20 份。"""
+    try:
+        wb, pname = _build_wbs_workbook(db, pid)
+        if wb is None:
+            return ''
+        from io import BytesIO
+        buf = BytesIO(); wb.save(buf)
+        d = _snapshot_dir(); os.makedirs(d, exist_ok=True)
+        safe_name = ''.join(ch for ch in str(pname) if ch.isalnum() or ch in '._-（）')
+        fname = 'WBS_%s_导入前快照_%s.xlsx' % (safe_name, datetime.now().strftime('%Y%m%d_%H%M%S'))
+        with open(os.path.join(d, fname), 'wb') as fh:
+            fh.write(buf.getvalue())
+        prefix = 'WBS_%s_导入前快照_' % safe_name
+        olds = sorted(f for f in os.listdir(d) if f.startswith(prefix) and f.endswith('.xlsx'))
+        for f in olds[:-20]:
+            try:
+                os.remove(os.path.join(d, f))
+            except OSError:
+                pass
+        return fname
+    except Exception:
+        return ''
+
+
+@blueprint.route('/wbs/<int:pid>/export')
+def wbs_export(pid):
+    """导出当前项目WBS为Excel，含状态/进度列，与导入模板同格式。
+    ?tag=preimport 时文件名标注「导入前快照」。"""
+    db = get_db()
+    wb, pname = _build_wbs_workbook(db, pid)
+    if wb is None:
+        return redirect(url_for('wbs.wbs_projects'))
     from io import BytesIO
     buf = BytesIO(); wb.save(buf); buf.seek(0)
-    fname = f'WBS_{p["name"]}.xlsx'.replace('/', '_')
+    tag = (request.args.get('tag') or '').strip()
+    if tag == 'preimport':
+        fname = 'WBS_%s_导入前快照_%s.xlsx' % (pname, datetime.now().strftime('%Y%m%d_%H%M%S'))
+    else:
+        fname = 'WBS_%s.xlsx' % pname
+    fname = fname.replace('/', '_')
     return _send_bytes(buf.getvalue(), fname)
 
 

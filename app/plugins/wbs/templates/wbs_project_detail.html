@@ -124,6 +124,26 @@
     <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
 </form>
 
+<!-- v13.0.0.21：导入前的快照提示（先自动下载当前计划，用户在快照上改） -->
+<div id="importTipMask" onclick="if(event.target===this)importTipClose()"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9200;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;padding:20px 24px;width:560px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.28);">
+        <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:8px;">已开始下载当前计划快照</div>
+        <div style="font-size:13px;color:#475569;line-height:1.8;">
+            文件：<b id="importSnapName" style="color:#2563eb;word-break:break-all;">—</b><br>
+            1）先打开刚下载的快照，在它上面改任务（改数量、改负责人、改时间）；<br>
+            2）保存后直接导入这份文件；系统按 WBS 编号匹配：已有编号更新、新编号新增，不会重复建任务。<br>
+            3）没收到下载？点工具栏「导出Excel」可再下一份，或到本页顶部提示条里下载服务器留存的快照。
+        </div>
+        <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" onclick="importTipClose()"
+                style="padding:8px 16px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>
+            <button type="button" onclick="importTipContinue()"
+                style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">选择改好的文件导入</button>
+        </div>
+    </div>
+</div>
+
 <style>
 .wbs-st-btn{padding:5px 9px;font-size:12px;border:1px solid #c7d2e5;background:#fff;color:#2b579a;border-radius:6px;cursor:pointer;transition:background .12s,color .12s;}
 .wbs-st-btn:hover{background:#eef3fb;}
@@ -313,10 +333,10 @@
 </table>
 </div>
 
-{% if current_role in ('admin','platform_admin') %}
+{% if can_quickadd %}
 <!-- 底部留白：避免右下角悬浮球压住表格最后一屏的操作列 -->
 <div style="height:64px;"></div>
-<!-- 悬浮球：新建任务（v13.0.0.19，不用滚到表格底部才能新建） -->
+<!-- 悬浮球：新建任务（v13.0.0.21：管理员 + 项目负责人可用） -->
 <button id="fabNewTask" type="button" onclick="openNewTaskDrawer()" title="新建任务" aria-label="新建任务"
     style="position:fixed;right:26px;bottom:26px;width:56px;height:56px;border-radius:50%;border:none;
     background:#2563eb;color:#fff;font-size:28px;line-height:1;cursor:pointer;z-index:9000;
@@ -331,6 +351,9 @@
             <div>
                 <h3 id="newTaskTitle" style="margin:0;font-size:16px;">新建任务</h3>
                 <div style="margin-top:4px;font-size:12px;color:#94a3b8;">编号填 1 为阶段，填 1.1 会自动挂到 1 下面</div>
+                {% if current_role not in ('admin','platform_admin') %}
+                <div style="margin-top:4px;font-size:12px;color:#b45309;">提交后进入「待审批」，管理员通过后才能编辑状态、进度和产出物</div>
+                {% endif %}
             </div>
             <button type="button" onclick="closeNewTaskDrawer()" title="关闭"
                 style="border:none;background:transparent;font-size:22px;line-height:1;color:#94a3b8;cursor:pointer;">×</button>
@@ -415,8 +438,48 @@
 <script>
 const IS_ADMIN = {{ 'true' if current_role in ('admin','platform_admin') else 'false' }};
 const PID = {{ p.id }};
+const PROJECT_NAME = {{ project_name_json|safe }};
 const PROJECT_APPROVAL = '{{ p.approval_status or "已通过" }}';
 let currentTid = null;
+
+// v13.0.0.21：导入前快照提示条（?snapshot=<文件名>）
+(function(){
+    try {
+        const snap = new URLSearchParams(location.search).get('snapshot');
+        if (!snap) return;
+        const bar = document.createElement('div');
+        bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:14px;z-index:9500;'
+            + 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;padding:10px 14px;border-radius:8px;'
+            + 'box-shadow:0 6px 20px rgba(0,0,0,.12);font-size:13px;display:flex;gap:12px;align-items:center;max-width:92vw;';
+        const txt = document.createElement('span');
+        txt.textContent = '导入前的计划已自动备份：' + snap;
+        const dl = document.createElement('a');
+        dl.href = '/wbs/' + PID + '/snapshot/' + encodeURIComponent(snap);
+        dl.textContent = '下载快照';
+        dl.style.cssText = 'color:#047857;font-weight:600;text-decoration:underline;white-space:nowrap;';
+        const x = document.createElement('span');
+        x.textContent = '×';
+        x.style.cssText = 'cursor:pointer;color:#6b7280;font-size:16px;line-height:1;';
+        x.onclick = function(){ bar.remove(); };
+        bar.appendChild(txt); bar.appendChild(dl); bar.appendChild(x);
+        document.body.appendChild(bar);
+    } catch(e) {}
+})();
+
+// v13.0.0.21：非管理员新建任务后提示待审批（?pending=1）
+(function(){
+    try {
+        if (!new URLSearchParams(location.search).get('pending')) return;
+        const hasSnap = !!new URLSearchParams(location.search).get('snapshot');
+        const t = document.createElement('div');
+        t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:' + (hasSnap ? '70px' : '14px') + ';z-index:9500;'
+            + 'background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:10px 16px;border-radius:8px;'
+            + 'box-shadow:0 6px 20px rgba(0,0,0,.12);font-size:13px;';
+        t.textContent = '任务已创建，等待管理员审批通过后才能编辑状态、进度和产出物';
+        document.body.appendChild(t);
+        setTimeout(function(){ t.remove(); }, 7000);
+    } catch(e) {}
+})();
 
 // 到期预警跳转定位：?task_highlight=<任务id> → 自动滚动到该行（停在上方工具栏下、视口中部）并闪烁高亮几次
 (function(){
@@ -486,7 +549,30 @@ function tryImport() {
         alert('项目正在等待管理员审批，审批通过后才能导入任务。');
         return;
     }
+    // v13.0.0.21：导入前先自动下载当前计划快照，用户在快照基础上改，避免忘记留底
+    const snapUrl = '/wbs/' + PID + '/export?tag=preimport&_=' + Date.now();
+    const stamp = new Date();
+    const pad = n => (n < 10 ? '0' : '') + n;
+    const name = 'WBS_' + PROJECT_NAME + '_导入前快照_' + stamp.getFullYear() + pad(stamp.getMonth() + 1)
+        + pad(stamp.getDate()) + '_' + pad(stamp.getHours()) + pad(stamp.getMinutes()) + pad(stamp.getSeconds()) + '.xlsx';
+    const a = document.createElement('a');
+    a.href = snapUrl; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    const label = document.getElementById('importSnapName');
+    if (label) label.textContent = name;
+    const mask = document.getElementById('importTipMask');
+    if (mask) mask.style.display = 'flex';
+}
+
+function importTipContinue() {
+    const mask = document.getElementById('importTipMask');
+    if (mask) mask.style.display = 'none';
     document.getElementById('importRealFile').click();
+}
+
+function importTipClose() {
+    const mask = document.getElementById('importTipMask');
+    if (mask) mask.style.display = 'none';
 }
 
 function batchApprove(action) {
@@ -681,7 +767,8 @@ function submitNewTask(){
             if (res.ok) {
                 closeNewTaskDrawer();
                 // 创建完成后直接跳到新任务并高亮，不用自己再找位置（表格按编号排序，新行可能在中间）
-                location.href = '/wbs/' + PID + (res.tid ? ('?task_highlight=' + res.tid) : '');
+                location.href = '/wbs/' + PID + (res.tid ? ('?task_highlight=' + res.tid) : '')
+                    + (res.pending ? ((res.tid ? '&' : '?') + 'pending=1') : '');
             } else {
                 show(res.msg || '创建失败');
             }
