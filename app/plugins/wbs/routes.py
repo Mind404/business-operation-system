@@ -238,22 +238,30 @@ def _insert_dup_rows(db, table, rows):
 
 
 # ============================================================
-def _resolve_display(text):
+def _user_disp_map(db):
+    """v13.0.0.31：一次查出全部用户显示名并挂在请求上下文上。
+    此前每渲染一行任务都要单独查一次 users 表，2000 行的项目详情页就是 2000 次查询。"""
+    m = getattr(g, '_wbs_user_disp_map', None)
+    if m is None:
+        try:
+            m = {r['username']: (r['display_name'] or r['username'])
+                 for r in db.execute('SELECT username, display_name FROM users').fetchall()}
+        except Exception:
+            m = {}
+        g._wbs_user_disp_map = m
+    return m
+
+
+def _resolve_display(text, db=None):
     """登录名串（逗号分隔）→ 显示名串；查不到的登录名原样保留（v12.7.7）"""
     if not text:
         return text
     names = [x.strip() for x in str(text).split(',') if x.strip()]
     if not names:
         return text
-    db = get_db()
-    placeholders = ','.join('?' * len(names))
-    try:
-        rows = db.execute('SELECT username, display_name FROM users WHERE username IN (%s)'
-                          % placeholders, names).fetchall()
-    except Exception:
-        # 查库异常时退回原文，保证列表页/详情页不因显示名解析失败而白屏
+    m = _user_disp_map(db or get_db())
+    if not m:
         return text
-    m = {r['username']: (r['display_name'] or r['username']) for r in rows}
     return ','.join(m.get(n, n) for n in names)
 
 
