@@ -176,7 +176,7 @@
 <!-- v12.7.10.25 折叠与状态筛选已并入上方工具栏（wbs-toolbar） -->
 
 <!-- WBS表格 -->
-<div id="wbsWrap" style="overflow-x:auto;">
+<div id="wbsWrap" style="overflow-x:auto;padding-bottom:96px;">
 <table id="wbsTable" style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d0d7e5;table-layout:fixed;">
     <thead>
         <tr style="background:#2b579a;color:#fff;">
@@ -310,45 +310,6 @@
         </tr>
     {% endfor %}
 
-    <!-- 新建行（Excel风格空行）：仅管理员可见 -->
-    {% if current_role in ('admin','platform_admin') %}
-    <tr id="newRow" style="background:#fafbfc;">
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
-            <input id="nr_wbs" placeholder="如2" style="width:100%;border:none;background:transparent;text-align:center;font-size:13px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_name" placeholder="任务名称（回车保存）" style="width:100%;border:none;background:transparent;font-size:13px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_work" placeholder="工作内容" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_owner" placeholder="负责人（可搜索）" autocomplete="off" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_collab" placeholder="协作" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input type="date" id="nr_start" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input type="date" id="nr_end" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_deliv" placeholder="交付物" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;color:#999;font-size:12px;text-align:center;">—</td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;color:#999;font-size:12px;text-align:center;">0%</td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;"></td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;">
-            <input id="nr_remark" placeholder="备注" style="width:100%;border:none;background:transparent;font-size:12px;outline:none;">
-        </td>
-        <td style="padding:7px 6px;border:1px dashed #b0b8c4;text-align:center;">
-            <button onclick="saveNewRow()" style="padding:4px 10px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✓</button>
-        </td>
-    </tr>
-    {% endif %}
     </tbody>
 </table>
 </div>
@@ -830,10 +791,6 @@ function attachPicker(input, onPick) {
     return { picked: () => picked };
 }
 
-// 快速新建行的负责人输入框接入选择器
-const nrOwnerEl = document.getElementById('nr_owner');
-if (nrOwnerEl) attachPicker(nrOwnerEl);
-
 // ===== v13.0.0.19 悬浮球新建任务 =====
 const ntOwnerEl = document.getElementById('nt_owner');
 if (ntOwnerEl) attachPicker(ntOwnerEl);
@@ -931,35 +888,6 @@ document.querySelectorAll('.cell').forEach(el => {
         };
         input.onblur = save;
         input.onkeydown = e => { if(e.key==='Enter') input.blur(); };
-    });
-});
-
-// 新建行：回车保存
-function saveNewRow() {
-    const code = document.getElementById('nr_wbs').value.trim();
-    const name = document.getElementById('nr_name').value.trim();
-    if (!code || !name) { alert('WBS号和任务名必填'); return; }
-    const fd = new FormData();
-    fd.append('wbs_code', code);
-    fd.append('name', name);
-    fd.append('work_content', document.getElementById('nr_work').value);
-    fd.append('owner', document.getElementById('nr_owner').value);
-    fd.append('collaborators', document.getElementById('nr_collab').value);
-    fd.append('plan_start', document.getElementById('nr_start').value);
-    fd.append('plan_end', document.getElementById('nr_end').value);
-    fd.append('deliverable', document.getElementById('nr_deliv').value);
-    fd.append('remark', document.getElementById('nr_remark').value);
-    fetch(`/wbs/${PID}/task/quickadd`, {method:'POST', body:fd})
-    .then(r=>r.json()).then(res => {
-        if (res.ok) location.reload();
-        else alert(res.msg||'保存失败');
-    });
-}
-// 回车触发（新建行仅管理员可见，普通用户无此元素，必须判空，否则整段脚本中断）
-['nr_wbs','nr_name','nr_work','nr_owner','nr_collab','nr_deliv','nr_remark'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('keydown', e => {
-        if (e.key === 'Enter') saveNewRow();
     });
 });
 
