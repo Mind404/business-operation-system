@@ -482,6 +482,14 @@ let currentTid = null;
             }
         };
         goToRow();
+        // v13.0.0.27：定位参数用完即摘掉。否则用户在这个页面按 F5 / 刷新，会再次跳转并闪一次，
+        // 看起来像"刷新后自己跳走了"。只保留跳转时的一次定位与高亮。
+        try {
+            const u = new URL(location.href);
+            u.searchParams.delete('task_highlight');
+            const qs = u.searchParams.toString();
+            history.replaceState(null, '', u.pathname + (qs ? '?' + qs : '') + (u.hash || ''));
+        } catch (e) {}
         // v13.0.0.13：目标行若被折叠（父阶段收起 / 折叠完成 / 状态筛选）先展开，否则滚动落点为空
         const ensureVisible = () => {
             try {

@@ -213,6 +213,36 @@ def _limit_body_size():
 #   一个账号在库里只保留一个有效令牌；新设备登录只覆盖令牌，
 #   旧设备的令牌立即不匹配，下一次请求就被登出并提示"已在另一处登录"。
 # ============================================================
+# ============================================================
+# v13.0.0.27 会话世代（恢复整库后强制全员重新登录）
+# ============================================================
+def _session_epoch_file():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '.session_epoch')
+
+
+def _session_epoch():
+    """当前会话世代号。存在 data/.session_epoch 里而不是库里：
+    整库恢复会把库覆盖回旧状态，放在库里的话世代号自己也被退回，等于没起作用。"""
+    try:
+        with open(_session_epoch_file(), 'r', encoding='utf-8') as f:
+            return int((f.read() or '0').strip() or 0)
+    except Exception:
+        return 0
+
+
+def _bump_session_epoch():
+    """会话世代 +1：所有旧 cookie 的世代号对不上，下一次请求即被要求重新登录。"""
+    try:
+        p = _session_epoch_file()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        n = _session_epoch() + 1
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write(str(n))
+        return n
+    except Exception:
+        return _session_epoch()
+
+
 def _bind_login_session(user_id):
     """登录成功时绑定本次会话令牌，覆盖该账号的旧令牌（= 把旧设备挤下线）。"""
     token = secrets.token_hex(16)
@@ -232,6 +262,7 @@ def _bind_login_session(user_id):
         # 令牌表异常不能让登录不可用：退化为不校验（记日志）
         print('=== _bind_login_session error ===', e)
     session['sess_token'] = token
+    session['sess_epoch'] = _session_epoch()
     return token
 
 
@@ -248,6 +279,9 @@ def _session_is_current():
     """当前会话令牌是否仍是该账号的有效令牌（False = 已被其他地方登录挤掉）。"""
     uid = session.get('user_id')
     if not uid:
+        return False
+    # v13.0.0.27：整库恢复会把会话表和身份数据一起换掉，世代号一变，全部旧会话作废
+    if session.get('sess_epoch', 0) != _session_epoch():
         return False
     token = session.get('sess_token')
     if not token:
@@ -426,7 +460,11 @@ def require_login():
         return redirect(url_for('login', next=request.path))
     # v12.7.10.10 单账号单设备：令牌不一致 = 该账号已在别处登录，本会话作废
     if not _session_is_current():
+        _epoch_out = session.get('sess_epoch', 0) != _session_epoch()
         session.clear()
+        if _epoch_out:
+            flash('系统数据已被管理员恢复，所有登录状态已统一失效，请重新登录。', 'warning')
+            return redirect(url_for('login'))
         return redirect(url_for('login', kicked=1))
     # v12.7.10.18 安全修复：账号被停用/删除后，已登录的会话必须立即失效（原来只校验令牌）
     try:
@@ -1496,7 +1534,9 @@ def _admin_backup_restore_body():
             _c0.close()
         except Exception:
             pass
-        _src = sqlite3.connect(Path(os.path.abspath(src)).as_uri() + '?mode=ro', uri=True)
+        # immutable=1：备份文件在恢复期间不会被改动，让 SQLite 别在备份文件旁生成
+        # -wal / -shm（否则 backups/ 里会多出一堆 .db-shm，按文件名排序时还会把 -shm 当成备份选中）
+        _src = sqlite3.connect(Path(os.path.abspath(src)).as_uri() + '?mode=ro&immutable=1', uri=True)
         _dst = sqlite3.connect(target, timeout=60)
         try:
             _src.backup(_dst)
@@ -1518,7 +1558,7 @@ def _admin_backup_restore_body():
             _rb_err = ''
             if _prot and os.path.exists(_prot):
                 try:
-                    _s2 = sqlite3.connect(Path(os.path.abspath(_prot)).as_uri() + '?mode=ro', uri=True)
+                    _s2 = sqlite3.connect(Path(os.path.abspath(_prot)).as_uri() + '?mode=ro&immutable=1', uri=True)
                     _d2 = sqlite3.connect(target, timeout=60)
                     try:
                         _s2.backup(_d2)
@@ -1583,23 +1623,26 @@ def _admin_backup_restore_body():
                 except Exception as e:
                     pack_msg = f' 但插件包还原失败：{e}，可单独对 pluginpack_备份_{ts2}.zip 点还原。'
         log_operation('数据备份', '恢复', f'{kind} ← {fname}', session.get('username'))
-        # v12.7.10.16：主库恢复会把会话表一起还原，当前登录态必然失效。
-        # 与其静默跳到登录页让人以为"恢复没成功"，不如明确提示并按备份里的账号重新登录。
+        # v13.0.0.27：主库整库恢复后统一强制所有人重新登录。
+        # 整库覆盖把 user_sessions 一起退回备份时刻：备份里还活着的旧 token 会重新生效，
+        # 而备份之后才登录的人持有的 token 已经不存在。两种情况都会让"谁是谁"错位，
+        # 所以不看当前 token 在不在，直接把会话表清空——所有人用备份里的账号重新登录一次，
+        # 身份与权限一定和恢复后的数据一致。
         if pre == 'business':
-            _tok = session.get('sess_token')
-            _still = False
             try:
-                _c = sqlite3.connect(src)
-                if _tok and _c.execute('SELECT 1 FROM user_sessions WHERE token=?', (_tok,)).fetchone():
-                    _still = True
-                _c.close()
+                _cs = sqlite3.connect(target, timeout=15)
+                _cs.execute('DELETE FROM user_sessions')
+                _cs.commit()
+                _cs.close()
             except Exception:
-                _still = False
-            if not _still:
-                session.clear()
-                flash('主库已恢复（数据已覆盖成功）。登录信息也随主库一起还原了，请重新登录——'
-                      '账号用备份里的（例如 admin / admin123），登录后再恢复插件库和插件包。', 'warning')
-                return redirect(url_for('login'))
+                pass
+            # 光清空会话表还不够：老 cookie 进来时会被"认领"成新会话继续用。
+            # 世代号 +1 才能让所有旧 cookie 在下一次请求时被判定失效。
+            _bump_session_epoch()
+            session.clear()
+            flash('主库已恢复（数据已覆盖成功）。为安全起见，所有在线账号已统一退出，请重新登录——'
+                  '账号用备份里的（例如 admin / admin123）。登录后可继续恢复插件库和插件包。', 'warning')
+            return redirect(url_for('login'))
         _need_restart = ' 插件包代码已同步，建议重启一次（停止.bat → 启动.bat）让插件界面完全刷新。' if pack_msg else ' 数据已即时生效，无需重启。'
         flash(f'✅ 已从备份恢复{kind}：{fname}，数据已立即生效（无需停止服务）。'
               f'恢复前当前数据已另存保护备份。{pack_msg}{_need_restart}', 'success')
