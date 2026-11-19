@@ -899,6 +899,27 @@ document.querySelectorAll('.cell').forEach(el => {
     });
 });
 
+
+// v13.0.0.29：把某个任务行的状态/进度直接刷成给定值（用于自身联动与父任务上卷的即时回显）
+function wbsSetRow(tid, st, pg) {
+    var tr = document.querySelector('tr[data-tid="' + tid + '"]');
+    if (!tr) return;
+    if (st) {
+        var sel = tr.querySelector('.status-select');
+        if (sel) {
+            sel.value = st; sel.dataset.prev = st;
+            sel.style.background = st === '已完成' ? '#d4edda' : st === '进行中' ? '#cce5ff' : st === '阻塞' ? '#f8d7da' : '#fff';
+        }
+        tr.setAttribute('data-status', st);
+    }
+    if (pg !== null && pg !== undefined) {
+        var rg = tr.querySelector('.prog-range');
+        if (rg) { rg.value = pg; rg.style.setProperty('--fill', pg + '%'); }
+        var pv = tr.querySelector('.prog-val');
+        if (pv) { pv.textContent = pg + '%'; }
+    }
+}
+
 // 状态下拉
 document.querySelectorAll('.status-select').forEach(sel => {
     sel.addEventListener('change', () => {
@@ -913,6 +934,12 @@ document.querySelectorAll('.status-select').forEach(sel => {
                 // v12.7.10.22 修复：同步这一行的 data-status，否则筛选/计数还按改之前的旧状态算
                 var trRow = sel.closest('tr');
                 if (trRow) { trRow.setAttribute('data-status', sel.value); }
+                // v13.0.0.29：后端会做状态↔进度联动与父任务上卷，这里直接回显，不用刷新页面
+                if (res.linked) {
+                    if (res.linked.status) { sel.value = res.linked.status; sel.dataset.prev = res.linked.status; sel.style.background = res.linked.status==='已完成'?'#d4edda':res.linked.status==='进行中'?'#cce5ff':res.linked.status==='阻塞'?'#f8d7da':'#fff'; }
+                    if (res.linked.progress !== undefined) wbsSetRow(sel.dataset.tid, null, res.linked.progress);
+                }
+                if (res.parent) wbsSetRow(res.parent.id, res.parent.status, res.parent.progress);
                 if (window.wbsRefreshStatus) window.wbsRefreshStatus();
             } else {
                 alert(res.msg || '保存失败');
@@ -934,7 +961,14 @@ document.querySelectorAll('.prog-range').forEach(r => {
         fetch(`/wbs/task/${r.dataset.tid}/inline`, {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({field:'progress', value:r.value})
-        }).then(res=>res.json()).then(d=>{ if(!d.ok) alert(d.msg||'保存失败'); });
+        }).then(res=>res.json()).then(d=>{
+            if (!d.ok) { alert(d.msg||'保存失败'); return; }
+            // v13.0.0.29：进度到 100 会自动转已完成；0-100 之间会把未开始转进行中；父任务同步上卷
+            if (d.linked && d.linked.status) wbsSetRow(r.dataset.tid, d.linked.status, null);
+            if (d.linked && d.linked.progress !== undefined) wbsSetRow(r.dataset.tid, null, d.linked.progress);
+            if (d.parent) wbsSetRow(d.parent.id, d.parent.status, d.parent.progress);
+            if (window.wbsRefreshStatus) window.wbsRefreshStatus();
+        });
     });
 });
 

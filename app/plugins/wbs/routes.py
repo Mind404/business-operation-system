@@ -673,6 +673,8 @@ def wbs_project_detail(pid):
     p = dict(p)
     p['owner_disp'] = _resolve_display(p.get('owner'))
     p['participants_disp'] = _resolve_display(p.get('participants'))
+    # v13.0.0.29：进详情页先把父任务的「状态/进度」按子任务对账一次，自愈历史不一致数据
+    _reconcile_project_rollups(db, pid)
     tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     # 自然排序：按 WBS 编号的数字分段排序（1.10 排在 1.2 之后），同编号按 id 稳定
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
@@ -1163,49 +1165,166 @@ def wbs_task_inline(tid):
                 return jsonify({'ok': False,
                                 'msg': f'WBS编号「{value}」已被任务「{dup["name"]}」占用，请换一个编号'}), 400
     old_value = t[field]
-    db.execute(f'UPDATE wbs_tasks SET {field}=? WHERE id=?', (value, tid))
+    # v13.0.0.29：状态与进度双向联动，避免出现「未开始 30%」「已完成 60%」这类自相矛盾的行
+    extra = {}
+    if field == 'progress':
+        v = int(value)
+        if v >= 100:
+            extra['status'] = '已完成'
+        elif v > 0 and (t['status'] or '未开始') == '未开始':
+            extra['status'] = '进行中'
+    elif field == 'status':
+        if value == '已完成':
+            extra['progress'] = 100
+        elif value == '未开始':
+            extra['progress'] = 0
+    sets = ', '.join(['%s=?' % k for k in extra.keys()] + ['%s=?' % field])
+    db.execute('UPDATE wbs_tasks SET %s WHERE id=?' % sets,
+               tuple(list(extra.values()) + [value, tid]))
     db.commit()
     if field in ('plan_start', 'plan_end'):
         _sync_parent_dates(db, tid)
-    if field == 'status':
-        # v13.0.0.22：子任务状态手动改动后，父任务状态按事实自动上卷
+    if field in ('status', 'progress'):
+        # v13.0.0.29：状态或进度任何一边变了，父任务都按事实重新汇总（可升可降）
         _rollup_parent_status(db, tid)
     disp = {'progress': lambda v: f'{v}%'}.get(field, lambda v: v)
     log_operation('WBS', '行内编辑', f'任务#{tid}「{t["name"]}」{field}: {disp(old_value)} → {disp(value)}',
                   session.get('username', ''))
     # v13.0.0.13：负责人回传显示名，页面即时切换为"余丽莎"而非账号
-    return jsonify({'ok': True, 'value': value,
-                    'disp': (_resolve_display(value) if field in ('owner', 'collaborators') else value)})
+    resp = {'ok': True, 'value': value,
+            'disp': (_resolve_display(value) if field in ('owner', 'collaborators') else value)}
+    # v13.0.0.29：状态/进度联动结果一并回给前端，行内控件即时对齐
+    if extra:
+        resp['linked'] = dict(extra)
+    _rp = db.execute('SELECT parent_id FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+    if _rp and _rp['parent_id']:
+        _p = db.execute('SELECT id, status, progress FROM wbs_tasks WHERE id=?',
+                        (_rp['parent_id'],)).fetchone()
+        if _p:
+            resp['parent'] = {'id': _p['id'], 'status': _p['status'], 'progress': _p['progress']}
+    return jsonify(resp)
 
 
-def _rollup_by_parent(db, parent_id):
-    """v13.0.0.22：按直接子任务的状态推算父任务状态，并逐级向上。
-    规则：子任务全部「已完成」→ 父「已完成」；任一子任务不是「未开始」→ 父「进行中」。
-    子任务全为「未开始」时不回退父状态（避免把手工设的「进行中/阻塞」拉回未开始）。"""
+def _rollup_target(kids):
+    """v13.0.0.29：由直接子任务推算父任务的（状态, 进度）。
+    规则（全量推导，可升可降，不再"只升不降"）：
+      · 全部子任务已完成        → 父 已完成，进度 100
+      · 有子任务阻塞            → 父 阻塞，进度取均值
+      · 全部子任务未开始        → 父 未开始，进度取均值
+      · 其余（有做有没做）      → 父 进行中，进度取均值
+    已取消的子任务不参与推导；子任务全是已取消时父也不动。"""
+    live = [k for k in kids if (k['status'] or '未开始') != '已取消']
+    if not live:
+        return None, None
+    sts = [(k['status'] or '未开始') for k in live]
+    prs = []
+    for k in live:
+        try:
+            prs.append(max(0, min(100, int(k['progress'] or 0))))
+        except Exception:
+            prs.append(0)
+    if all(x == '已完成' for x in sts):
+        st = '已完成'
+    elif any(x == '阻塞' for x in sts):
+        st = '阻塞'
+    elif all(x == '未开始' for x in sts):
+        st = '未开始'
+    else:
+        st = '进行中'
+    prog = 100 if st == '已完成' else int(sum(prs) / len(prs) + 0.5)  # 四舍五入取整（round() 会把 82.5 抹成 82）
+    return st, prog
+
+
+def _rollup_by_parent(db, parent_id, quiet=False):
+    """按直接子任务重算父任务的状态与进度，并逐级向上。
+    v13.0.0.22 初版只做了状态、且"只升不降"；v13.0.0.29 补齐：
+      1) 状态可降（子任务从全部完成退回未开始/进行中，父任务跟着退，不再卡在已完成）；
+      2) 父任务进度 = 直接子任务进度均值，父状态与进度不再各说各话；
+      3) 可升可降意味着页面加载时做一次对账即可自愈历史脏数据。"""
     try:
-        kids = db.execute('SELECT status FROM wbs_tasks WHERE parent_id=?', (parent_id,)).fetchall()
+        kids = db.execute('SELECT status, progress FROM wbs_tasks WHERE parent_id=?', (parent_id,)).fetchall()
         if not kids:
             return
-        sts = [(k['status'] or '未开始') for k in kids]
-        if all(x == '已完成' for x in sts):
-            target = '已完成'
-        elif any(x != '未开始' for x in sts):
-            target = '进行中'
-        else:
-            target = None
-        if target:
-            p = db.execute('SELECT status, name FROM wbs_tasks WHERE id=?', (parent_id,)).fetchone()
-            if p and (p['status'] or '未开始') != target:
-                db.execute('UPDATE wbs_tasks SET status=? WHERE id=?', (target, parent_id))
-                db.commit()
-                log_operation('WBS', '父任务状态自动上卷',
-                              f'父任务#{parent_id}「{p["name"]}」{p["status"] or "未开始"} → {target}（按子任务汇总）',
+        target, prog = _rollup_target(kids)
+        if target is None:
+            return
+        p = db.execute('SELECT status, progress, name FROM wbs_tasks WHERE id=?', (parent_id,)).fetchone()
+        if not p:
+            return
+        cur_st = p['status'] or '未开始'
+        cur_pg = int(p['progress'] or 0)
+        if cur_st != target or cur_pg != prog:
+            db.execute('UPDATE wbs_tasks SET status=?, progress=? WHERE id=?', (target, prog, parent_id))
+            db.commit()
+            if not quiet:
+                log_operation('WBS', '父任务自动汇总',
+                              f'父任务#{parent_id}「{p["name"]}」{cur_st}/{cur_pg}% → {target}/{prog}%（按子任务汇总）',
                               session.get('username', ''))
         gp = db.execute('SELECT parent_id FROM wbs_tasks WHERE id=?', (parent_id,)).fetchone()
         if gp and gp['parent_id']:
-            _rollup_by_parent(db, gp['parent_id'])
-    except Exception:
-        pass
+            _rollup_by_parent(db, gp['parent_id'], quiet=quiet)
+    except Exception as e:
+        print('=== _rollup_by_parent ===', e)
+
+
+def _reconcile_project_rollups(db, project_id):
+    """进详情页时按子任务对账全部父任务（含阶段行、多层父任务）。
+    一次性读全项目任务在内存里自底向上推导，只把与推导不一致的行批量写回；
+    数据本来就一致时零写入，不产生日志。用于自愈历史遗留的"父任务卡在已完成"等不一致。"""
+    try:
+        rows = db.execute('SELECT id, parent_id, status, progress FROM wbs_tasks WHERE project_id=?',
+                          (project_id,)).fetchall()
+        if not rows:
+            return
+        cur = {}
+        orig = {}
+        kids_of = {}
+        for r in rows:
+            cur[r['id']] = [(r['status'] or '未开始'), int(r['progress'] or 0)]
+            orig[r['id']] = (cur[r['id']][0], cur[r['id']][1])
+            if r['parent_id']:
+                kids_of.setdefault(r['parent_id'], []).append(r['id'])
+        # 先纠正自相矛盾的任务行（历史数据里常见「未开始 30%」「已完成 60%」）：
+        # 有进度却未开始 → 进行中；进度到 100 却没收尾 → 已完成；已完成但进度不满 → 补到 100
+        for tid, (st, prog) in list(cur.items()):
+            if st == '已取消':
+                continue
+            if st == '未开始' and prog > 0:
+                cur[tid] = ['进行中', prog]
+            elif prog >= 100 and st != '已完成':
+                cur[tid] = ['已完成', 100]
+            elif st == '已完成' and prog < 100:
+                cur[tid] = ['已完成', 100]
+        if not kids_of:
+            return
+        changed = []
+        # 最多向上推导 6 层（阶段→任务→子任务的实际深度远小于此），稳定即停
+        for _ in range(6):
+            dirty = False
+            for pid, kid_ids in kids_of.items():
+                kids = [{'status': cur[k][0], 'progress': cur[k][1]} for k in kid_ids if k in cur]
+                st, prog = _rollup_target(kids)
+                if st is None:
+                    continue
+                old = cur.get(pid)
+                if old is None:
+                    continue
+                if old[0] != st or old[1] != prog:
+                    cur[pid] = [st, prog]
+                    dirty = True
+            if not dirty:
+                break
+        for pid, (st, prog) in cur.items():
+            if orig.get(pid) != (st, prog):
+                changed.append((st, prog, pid))
+        if changed:
+            db.executemany('UPDATE wbs_tasks SET status=?, progress=? WHERE id=?', changed)
+            db.commit()
+            log_operation('WBS', '父任务自动汇总',
+                          f'打开项目详情时按子任务对账，纠正 {len(changed)} 条父任务的状态/进度',
+                          session.get('username', ''))
+    except Exception as e:
+        print('=== _reconcile_project_rollups ===', e)
 
 
 def _rollup_parent_status(db, tid):
