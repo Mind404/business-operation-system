@@ -53,6 +53,7 @@
         <div style="font-size:13px;color:#1e40af;margin-top:8px;line-height:1.9;">
             · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code>）＋ 插件包代码快照（<code>pluginpack_*.zip</code>）；<br>
             · 插件数据必须独立存放，所以一套备份是<b>多个文件</b>，但同一次备份的这批文件时间戳一致，视为<b>一组</b>；<br>
+            · 附件不随备份走：备份只含数据库与插件包，<b>不含任务附件等上传文件</b>（<code>app/plugins/*/uploads/</code>）。换机 / 新装迁移时，请把该目录与备份文件一起复制过去，否则任务能恢复、附件点开会提示文件不存在；<br>
             · 自动备份：系统每次启动执行一次；保留策略为「每个库的备份与保护各保留最近 7 份」；<br>
             · <b>默认方式就是「只恢复数据」</b>：只搬业务数据，当前版本的表结构、账号体系、插件登记、模型配置都不动，也不会把任何人踢下线；<br>
             · 「整库覆盖」属于高级操作：会把库结构、账号密码、在线会话一起退回备份时刻，只用于整库回退 / 换机救火；<br>
@@ -93,7 +94,7 @@
                     <form method="post" action="{{ url_for('admin_backup_restore_group') }}" style="margin:0;">
                         <input type="hidden" name="group_ts" value="{{ grp.ts }}">
                         <button type="submit"
-                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。只恢复数据，账号与在线会话保持当前状态，不会被踢下线。')"
+                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。只恢复数据，账号与在线会话保持当前状态，不会被踢下线。注意：任务附件等上传文件不随备份恢复，需要单独复制 uploads 目录。')"
                                 style="background:#0f766e;color:#fff;border:none;font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;">整组恢复</button>
                     </form>
                 </div>
