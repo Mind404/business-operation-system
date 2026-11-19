@@ -1478,7 +1478,9 @@ def _admin_backup_restore_body():
     try:
         # v13.0.0：两种恢复方式。老备份（旧版本做的）请用「只恢复数据」，
         # 它只搬业务数据，当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变。
-        mode = (request.form.get('mode') or 'full').strip().lower()
+        # v13.0.0.28：默认改为「只恢复数据」。整库覆盖（full）风险高，必须是用户明确点击
+        # 「整库覆盖」才执行；请求里没带 mode 时按 data 处理，避免脚本/旧表单误触发整库回退。
+        mode = (request.form.get('mode') or 'data').strip().lower()
         if mode == 'data':
             try:
                 _fresh = False
@@ -2748,24 +2750,64 @@ def _latest_backup(bdir, prefix, tag):
         return None
 
 
+def _snapshot_db(src, dst):
+    """用 SQLite 在线备份 API 生成一致快照。
+    v13.0.0.28：不再依赖 wal_checkpoint 后再 copyfile——活动连接占着 WAL 时
+    checkpoint 会返回 busy（旧代码忽略返回值），此时 copyfile 拿到的 .db 缺少
+    最近提交、还留在 -wal 里的记录；而 sha256 判重也是对着这个旧文件算的，
+    于是「刚改的数据永远进不了备份，而且系统认为不必再备」。"""
+    s = sqlite3.connect(src, timeout=15)
+    d = sqlite3.connect(dst)
+    try:
+        s.backup(d)
+    finally:
+        try:
+            d.close()
+        finally:
+            s.close()
+
+
 def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped):
     """把一个库复制进 backups/。v13.0.0.9 两个修正：
     1) 用 copyfile + utime，让备份文件的修改时间等于"生成时刻"。
        原先 copy2 会把源库的旧修改时间一起带过来，列表里的"生成时间"显示成几天前，
        按修改时间保留 7 份的清理也会排错序，结果备份只增不减。
     2) 与同前缀最近一份内容完全一致（sha256 相同）时不再生成新文件，
-       避免同一份数据每启动/每恢复一次就多复制一套。"""
+       避免同一份数据每启动/每恢复一次就多复制一套。
+    v13.0.0.28：先取一致快照（含 WAL 里已提交的数据）再比对/落盘。"""
     dst = os.path.join(bdir, f'{prefix}_{tag}_{ts}.db')
-    latest = _latest_backup(bdir, prefix, tag)
-    if latest and os.path.exists(latest):
+    tmp = dst + '.tmp'
+    try:
+        _snapshot_db(src, tmp)
+    except Exception as e:
+        print('=== _snapshot_db fallback ===', e)
         try:
-            if _sha256_file(src) == _sha256_file(latest):
-                skipped.append(prefix)
-                return None
+            shutil.copyfile(src, tmp)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+            return None
+    try:
+        latest = _latest_backup(bdir, prefix, tag)
+        if latest and os.path.exists(latest):
+            try:
+                if _sha256_file(tmp) == _sha256_file(latest):
+                    os.remove(tmp)
+                    skipped.append(prefix)
+                    return None
+            except Exception:
+                pass
+        os.replace(tmp, dst)
+        os.utime(dst, None)
+    except Exception as e:
+        print('=== _save_db_backup error ===', e)
+        try:
+            os.remove(tmp)
         except Exception:
             pass
-    shutil.copyfile(src, dst)
-    os.utime(dst, None)
+        return None
     made.append(os.path.basename(dst))
     return dst
 

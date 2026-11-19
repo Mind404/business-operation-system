@@ -54,7 +54,8 @@
             · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code>）＋ 插件包代码快照（<code>pluginpack_*.zip</code>）；<br>
             · 插件数据必须独立存放，所以一套备份是<b>多个文件</b>，但同一次备份的这批文件时间戳一致，视为<b>一组</b>；<br>
             · 自动备份：系统每次启动执行一次；保留策略为「每个库的备份与保护各保留最近 7 份」；<br>
-            · 「只恢复数据」只搬业务数据，当前版本的表结构、账号体系、插件登记、模型配置都不动——导入旧版本备份请用这个；<br>
+            · <b>默认方式就是「只恢复数据」</b>：只搬业务数据，当前版本的表结构、账号体系、插件登记、模型配置都不动，也不会把任何人踢下线；<br>
+            · 「整库覆盖」属于高级操作：会把库结构、账号密码、在线会话一起退回备份时刻，只用于整库回退 / 换机救火；<br>
             · 「整组恢复」按 插件库 → 主库 的顺序一次恢复整套，任一库失败立即中止并说明恢复到哪一步；插件代码不会被覆盖；<br>
             · 恢复前系统会自动把当前库另存为「xxx_保护_时间」留档，见页面底部「恢复前留档」，只作留档，不参与恢复。
         </div>
@@ -92,7 +93,7 @@
                     <form method="post" action="{{ url_for('admin_backup_restore_group') }}" style="margin:0;">
                         <input type="hidden" name="group_ts" value="{{ grp.ts }}">
                         <button type="submit"
-                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。恢复完成后需要用备份里的账号重新登录。')"
+                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。只恢复数据，账号与在线会话保持当前状态，不会被踢下线。')"
                                 style="background:#0f766e;color:#fff;border:none;font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;">整组恢复</button>
                     </form>
                 </div>
@@ -131,8 +132,8 @@
                         {% else %}
                         <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
                             <input type="hidden" name="backup_file" value="{{ it.name }}">
-                            <button type="submit" onclick="this.form.mode.value='data';return confirm('用这一份单独恢复 {{ it.pre }}？\n\n只搬业务数据，表结构保持当前版本。')" style="background:none;border:none;color:#0f766e;font-size:12px;cursor:pointer;text-decoration:underline;">只恢复数据</button>
                             <input type="hidden" name="mode" value="data">
+                            <button type="submit" onclick="this.form.mode.value='data';return confirm('用这一份单独恢复 {{ it.pre }}？\n\n只搬业务数据，表结构保持当前版本。')" style="background:none;border:none;color:#0f766e;font-size:12px;cursor:pointer;text-decoration:underline;">只恢复数据</button>
                             <button type="submit" onclick="this.form.mode.value='full';return confirm('整库覆盖 {{ it.pre }}？\n\n会把库结构一起退回备份时刻，只在确实要让该库退回旧版本时才用。')" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline;margin-left:10px;">整库覆盖</button>
                         </form>
                         {% endif %}
