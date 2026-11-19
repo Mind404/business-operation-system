@@ -313,6 +313,92 @@
 </table>
 </div>
 
+{% if current_role in ('admin','platform_admin') %}
+<!-- 底部留白：避免右下角悬浮球压住表格最后一屏的操作列 -->
+<div style="height:64px;"></div>
+<!-- 悬浮球：新建任务（v13.0.0.19，不用滚到表格底部才能新建） -->
+<button id="fabNewTask" type="button" onclick="openNewTaskDrawer()" title="新建任务" aria-label="新建任务"
+    style="position:fixed;right:26px;bottom:26px;width:56px;height:56px;border-radius:50%;border:none;
+    background:#2563eb;color:#fff;font-size:28px;line-height:1;cursor:pointer;z-index:9000;
+    box-shadow:0 6px 18px rgba(37,99,235,.35);display:flex;align-items:center;justify-content:center;">+</button>
+
+<!-- 新建任务抽屉 -->
+<div id="newTaskMask" onclick="if(event.target===this)closeNewTaskDrawer()"
+    style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.38);z-index:9100;">
+    <div id="newTaskDrawer" role="dialog" aria-modal="true" aria-labelledby="newTaskTitle"
+        style="position:absolute;top:0;right:0;height:100%;width:min(480px,92vw);background:#fff;box-shadow:-8px 0 24px rgba(0,0,0,.16);display:flex;flex-direction:column;">
+        <div style="padding:16px 20px;border-bottom:1px solid #e5e9f0;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+                <h3 id="newTaskTitle" style="margin:0;font-size:16px;">新建任务</h3>
+                <div style="margin-top:4px;font-size:12px;color:#94a3b8;">编号填 1 为阶段，填 1.1 会自动挂到 1 下面</div>
+            </div>
+            <button type="button" onclick="closeNewTaskDrawer()" title="关闭"
+                style="border:none;background:transparent;font-size:22px;line-height:1;color:#94a3b8;cursor:pointer;">×</button>
+        </div>
+        <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+            <div style="display:flex;gap:12px;">
+                <div style="flex:0 0 110px;">
+                    <label style="font-size:12px;color:#475569;">WBS 编号 *</label>
+                    <input id="nt_wbs" placeholder="如 2.3" autocomplete="off"
+                        style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#475569;">任务名称 *</label>
+                    <input id="nt_name" placeholder="一句话说清要做什么" autocomplete="off"
+                        style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:12px;color:#475569;">工作内容</label>
+                <textarea id="nt_work" rows="3" placeholder="具体做什么、交付到哪一步"
+                    style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;gap:12px;margin-top:12px;">
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#475569;">负责人</label>
+                    <input id="nt_owner" placeholder="可搜索姓名" autocomplete="off"
+                        style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#475569;">协作/支撑</label>
+                    <input id="nt_collab" placeholder="多人用、分隔" autocomplete="off"
+                        style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+            </div>
+            <div style="display:flex;gap:12px;margin-top:12px;">
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#475569;">计划开始</label>
+                    <input type="date" id="nt_start"
+                        style="width:100%;margin-top:4px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#475569;">计划结束</label>
+                    <input type="date" id="nt_end"
+                        style="width:100%;margin-top:4px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:12px;color:#475569;">交付物/判定标准</label>
+                <input id="nt_deliv" placeholder="验收时看什么"
+                    style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div style="margin-top:12px;">
+                <label style="font-size:12px;color:#475569;">备注</label>
+                <textarea id="nt_remark" rows="3" placeholder="风险、依赖、前置条件等"
+                    style="width:100%;margin-top:4px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;resize:vertical;"></textarea>
+            </div>
+            <div id="nt_msg" style="margin-top:10px;font-size:12px;color:#c0392b;display:none;"></div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e9f0;display:flex;gap:10px;justify-content:flex-end;">
+            <button type="button" onclick="closeNewTaskDrawer()"
+                style="padding:8px 16px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>
+            <button type="button" id="nt_submit" onclick="submitNewTask()"
+                style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">创建任务</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- 进展流水弹窗 -->
 <div id="noteModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:9999;">
     <div style="background:#fff;max-width:520px;margin:60px auto;border-radius:10px;padding:20px;max-height:70vh;overflow-y:auto;">
@@ -343,10 +429,11 @@ let currentTid = null;
         style.textContent = '@keyframes rowFlash{0%,100%{background:transparent;}50%{background:#fff3b0;}}';
         document.head.appendChild(style);
         // 精确滚动定位：任务行停在页面顶部操作栏（约90px）下方，一眼可见
-        const goToRow = () => {
+        const goToRow = (instant) => {
             try {
                 const top = row.getBoundingClientRect().top + window.scrollY - 90;
-                window.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+                // 末次校正用瞬时定位：多次 smooth 动画会互相打断，长表格里容易停在半路
+                window.scrollTo({top: Math.max(0, top), behavior: instant ? 'auto' : 'smooth'});
             } catch(e) {
                 row.scrollIntoView({block: 'center'});
             }
@@ -372,11 +459,11 @@ let currentTid = null;
                 }
             } catch (e) {}
         };
-        const boot = () => { ensureVisible(); goToRow(); };
-        // 页面渲染/缩放布局可能影响定位：兜底再补几次，确保最终落在可视区
-        setTimeout(boot, 120);
-        setTimeout(boot, 350);
-        setTimeout(boot, 800);
+        const boot = (instant) => { ensureVisible(); goToRow(instant); };
+        // 页面渲染/缩放布局可能影响定位：兜底再补几次，末次瞬时校正确保最终落在可视区
+        setTimeout(function(){ boot(false); }, 120);
+        setTimeout(function(){ boot(false); }, 350);
+        setTimeout(function(){ boot(true); }, 800);
         let n = 0;
         const timer = setInterval(() => {
             row.style.background = (n % 2 === 0) ? '#fff3b0' : '';
@@ -550,6 +637,58 @@ function attachPicker(input, onPick) {
 // 快速新建行的负责人输入框接入选择器
 const nrOwnerEl = document.getElementById('nr_owner');
 if (nrOwnerEl) attachPicker(nrOwnerEl);
+
+// ===== v13.0.0.19 悬浮球新建任务 =====
+const ntOwnerEl = document.getElementById('nt_owner');
+if (ntOwnerEl) attachPicker(ntOwnerEl);
+function ntEscHandler(e){ if(e.key === 'Escape') closeNewTaskDrawer(); }
+function openNewTaskDrawer(){
+    const mask = document.getElementById('newTaskMask');
+    if (!mask) return;
+    mask.style.display = 'block';
+    const msg = document.getElementById('nt_msg');
+    if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+    document.addEventListener('keydown', ntEscHandler);
+    setTimeout(function(){ const el = document.getElementById('nt_wbs'); if (el) el.focus(); }, 60);
+}
+function closeNewTaskDrawer(){
+    const mask = document.getElementById('newTaskMask');
+    if (mask) mask.style.display = 'none';
+    document.removeEventListener('keydown', ntEscHandler);
+}
+function submitNewTask(){
+    const val = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+    const code = (val('nt_wbs') || '').trim();
+    const name = (val('nt_name') || '').trim();
+    const msg = document.getElementById('nt_msg');
+    const show = function(t){ if (msg) { msg.textContent = t; msg.style.display = 'block'; } };
+    if (!code || !name) { show('WBS 编号和任务名称必填'); return; }
+    const btn = document.getElementById('nt_submit');
+    if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+    const fd = new FormData();
+    fd.append('wbs_code', code);
+    fd.append('name', name);
+    fd.append('work_content', val('nt_work'));
+    fd.append('owner', val('nt_owner'));
+    fd.append('collaborators', val('nt_collab'));
+    fd.append('plan_start', val('nt_start'));
+    fd.append('plan_end', val('nt_end'));
+    fd.append('deliverable', val('nt_deliv'));
+    fd.append('remark', val('nt_remark'));
+    fetch('/wbs/' + PID + '/task/quickadd', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            if (res.ok) {
+                closeNewTaskDrawer();
+                // 创建完成后直接跳到新任务并高亮，不用自己再找位置（表格按编号排序，新行可能在中间）
+                location.href = '/wbs/' + PID + (res.tid ? ('?task_highlight=' + res.tid) : '');
+            } else {
+                show(res.msg || '创建失败');
+            }
+        })
+        .catch(() => show('创建失败，请检查网络后重试'))
+        .finally(() => { if (btn) { btn.disabled = false; btn.textContent = '创建任务'; } });
+}
 
 // 行内编辑已有任务
 document.querySelectorAll('.cell').forEach(el => {

@@ -1107,7 +1107,8 @@ def wbs_task_quickadd(pid):
     db.commit()
     log_operation('WBS', '快速新建', f'P{pid} 快速新建任务 WBS#{code}「{name}」(tid={new_id})',
                   session.get('username', ''))
-    return jsonify({'ok': True})
+    # v13.0.0.19：返回新任务 id，前端新建成功后直接跳转并高亮该行
+    return jsonify({'ok': True, 'tid': new_id})
 
 
 @blueprint.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
