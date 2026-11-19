@@ -9,6 +9,7 @@
   - 改挂（move）：一步从旧车次移到新车次，单事务，两端都留痕；
   - 四方签核：产品 / 测试 / 发布经理（+ 定制版客户代表），与 7 项确认清单一并构成发布门禁。
 """
+import re
 import threading
 from datetime import date, datetime
 
@@ -126,13 +127,18 @@ def train_new():
     if not _ensure_product(db, prod):
         flash('请选择有效的产品', 'error')
         return redirect(url_for('version_plan.trains'))
-    if not month or not month.startswith('20'):
-        flash('请填写发车月份（如 2026-11）', 'error')
+    # v13.0.0.35：月份必须是 YYYY-MM，避免 2026/12、2026-13 之类写成脏车次
+    if not month or not re.fullmatch(r'20\d{2}-(0[1-9]|1[0-2])', month):
+        flash('发车月份格式应为 YYYY-MM（如 2026-11），且月份须在 01–12', 'error')
         return redirect(url_for('version_plan.trains', product=prod))
     try:
         cap = float(f.get('capacity') or 40)
     except ValueError:
-        cap = 40.0
+        flash('容量必须是数字（人日）', 'error')
+        return redirect(url_for('version_plan.trains', product=prod))
+    if not (0 < cap <= 10000):
+        flash('容量需在 0–10000 人日之间', 'error')
+        return redirect(url_for('version_plan.trains', product=prod))
     ym = month.replace('-', '')[2:]
     base = f'{prod}-{ym}'
     n = 1

@@ -521,6 +521,23 @@ def wbs_project_edit(pid):
     users = _all_active_users(db)
     if request.method == 'POST':
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # v13.0.0.35：项目名必填、日期必须真实且结束不早于开始，避免脏数据破坏预警与统计
+        name = (request.form.get('name') or '').strip()
+        if not name:
+            flash('项目名称不能为空', 'error')
+            return redirect(url_for('wbs.wbs_project_edit', pid=pid))
+        start_date = (request.form.get('start_date') or '').strip()
+        end_date = (request.form.get('end_date') or '').strip()
+        for f, v in (('开始日期', start_date), ('结束日期', end_date)):
+            if v:
+                try:
+                    datetime.strptime(v, '%Y-%m-%d')
+                except ValueError:
+                    flash(f'{f}格式无效，应为 YYYY-MM-DD', 'error')
+                    return redirect(url_for('wbs.wbs_project_edit', pid=pid))
+        if start_date and end_date and end_date < start_date:
+            flash('结束日期不能早于开始日期', 'error')
+            return redirect(url_for('wbs.wbs_project_edit', pid=pid))
         if session.get('user_role') in ('admin', 'platform_admin'):
             owner = ','.join(request.form.getlist('owner')) or (p['owner'] or '')
             participants = ','.join(request.form.getlist('participants')) or (p['participants'] or '')
@@ -530,9 +547,8 @@ def wbs_project_edit(pid):
             participants = p['participants'] or ''
         db.execute('''UPDATE wbs_projects SET name=?, description=?, owner=?, participants=?,
             start_date=?, end_date=?, updated_at=? WHERE id=?''',
-            (request.form.get('name',p['name']), request.form.get('description',p['description']),
-             owner, participants,
-             request.form.get('start_date',p['start_date']), request.form.get('end_date',p['end_date']),
+            (name, request.form.get('description',p['description']),
+             owner, participants, start_date, end_date,
              now, pid))
         db.commit()
         return redirect(url_for('wbs.wbs_project_detail', pid=pid))
@@ -770,12 +786,37 @@ def wbs_task_add(pid):
         return redirect(request.referrer or url_for('wbs.wbs_projects'))
     db = get_db()
     code = (request.form.get('wbs_code') or '').strip()
+    name = (request.form.get('name') or '').strip()
+    # v13.0.0.35：编号与名称必填；日期必须真实且结束不早于开始；进度非数字不再 500
+    if not code or not name:
+        flash('WBS编号和任务名称不能为空', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    start_date = (request.form.get('plan_start') or '').strip()
+    end_date = (request.form.get('plan_end') or '').strip()
+    for f, v in (('计划开始', start_date), ('计划结束', end_date)):
+        if v:
+            try:
+                datetime.strptime(v, '%Y-%m-%d')
+            except ValueError:
+                flash(f'{f}日期格式无效，应为 YYYY-MM-DD', 'error')
+                return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    if start_date and end_date and end_date < start_date:
+        flash('计划结束不能早于计划开始', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    try:
+        progress = int(float((request.form.get('progress') or '0').strip() or 0))
+    except (TypeError, ValueError):
+        progress = 0
+    progress = max(0, min(100, progress))
+    try:
+        parent_id = int(request.form.get('parent_id') or 0)
+    except (TypeError, ValueError):
+        parent_id = 0
     dup = db.execute('SELECT id, name FROM wbs_tasks WHERE project_id=? AND wbs_code=?',
-                     (pid, code)).fetchone() if code else None
+                     (pid, code)).fetchone()
     if dup:
         flash(f'WBS编号「{code}」已存在（任务：{dup["name"]}），请使用不同编号', 'error')
         return redirect(request.referrer or url_for('wbs.wbs_projects'))
-    parent_id = request.form.get('parent_id', 0) or 0
     attach_file = request.files.get('attachment')
     req_len = request.content_length or 0
     if attach_file and attach_file.filename and req_len > MAX_UPLOAD_BYTES + 2048:
@@ -786,12 +827,12 @@ def wbs_task_add(pid):
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
          plan_start, plan_end, deliverable, priority, attachment_path, status, progress)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (pid, request.form.get('wbs_code',''), parent_id, request.form.get('name',''),
+        (pid, code, parent_id, name,
          request.form.get('work_content',''), _to_username(request.form.get('owner','')),
          request.form.get('collaborators',''),
-         request.form.get('plan_start',''), request.form.get('plan_end',''),
+         start_date, end_date,
          request.form.get('deliverable',''), request.form.get('priority','P2中'),
-         attach, request.form.get('status','未开始'), int(request.form.get('progress',0))))
+         attach, request.form.get('status','未开始'), progress))
     db.commit()
     if parent_id:
         try:
