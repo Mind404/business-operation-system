@@ -680,6 +680,10 @@ def wbs_project_detail(pid):
     tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
     # v13.0.0.13：任务负责人显示名（v13 起 owner 存 username，展示统一转人名）
     tasks = [_with_owner_disp(t) for t in tasks]
+    # v13.0.0.30：标出「有子任务的行」，这类行的进度由子任务自动汇总，页面不再给可拖的进度条
+    _pids = set(x['parent_id'] for x in tasks if x['parent_id'])
+    for x in tasks:
+        x['has_kids'] = x['id'] in _pids
     # 分组：父任务（阶段）和子任务
     phases = [t for t in tasks if t['parent_id'] == 0]
     pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
@@ -781,6 +785,11 @@ def wbs_task_add(pid):
          request.form.get('deliverable',''), request.form.get('priority','P2中'),
          attach, request.form.get('status','未开始'), int(request.form.get('progress',0))))
     db.commit()
+    if parent_id:
+        try:
+            _rollup_by_parent(db, int(parent_id))
+        except Exception as e:
+            print('=== rollup after add ===', e)
     log_operation('WBS', '新增任务', f'P{pid} {request.form.get("name","")}', session.get('username','admin'))
     return redirect(url_for('wbs.wbs_project_detail', pid=pid))
 

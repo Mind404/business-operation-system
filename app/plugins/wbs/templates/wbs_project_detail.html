@@ -16,6 +16,11 @@
     .prog-range:disabled{opacity:.4;cursor:default;}
     .prog-range.locked{opacity:.4;cursor:default;}
     .status-select.locked{opacity:.5;cursor:default;}
+    /* v13.0.0.30：父任务的进度条只读，数值由子任务自动汇总 */
+    .prog-auto{display:inline-flex;align-items:center;gap:6px;vertical-align:middle;}
+    .prog-auto .track{display:inline-block;width:90px;height:8px;border-radius:4px;background:#d0d7e5;overflow:hidden;}
+    .prog-auto .fill{display:block;height:100%;background:#2563eb;border-radius:4px;transition:width .2s;}
+    .prog-auto .pct{font-size:11px;color:#2563eb;min-width:34px;display:inline-block;text-align:left;}
 </style>
 <div style="margin-bottom:14px;">
     <a href="{{ url_for('wbs.wbs_projects') }}" style="display:inline-flex;align-items:center;height:30px;padding:0 13px;font-size:13px;border:1px solid #ccd2e0;border-radius:6px;background:#fff;color:#33415c;text-decoration:none;transition:background .12s,border-color .12s;" onmouseover="this.style.background='#f3f6fb'" onmouseout="this.style.background='#fff'">← 返回项目列表</a>
@@ -244,7 +249,7 @@
                 <span class="cell" data-field="deliverable" data-tid="{{ t.id }}">{{ t.deliverable or '' }}</span>
                 {% else %}{{ t.deliverable or '' }}{% endif %}
             </td>
-            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}任务审批通过后才能修改状态{% endif %}">
+            <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if t.has_kids %}父任务状态由子任务自动汇总，手动修改会在下次打开时被算回{% elif current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}任务审批通过后才能修改状态{% endif %}">
                 {% if can_edit %}
                 <select class="status-select{% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %} locked{% endif %}" data-tid="{{ t.id }}" {% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}data-lock="1"{% endif %} style="width:100%;padding:4px;border:1px solid #ccd;border-radius:4px;
                     {% if t.status == '已完成' %}background:#d4edda;{% elif t.status == '进行中' %}background:#cce5ff;{% elif t.status == '阻塞' %}background:#f8d7da;{% else %}background:#fff;{% endif %}">
@@ -255,7 +260,12 @@
                 {% else %}<span style="font-size:13px;">{{ t.status }}</span>{% endif %}
             </td>
             <td style="padding:7px 4px;border:1px solid #d0d7e5;text-align:center;" title="{% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}任务审批通过后才能调整进度{% endif %}">
-                {% if can_edit %}
+                {% if t.has_kids %}
+                <span class="prog-auto" title="父任务进度由子任务自动汇总（子任务进度均值），不需要手动拖">
+                    <span class="track"><span class="fill" style="width:{{ t.progress }}%;"></span></span>
+                    <span class="pct prog-val" data-tid="{{ t.id }}">{{ t.progress }}%</span>
+                </span>
+                {% elif can_edit %}
                 <input type="range" class="prog-range{% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %} locked{% endif %}" data-tid="{{ t.id }}" min="0" max="100" value="{{ t.progress }}" style="--fill:{{ t.progress }}%;" {% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}data-lock="1"{% endif %}>
                 <span class="prog-val" data-tid="{{ t.id }}" {% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}data-lock="1"{% endif %} style="font-size:11px;{% if current_role not in ('admin','platform_admin') and t.approval_status!='已通过' %}color:#bbb;{% endif %}">{{ t.progress }}%</span>
                 {% else %}<span style="font-size:13px;">{{ t.progress }}%</span>{% endif %}
@@ -915,6 +925,8 @@ function wbsSetRow(tid, st, pg) {
     if (pg !== null && pg !== undefined) {
         var rg = tr.querySelector('.prog-range');
         if (rg) { rg.value = pg; rg.style.setProperty('--fill', pg + '%'); }
+        var fl = tr.querySelector('.prog-auto .fill');
+        if (fl) { fl.style.width = pg + '%'; }
         var pv = tr.querySelector('.prog-val');
         if (pv) { pv.textContent = pg + '%'; }
     }
