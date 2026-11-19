@@ -1202,7 +1202,10 @@ def _backup_groups():
         when = '%s-%s-%s %s:%s:%s' % (m.group('d')[:4], m.group('d')[4:6], m.group('d')[6:],
                                      m.group('t')[:2], m.group('t')[2:4], m.group('t')[4:])
         if ext == 'zip':
-            lib, label = 'pack', '插件包'
+            if pre == 'files':
+                lib, label = 'files', '附件文件'
+            else:
+                lib, label = 'pack', '插件包'
         elif pre == 'business':
             lib, label = 'main', '主库'
         else:
@@ -1211,20 +1214,23 @@ def _backup_groups():
                 'pre': pre, 'ts': ts, 'when': when, 'is_pack': ext == 'zip'}
         bucket = protects if tag == '保护' else groups
         g = bucket.setdefault(ts, {'ts': ts, 'when': when, 'items': [],
-                                   'size': 0, 'plugins': [], 'main': None, 'pack': None})
+                                   'size': 0, 'plugins': [], 'main': None, 'pack': None,
+                                   'files': None})
         g['items'].append(item)
         g['size'] += size
         if lib == 'plugin':
             g['plugins'].append(pre)
         elif lib == 'main':
             g['main'] = item
+        elif lib == 'files':
+            g['files'] = item
         else:
             g['pack'] = item
 
     for g in groups.values():
-        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2, 'files': 3}[x['lib']], x['pre']))
     for g in protects.values():
-        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2}[x['lib']], x['pre']))
+        g['items'].sort(key=lambda x: ({'main': 0, 'plugin': 1, 'pack': 2, 'files': 3}[x['lib']], x['pre']))
 
     gl = sorted(groups.values(), key=lambda x: x['ts'], reverse=True)
     pl = sorted(protects.values(), key=lambda x: x['ts'], reverse=True)
@@ -1256,7 +1262,7 @@ def _backup_list():
             pre = _re.split(r'_备份_|_保护_', f)[0]
             _is_prot = '_保护_' in f
             if f.endswith('.zip'):
-                kind = '插件包(含插件本体)'
+                kind = '附件文件(任务附件等上传文件)' if pre == 'files' else '插件包(含插件本体)'
             else:
                 kind = '主库' if pre == 'business' else f'插件库({pre})'
             if _is_prot:
@@ -1275,6 +1281,127 @@ def _backup_list():
             pass
     out.sort(key=lambda x: x['name'], reverse=True)
     return out
+
+
+def _upload_roots():
+    """v13.0.0.34：需要随备份迁移的上传文件目录。
+    任务附件、导入快照都在 <插件>/uploads 下，历史版本顶层也可能有 app/uploads。"""
+    app_root = os.path.dirname(os.path.abspath(__file__))
+    roots = []
+    pdir = os.path.join(app_root, 'plugins')
+    if os.path.isdir(pdir):
+        for d in sorted(os.listdir(pdir)):
+            ud = os.path.join(pdir, d, 'uploads')
+            if os.path.isdir(ud):
+                roots.append((os.path.join('plugins', d, 'uploads'), ud))
+    ud_top = os.path.join(app_root, 'uploads')
+    if os.path.isdir(ud_top):
+        roots.append(('uploads', ud_top))
+    return roots
+
+
+def _iter_upload_files():
+    """遍历需要备份的上传文件，产出 (压缩包内相对路径, 本机绝对路径)。"""
+    for arc, base in _upload_roots():
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d != '__pycache__']
+            for fn in files:
+                if fn.endswith(('.pyc', '.pyo')) or fn.startswith('.tmp'):
+                    continue
+                fp = os.path.join(root, fn)
+                rel = os.path.join(arc, os.path.relpath(fp, base)).replace(os.sep, '/')
+                yield rel, fp
+
+
+def _files_pack_sig():
+    """上传文件的签名：路径 + 大小 + 修改时间。没变化就不重复打包。"""
+    import hashlib
+    parts = []
+    for rel, fp in _iter_upload_files():
+        try:
+            st = os.stat(fp)
+        except OSError:
+            continue
+        parts.append('%s|%d|%d' % (rel, st.st_size, int(st.st_mtime)))
+    if not parts:
+        return ''
+    return hashlib.md5('\n'.join(sorted(parts)).encode('utf-8')).hexdigest()
+
+
+def _make_files_pack(bdir, ts, tag='备份', made=None, skipped=None):
+    """v13.0.0.34：把上传文件打成一个 files_<tag>_<ts>.zip，和数据库同属一个备份组。
+    文件没变化且已有同类别压缩包时跳过，避免每次启动都复制一份。"""
+    import zipfile
+    made = made if made is not None else []
+    skipped = skipped if skipped is not None else []
+    items = list(_iter_upload_files())
+    if not items:
+        skipped.append('files')
+        return None
+    sig = _files_pack_sig()
+    sig_file = os.path.join(bdir, '.files.sig')
+    prev = ''
+    try:
+        if os.path.exists(sig_file):
+            prev = open(sig_file, encoding='utf-8').read().strip()
+    except Exception:
+        prev = ''
+    import glob as _glob
+    has_zip = bool(_glob.glob(os.path.join(bdir, 'files_%s_*.zip' % tag)))
+    if prev == sig and has_zip:
+        skipped.append('files')
+        return None
+    pz = os.path.join(bdir, 'files_%s_%s.zip' % (tag, ts))
+    n = 0
+    with zipfile.ZipFile(pz, 'w', zipfile.ZIP_DEFLATED) as z:
+        for rel, fp in items:
+            try:
+                z.write(fp, rel)
+                n += 1
+            except OSError:
+                continue
+    if not n:
+        try:
+            os.remove(pz)
+        except Exception:
+            pass
+        skipped.append('files')
+        return None
+    os.utime(pz, None)
+    made.append(os.path.basename(pz))
+    try:
+        with open(sig_file, 'w', encoding='utf-8') as sf:
+            sf.write(sig)
+    except Exception:
+        pass
+    return pz
+
+
+def _restore_files_pack(zip_path, overwrite=False):
+    """把 files_*.zip 里的上传文件写回 app 目录。
+    默认只补缺：目标文件已存在就跳过（恢复旧备份不该把线上正在用的附件覆盖成旧版）。
+    返回 (写入数, 已存在跳过数)。"""
+    import zipfile
+    app_root = os.path.dirname(os.path.abspath(__file__))
+    n_rest = 0
+    n_keep = 0
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            name = info.filename.replace('\\', '/')
+            parts = name.split('/')
+            if info.is_dir() or '..' in parts or name.startswith('/'):
+                continue
+            if not (name.startswith('plugins/') or name.startswith('uploads/')):
+                continue
+            dst = os.path.join(app_root, *parts)
+            if os.path.exists(dst) and not overwrite:
+                n_keep += 1
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with z.open(info) as src, open(dst, 'wb') as out:
+                out.write(src.read())
+            n_rest += 1
+    return n_rest, n_keep
 
 
 def _extract_plugin_pack(zip_path):
@@ -1428,6 +1555,16 @@ def _admin_backup_restore_body():
     src = os.path.join(bdir, fname)
     if not os.path.exists(src):
         flash('备份文件不存在，无法恢复', 'error')
+        return redirect(url_for('admin_backup'))
+
+    # v13.0.0.34：附件文件包单独还原（只补缺失，不覆盖已有文件）
+    if fname.endswith('.zip') and fname.startswith('files_'):
+        try:
+            nr, nk = _restore_files_pack(src)
+            log_operation('数据备份', '还原附件文件', f'{fname}（写入 {nr} 个，跳过 {nk} 个）', session.get('username'))
+            flash(f'✅ 已还原附件文件包：写入 {nr} 个文件，已存在跳过 {nk} 个（不覆盖线上正在用的文件）。', 'success')
+        except Exception as e:
+            flash(f'还原附件文件包失败：{e}', 'error')
         return redirect(url_for('admin_backup'))
 
     # v12.7.10.11：插件包快照（zip）单独还原 —— 把 plugins/<id> 目录写回去
@@ -1615,6 +1752,13 @@ def _admin_backup_restore_body():
         pack_msg = ''
         if pre == 'business':
             ts2 = fname.split('_备份_')[1].rsplit('.', 1)[0]
+            fpack0 = os.path.join(bdir, f'files_备份_{ts2}.zip')
+            if os.path.exists(fpack0):
+                try:
+                    fr, fk = _restore_files_pack(fpack0)
+                    pack_msg += f' 同组附件文件补回 {fr} 个（已存在跳过 {fk} 个）。'
+                except Exception as e:
+                    pack_msg += f' 但附件文件恢复失败：{e}，可单独还原 files_备份_{ts2}.zip。'
             pack = os.path.join(bdir, f'pluginpack_备份_{ts2}.zip')
             if os.path.exists(pack):
                 try:
@@ -1839,6 +1983,23 @@ def _admin_restore_group_body():
         rows.append({'kind': kind, 'file': fname, 'before': before, 'after': after,
                      'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such)})
 
+    # v13.0.0.34：同组附件文件一起恢复（只补缺失，不覆盖已有文件）
+    files_msg = ''
+    files_note = ''
+    fpack = os.path.join(bdir, f'files_备份_{ts}.zip')
+    if os.path.exists(fpack):
+        try:
+            _fr, _fk = _restore_files_pack(fpack)
+            files_msg = f'附件文件补回 {_fr} 个（已存在跳过 {_fk} 个）。'
+            if _fk and not _fr:
+                files_note = '同组附件文件都已存在，未覆盖当前版本。'
+        except Exception as e:
+            files_msg = ''
+            files_note = f'附件文件包恢复失败：{e}，可单独还原 files_备份_{ts}.zip。'
+    elif entries:
+        files_note = ('这一组备份里没有附件文件包（旧版本生成的备份不含上传文件），'
+                      '任务附件需要单独复制 app/plugins/*/uploads/。')
+
     if not rows:
         flash('该备份组里没有可恢复的库：%s。这些库属于当前版本未安装的插件，'
               '文件仍保留在 backups/ 中，安装对应插件后再单独恢复即可。'
@@ -1858,17 +2019,17 @@ def _admin_restore_group_body():
     _skip_note = ('已跳过（当前版本未安装该插件，文件仍保留）：%s。' % '、'.join(skipped)) if skipped else ''
     if _fresh_any:
         session.clear()
-        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。%s'
+        flash('✅ 已整组恢复（%s）：%s。共恢复 %d 个库，表结构仍是当前版本。%s%s%s'
               '这是新装系统，账号也随主库一起导入，请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
-              % (ts, _detail, len(rows), _skip_note), 'warning')
+              % (ts, _detail, len(rows), _skip_note, files_msg, files_note), 'warning')
         return redirect(url_for('login'))
     # v13.0.0.32：整组恢复走的也是「只恢复数据」——user_sessions 不搬，登录态本不该失效。
     # 旧代码在这里无条件 session.clear() + 跳登录页，于是一次纯数据恢复也会把人踢下线，
     # 与页面上「不会把你踢下线」的说明矛盾。
     flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
-          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s'
+          '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s%s%s'
           '账号与会话未改动，当前登录仍然有效，无需重新登录。'
-          % (ts, _detail, len(rows), _skip_note), 'success')
+          % (ts, _detail, len(rows), _skip_note, files_msg, files_note), 'success')
     return redirect(url_for('admin_backup'))
 
 
@@ -1926,34 +2087,51 @@ def admin_backup_upload():
     if fname.endswith('.db') and pre != 'business' and not re.fullmatch(r'[a-z0-9_]{2,64}', pre):
         flash('备份前缀无法识别（只支持 business 或插件库名），已拒绝导入', 'error')
         return redirect(url_for('admin_backup'))
-    MAX = 512 * 1024 * 1024  # 512MB 上限
-    data = f.read(MAX + 1)
-    if len(data) > MAX:
-        flash('备份文件超过 512MB 上限，已拒绝导入', 'error')
-        return redirect(url_for('admin_backup'))
+    bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
+    os.makedirs(bdir, exist_ok=True)
+    dst = os.path.join(bdir, fname)
     if fname.endswith('.zip'):
-        # v12.7.10.11 插件包快照：必须是 zip，且至少含一个 plugins/ 条目
+        # v13.0.0.34：附件文件包可能比库大得多，zip 走磁盘流式落盘，不再整包读进内存。
+        # 插件包（plugins/）与附件包（uploads/ 或 plugins/<id>/uploads/）都接受。
+        ZIP_MAX = 2048 * 1024 * 1024
+        tmp = os.path.join(bdir, '.import_%s.tmp' % os.urandom(6).hex())
         try:
-            import zipfile, io
-            with zipfile.ZipFile(io.BytesIO(data)) as z:
-                names = [n.replace('\\', '/') for n in z.namelist()]
-            if not any(n.startswith('plugins/') for n in names):
-                flash('压缩包里没有 plugins/ 目录结构，不是插件包备份，已拒绝导入', 'error')
+            f.save(tmp)
+            if os.path.getsize(tmp) > ZIP_MAX:
+                os.remove(tmp)
+                flash('压缩包超过 2GB 上限，已拒绝导入', 'error')
                 return redirect(url_for('admin_backup'))
+            import zipfile
+            with zipfile.ZipFile(tmp) as z:
+                names = [n.replace('\\', '/') for n in z.namelist()]
+            if not any(n.startswith('plugins/') or n.startswith('uploads/') for n in names):
+                os.remove(tmp)
+                flash('压缩包里没有 plugins/ 或 uploads/ 目录结构，不是本系统的备份包，已拒绝导入', 'error')
+                return redirect(url_for('admin_backup'))
+            os.replace(tmp, dst)
         except Exception:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
             flash('文件不是有效的 zip 压缩包，已拒绝导入', 'error')
             return redirect(url_for('admin_backup'))
-    elif len(data) < 16 or data[:16] != b'SQLite format 3\x00':
-        flash('文件不是有效的 SQLite 数据库备份，已拒绝导入', 'error')
-        return redirect(url_for('admin_backup'))
-    try:
-        bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
-        os.makedirs(bdir, exist_ok=True)
-        with open(os.path.join(bdir, fname), 'wb') as out:
-            out.write(data)
-        flash(f'✅ 已导入备份文件：{fname}。现在可在下方列表选择它进行「恢复」。', 'success')
-    except Exception as e:
-        flash(f'导入失败：{e}', 'error')
+    else:
+        MAX = 512 * 1024 * 1024  # 512MB 上限
+        data = f.read(MAX + 1)
+        if len(data) > MAX:
+            flash('数据库备份超过 512MB 上限，已拒绝导入', 'error')
+            return redirect(url_for('admin_backup'))
+        if len(data) < 16 or data[:16] != b'SQLite format 3\x00':
+            flash('文件不是有效的 SQLite 数据库备份，已拒绝导入', 'error')
+            return redirect(url_for('admin_backup'))
+        try:
+            with open(dst, 'wb') as out:
+                out.write(data)
+        except Exception as e:
+            flash(f'导入失败：{e}', 'error')
+            return redirect(url_for('admin_backup'))
+    flash(f'✅ 已导入备份文件：{fname}。现在可在下方列表选择它进行「恢复」。', 'success')
     return redirect(url_for('admin_backup'))
 
 # ============================================================
@@ -2799,7 +2977,7 @@ def _snapshot_db(src, dst):
             s.close()
 
 
-def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped):
+def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped, force=False):
     """把一个库复制进 backups/。v13.0.0.9 两个修正：
     1) 用 copyfile + utime，让备份文件的修改时间等于"生成时刻"。
        原先 copy2 会把源库的旧修改时间一起带过来，列表里的"生成时间"显示成几天前，
@@ -2823,7 +3001,7 @@ def _save_db_backup(src, bdir, prefix, tag, ts, made, skipped):
             return None
     try:
         latest = _latest_backup(bdir, prefix, tag)
-        if latest and os.path.exists(latest):
+        if latest and os.path.exists(latest) and not force:
             try:
                 if _sha256_file(tmp) == _sha256_file(latest):
                     os.remove(tmp)
@@ -2865,13 +3043,26 @@ def perform_backup(label='启动', only=None):
     bdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
     os.makedirs(bdir, exist_ok=True)
     ts = time.strftime('%Y%m%d_%H%M%S')
+    # v13.0.0.34：附件有变化时，即使数据库一个字节都没变也强制生成一套完整的新备份组。
+    # 否则会出现"这一组只有附件包、没有主库"的残缺组，迁移时选最新一组反而恢复不了数据。
+    files_changed = False
+    if only is None:
+        try:
+            _sig = _files_pack_sig()
+            _prev = ''
+            _sf = os.path.join(bdir, '.files.sig')
+            if os.path.exists(_sf):
+                _prev = open(_sf, encoding='utf-8').read().strip()
+            files_changed = bool(_sig) and _sig != _prev
+        except Exception:
+            files_changed = False
     # v12.7.10.19：恢复前自动保护现场的那一份，单独用“保护”命名并在列表里标注
     tag = '保护' if label == '恢复前保护' else '备份'
     made = []
     skipped = []
     # ---- 主库 ----
     if only in (None, 'business'):
-        _save_db_backup(src, bdir, 'business', tag, ts, made, skipped)
+        _save_db_backup(src, bdir, 'business', tag, ts, made, skipped, force=files_changed)
     # ---- 上传插件的独立库 ----
     data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
     if os.path.isdir(data_dir) and (only is None or only not in ('business', 'pluginpack')):
@@ -2894,7 +3085,7 @@ def perform_backup(label='启动', only=None):
             except Exception:
                 pass
             try:
-                _save_db_backup(src_db, bdir, f[:-3], tag, ts, made, skipped)
+                _save_db_backup(src_db, bdir, f[:-3], tag, ts, made, skipped, force=files_changed)
             except Exception as _e:
                 print(f'[数据防护] 插件库备份失败 {f}: {_e}')
     # ---- 插件包本体快照 ----
@@ -2950,7 +3141,7 @@ def perform_backup(label='启动', only=None):
                     prev_sig = ''
                 import glob as _glob
                 has_zip = bool(_glob.glob(os.path.join(bdir, 'pluginpack_%s_*.zip' % tag)))
-                if prev_sig == sig and has_zip:
+                if prev_sig == sig and has_zip and not files_changed:
                     skipped.append('pluginpack')
                 else:
                     pz = os.path.join(bdir, f'pluginpack_{tag}_{ts}.zip')
@@ -2981,6 +3172,15 @@ def perform_backup(label='启动', only=None):
                         os.remove(pz)
         except Exception as e:
             print(f'[数据防护] 插件包快照失败（不影响库备份）: {e}')
+    # ---- 上传文件（任务附件 / 导入快照）----
+    # v13.0.0.34：备份的目标是「换台机器/新装也能把数据搬过去」，只备份库会让附件变成空壳。
+    # 附件体积和库不是一个量级，所以单独一个 files_<tag>_<ts>.zip，同一 ts 归入同一备份组；
+    # 文件签名没变化时跳过，避免每次启动都重新打包。
+    if only is None:
+        try:
+            _make_files_pack(bdir, ts, tag, made, skipped)
+        except Exception as e:
+            print(f'[数据防护] 附件文件包生成失败（不影响库备份）: {e}')
     # v12.7.10.15：清掉备份目录里被顺带打开的 -wal/-shm（0 字节残留，易被误当成"空备份"）
     try:
         for f in os.listdir(bdir):
@@ -3023,13 +3223,16 @@ def perform_backup(label='启动', only=None):
         why = '、'.join(skipped) if skipped else '无变化'
         return True, f'数据与最近一份备份完全一致，未重复生成新备份（{why}）', []
     msg = f'已备份 → backups/{made[0]}'
-    n_pack = sum(1 for x in made if x.endswith('.zip'))
-    n_db = len(made) - n_pack - 1
+    n_files = sum(1 for x in made if x.startswith('files_') and x.endswith('.zip'))
+    n_pack = sum(1 for x in made if x.endswith('.zip')) - n_files
+    n_db = len(made) - n_pack - n_files - 1
     detail = []
     if n_db > 0:
         detail.append(f'{n_db} 份插件库')
     if n_pack > 0:
         detail.append(f'{n_pack} 份插件包快照（含插件本体）')
+    if n_files > 0:
+        detail.append('1 份附件文件包（任务附件等上传文件）')
     if detail:
         msg += '，另含 ' + '、'.join(detail)
     if skipped:

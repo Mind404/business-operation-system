@@ -53,7 +53,8 @@
         <div style="font-size:13px;color:#1e40af;margin-top:8px;line-height:1.9;">
             · 备份范围：主库 <code style="background:#e0e7ff;padding:1px 6px;border-radius:4px;">{{ current_db }}</code> ＋ 全部上传插件的独立库（<code>app/data/</code>）＋ 插件包代码快照（<code>pluginpack_*.zip</code>）；<br>
             · 插件数据必须独立存放，所以一套备份是<b>多个文件</b>，但同一次备份的这批文件时间戳一致，视为<b>一组</b>；<br>
-            · 附件不随备份走：备份只含数据库与插件包，<b>不含任务附件等上传文件</b>（<code>app/plugins/*/uploads/</code>）。换机 / 新装迁移时，请把该目录与备份文件一起复制过去，否则任务能恢复、附件点开会提示文件不存在；<br>
+            · 附件随备份一起走：备份 = 各数据库 + 插件包 + <b>附件文件包</b>（<code>files_备份_*.zip</code>，收 <code>app/plugins/*/uploads/</code> 下的任务附件、导入快照等上传文件）。整组恢复会把同组附件一起补回；为避免用旧备份覆盖线上正在用的文件，<b>只补缺失文件，已存在的跳过</b>；<br>
+            · 只有 v13.0.0.33 及更早版本生成的备份不含附件文件包，那类旧备份恢复后仍需单独复制 <code>uploads/</code> 目录；<br>
             · 自动备份：系统每次启动执行一次；保留策略为「每个库的备份与保护各保留最近 7 份」；<br>
             · <b>默认方式就是「只恢复数据」</b>：只搬业务数据，当前版本的表结构、账号体系、插件登记、模型配置都不动，也不会把任何人踢下线；<br>
             · 「整库覆盖」属于高级操作：会把库结构、账号密码、在线会话一起退回备份时刻，只用于整库回退 / 换机救火；<br>
@@ -85,6 +86,7 @@
                         {% if grp.main %}主库{% endif %}
                         {% if grp.plugins %}{% if grp.main %} + {% endif %}{{ grp.plugins|length }} 个插件库（{{ grp.plugins|join('、') }}）{% endif %}
                         {% if grp.pack %}{% if grp.main or grp.plugins %} + {% endif %}插件包{% endif %}
+                        {% if grp.files %}{% if grp.main or grp.plugins or grp.pack %} + {% endif %}附件文件{% endif %}
                         · {{ '%.1f'|format(grp.size / 1024) }} KB
                     </div>
                 </div>
@@ -94,7 +96,7 @@
                     <form method="post" action="{{ url_for('admin_backup_restore_group') }}" style="margin:0;">
                         <input type="hidden" name="group_ts" value="{{ grp.ts }}">
                         <button type="submit"
-                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。只恢复数据，账号与在线会话保持当前状态，不会被踢下线。注意：任务附件等上传文件不随备份恢复，需要单独复制 uploads 目录。')"
+                                onclick="return confirm('整组恢复 {{ grp.when }} 这一套备份？\n\n将按「插件库 → 主库」的顺序恢复该组里的数据库，只搬业务数据：表结构、插件登记、模型配置都不动，插件代码不会被覆盖。\n\n恢复前会为每个库自动留一份保护档；任一库失败立即中止。只恢复数据，账号与在线会话保持当前状态，不会被踢下线。同组的附件文件包会一起恢复：只补回缺失的附件，已存在的文件不覆盖。')"
                                 style="background:#0f766e;color:#fff;border:none;font-size:13px;padding:8px 14px;border-radius:8px;cursor:pointer;">整组恢复</button>
                     </form>
                 </div>
@@ -106,8 +108,8 @@
                     <tr style="border-bottom:1px solid #f6f7f9;">
                         <td style="padding:9px 16px;font-family:monospace;font-size:12px;word-break:break-all;">{{ it.name }}</td>
                         <td style="padding:9px 10px;">
-                            <span style="background:{{ '#dbeafe;color:#1d4ed8' if it.lib == 'main' else ('#dcfce7;color:#166534' if it.lib == 'pack' else '#f3e8ff;color:#7e22ce') }};padding:2px 8px;border-radius:99px;font-size:12px;">
-                                {{ '主库' if it.lib == 'main' else ('插件包' if it.lib == 'pack' else '插件库 ' ~ it.pre) }}
+                            <span style="background:{{ '#dbeafe;color:#1d4ed8' if it.lib == 'main' else ('#dcfce7;color:#166534' if it.lib == 'pack' else ('#fef3c7;color:#92400e' if it.lib == 'files' else '#f3e8ff;color:#7e22ce')) }};padding:2px 8px;border-radius:99px;font-size:12px;">
+                                {{ '主库' if it.lib == 'main' else ('插件包' if it.lib == 'pack' else ('附件文件' if it.lib == 'files' else '插件库 ' ~ it.pre)) }}
                             </span>
                         </td>
                         <td style="padding:9px 10px;color:#6b7280;">{{ '%.1f'|format(it.size / 1024) }} KB</td>
@@ -124,7 +126,12 @@
                 {% for it in grp['items'] %}
                     <div style="padding:4px 0;border-bottom:1px dashed #f1f5f9;">
                         <span style="font-family:monospace;">{{ it.name }}</span> ·
-                        {% if it.lib == 'pack' %}
+                        {% if it.lib == 'files' %}
+                        <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
+                            <input type="hidden" name="backup_file" value="{{ it.name }}">
+                            <button type="submit" onclick="return confirm('还原这一包的附件文件？\n\n只补回缺失的文件，已存在的文件不会被覆盖。')" style="background:none;border:none;color:#92400e;font-size:12px;cursor:pointer;text-decoration:underline;">还原附件文件</button>
+                        </form>
+                        {% elif it.lib == 'pack' %}
                         <form method="post" action="{{ url_for('admin_backup_restore') }}" style="display:inline;margin:0;">
                             <input type="hidden" name="backup_file" value="{{ it.name }}">
                             <input type="hidden" name="mode" value="full">
