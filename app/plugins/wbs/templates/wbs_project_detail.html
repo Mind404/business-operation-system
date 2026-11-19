@@ -46,7 +46,9 @@
         {% if can_edit %}
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_project_edit', pid=p.id) }}">编辑项目</a>
         {% endif %}
+        {% if can_import %}
         <button type="button" class="wbs-tb-btn" onclick="tryImport()">导入Excel</button>
+        {% endif %}
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_template') }}">下载模板</a>
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_export', pid=p.id) }}">导出Excel</a>
         <span style="font-size:12px;color:#888;white-space:nowrap;"
@@ -121,8 +123,26 @@
 {% endif %}
 
 <form method="post" action="{{ url_for('wbs.wbs_import', pid=p.id) }}" enctype="multipart/form-data" style="display:none;">
-    <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="this.form.submit()">
+    <input type="file" name="file" id="importRealFile" accept=".xlsx,.xls" onchange="onImportFileChosen(this)">
 </form>
+
+<!-- v13.0.0.22（P0）：导入前差异预览，确认后才真正写库 -->
+<div id="importPreviewMask"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9300;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;width:720px;max-width:94vw;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+        <div style="padding:15px 20px;border-bottom:1px solid #e5e7eb;">
+            <div style="font-size:15px;font-weight:600;color:#111827;">导入前确认</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:3px;word-break:break-all;">文件：<span id="importPreviewFile">—</span></div>
+        </div>
+        <div id="importPreviewBody" style="padding:14px 20px;overflow:auto;font-size:13px;line-height:1.75;color:#334155;"></div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" onclick="closeImportPreview()"
+                style="padding:8px 16px;background:#eef2f7;border:1px solid #ccd;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>
+            <button type="button" id="importConfirmBtn" onclick="doImportNow()"
+                style="padding:8px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">确认导入</button>
+        </div>
+    </div>
+</div>
 
 <!-- v13.0.0.21：导入前的快照提示（先自动下载当前计划，用户在快照上改） -->
 <div id="importTipMask" onclick="if(event.target===this)importTipClose()"
@@ -131,7 +151,7 @@
         <div style="font-size:16px;font-weight:600;color:#111827;margin-bottom:8px;">已开始下载当前计划快照</div>
         <div style="font-size:13px;color:#475569;line-height:1.8;">
             文件：<b id="importSnapName" style="color:#2563eb;word-break:break-all;">—</b><br>
-            1）先打开刚下载的快照，在它上面改任务（改数量、改负责人、改时间）；<br>
+            1）先打开刚下载的快照，在它上面改任务（改数量、改负责人、改时间）；<b>编号列请勿修改</b>，要调编号请在系统表格里行内改。<br>
             2）保存后直接导入这份文件；系统按 WBS 编号匹配：已有编号更新、新编号新增，不会重复建任务。<br>
             3）没收到下载？点工具栏「导出Excel」可再下一份，或到本页顶部提示条里下载服务器留存的快照。
         </div>
@@ -568,6 +588,97 @@ function importTipContinue() {
     const mask = document.getElementById('importTipMask');
     if (mask) mask.style.display = 'none';
     document.getElementById('importRealFile').click();
+}
+
+// ===== v13.0.0.22（P0）：导入先预览差异，确认后才写库 =====
+let pendingImportFile = null;
+
+function onImportFileChosen(input) {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    pendingImportFile = f;
+    input.value = '';
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('preview', '1');
+    fetch('/wbs/' + PID + '/import', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => renderImportPreview(res, f.name))
+        .catch(() => {
+            if (confirm('差异预览没取到，是否直接导入？')) doImportNow();
+        });
+}
+
+function renderImportPreview(res, fname) {
+    document.getElementById('importPreviewFile').textContent = fname || '—';
+    const body = document.getElementById('importPreviewBody');
+    const btn = document.getElementById('importConfirmBtn');
+    const c = res.counts || {};
+    let html = '';
+
+    if (!res.ok) {
+        btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '请先修正文件';
+        html = '<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px 12px;border-radius:6px;margin-bottom:10px;">'
+             + '文件有问题，本次不会导入：'
+             + (res.errors || []).map(e => '<div style="margin-top:4px;">· ' + e + '</div>').join('')
+             + (res.moreErrors ? '<div style="margin-top:4px;">· …共 ' + (res.errors.length + res.moreErrors) + ' 处</div>' : '')
+             + '</div>';
+    } else {
+        btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '确认导入';
+        html = '<div style="display:flex;gap:10px;margin-bottom:12px;">'
+             + '<span style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;text-align:center;">新增 <b style="color:#1d4ed8;">' + (c.add || 0) + '</b> 条</span>'
+             + '<span style="flex:1;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;text-align:center;">更新 <b style="color:#b45309;">' + (c.update || 0) + '</b> 条</span>'
+             + '<span style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;text-align:center;">不会删除 <b>' + (c.missing || 0) + '</b> 条</span>'
+             + '</div>';
+
+        if (res.risky > 0) {
+            html += '<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:9px 12px;border-radius:6px;margin-bottom:10px;">'
+                 + '有 <b>' + res.risky + '</b> 条更新会影响已有数据，请逐条确认（尤其是已有产出物的任务）：'
+                 + '</div>';
+        }
+        if (res.suspects && res.suspects.length) {
+            html += '<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:9px 12px;border-radius:6px;margin-bottom:10px;">'
+                 + '疑似改编号：' + res.suspects.map(x => '「' + x.from + '」→「' + x.to + '」（' + x.name + '）').join('；')
+                 + '。系统会当作「新增一条 + 老编号原样保留」，老任务的产出物不会跟过去。'
+                 + '</div>';
+        }
+
+        if (res.add && res.add.length) {
+            html += '<div style="margin:8px 0 4px;font-weight:600;color:#166534;">新增</div>';
+            html += res.add.map(a => '<div style="padding:3px 0;border-bottom:1px dashed #eef2f7;">· ' + a.code + '　' + a.name + '</div>').join('');
+        }
+        if (res.update && res.update.length) {
+            html += '<div style="margin:12px 0 4px;font-weight:600;color:#b45309;">更新（按编号覆盖这些任务的内容）</div>';
+            html += res.update.map(u => '<div style="padding:4px 0;border-bottom:1px dashed #eef2f7;">· ' + u.code + '　' + u.name
+                 + (u.warn && u.warn.length ? '<div style="color:#92400e;font-size:12px;padding-left:12px;">⚠ ' + u.warn.join('；') + '</div>' : '')
+                 + '</div>').join('');
+        }
+        if (res.missing && res.missing.length) {
+            html += '<div style="margin:12px 0 4px;font-weight:600;color:#475569;">文件里没有、系统里保留（导入不会删除任务）</div>';
+            html += res.missing.map(m => '<div style="padding:3px 0;border-bottom:1px dashed #eef2f7;color:#64748b;">· ' + m.code + '　' + m.name
+                 + (m.has_att ? '　（有产出物，会继续保留）' : '') + '</div>').join('');
+        }
+        if (!res.add.length && !res.update.length) {
+            html += '<div style="color:#64748b;">这份文件和系统里的计划没有差异。</div>';
+        }
+    }
+    body.innerHTML = html;
+    document.getElementById('importPreviewMask').style.display = 'flex';
+}
+
+function closeImportPreview() {
+    document.getElementById('importPreviewMask').style.display = 'none';
+}
+
+function doImportNow() {
+    if (!pendingImportFile) return;
+    const btn = document.getElementById('importConfirmBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+    const fd = new FormData();
+    fd.append('file', pendingImportFile);
+    fetch('/wbs/' + PID + '/import', { method: 'POST', body: fd })
+        .then(r => { window.location.href = r.url || ('/wbs/' + PID); })
+        .catch(() => { alert('导入失败，请重试'); if (btn) { btn.disabled = false; btn.textContent = '确认导入'; } });
 }
 
 function importTipClose() {

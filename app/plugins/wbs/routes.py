@@ -724,6 +724,7 @@ def wbs_project_detail(pid):
                            project_name_json=project_name_json,
                            pending_count=pending_count, rejected_count=rejected_count,
                            can_edit=can_edit, can_quickadd=can_quickadd,
+                           can_import=can_quickadd,
                            attach_mb=attach_mb, attach_count=attach_count,
                            pick_users=pick_users, pick_users_json=pick_users_json)
 
@@ -809,6 +810,9 @@ def wbs_task_delete(tid):
         moved = _move_attachments_to_recycle(db, ids, rid)
         db.execute('DELETE FROM wbs_tasks WHERE id IN (%s)' % ','.join('?' * len(ids)), tuple(ids))
         db.commit()
+        # v13.0.0.22：删掉子任务后，父任务状态按剩下的子任务重新上卷
+        if t['parent_id']:
+            _rollup_by_parent(db, t['parent_id'])
         log_operation('WBS', '删除任务', f'删除任务#{tid}「{t["name"]}」及{len(ids) - 1}个子任务→回收站(rid={rid}, 附件{moved}个)',
                       session.get('username', ''))
         flash(f'任务「{t["name"]}」已移入回收站（保留7天，可恢复）', 'success')
@@ -831,49 +835,55 @@ def wbs_download(filename):
     return send_from_directory(upload_dir, filename)
 
 
-@blueprint.route('/wbs/<int:pid>/import', methods=['POST'])
-def wbs_import(pid):
-    """导入 WBS。列：WBS编号|阶段/任务|工作内容|负责人|协作/支撑|计划开始|计划结束|交付物/判定标准|状态|进度|备注
-    兼容旧 9 列格式（无状态/进度，备注在第 9 列）。
-    管理员导入：已存在 WBS 编号 → 更新该任务（批量更新模式）；新编号 → 新增。
-    普通用户导入：只能新增（待审批），已存在编号跳过。"""
-    db = get_db()
-    proj = db.execute('SELECT approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
-    if not proj:
-        flash('项目不存在', 'error')
-        return redirect(url_for('wbs.wbs_projects'))
-    if session.get('user_role') not in ('admin', 'platform_admin'):
-        ok, msg = _wbs_project_editable(db, pid)
-        if not ok:
-            flash('只有项目负责人/参与人员或管理员可以导入任务', 'error')
-            return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-        if proj['approval_status'] != '已通过':
-            flash('项目待审批通过后才能导入任务', 'error')
-            return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-    f = request.files.get('file')
-    if not f:
-        flash('请选择文件', 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-    import openpyxl
-    # v12.7.10.18 修复：上传 CSV / 改了后缀的文本 / 损坏文件时，openpyxl 会抛 BadZipFile 直接 500
-    try:
-        wb = openpyxl.load_workbook(f, data_only=True)
-    except Exception:
-        flash('文件打不开：请上传 Excel（.xlsx）格式的 WBS 导入模板（CSV 请先用 Excel 另存为 .xlsx）', 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-    ws = wb.active
-    db = get_db()
-    is_admin = session.get('user_role') in ('admin', 'platform_admin')
-    approval = '已通过' if is_admin else '待审批'
-    # 已存在的 WBS 编号 → 任务 id（管理员更新用）
-    existing = {}
-    for r in db.execute('SELECT id, wbs_code FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall():
-        if r['wbs_code']:
-            existing[r['wbs_code']] = r['id']
-    inserted = []  # (row_id, wbs_code)
-    updated = []   # (row_id, wbs_code)
-    skip = 0
-    # ===== v12.7.6 预检：先全量解析校验，任何一行有问题都不写库（冗余设计）=====
+def _build_import_preview(db, pid, parsed, errors):
+    """v13.0.0.22：导入前差异预览（P0）。只读，不写库。"""
+    sys_rows = db.execute(
+        'SELECT id, wbs_code, name, status, progress, attachment_path, notes FROM wbs_tasks WHERE project_id=?',
+        (pid,)).fetchall()
+    by_code = {r['wbs_code']: r for r in sys_rows if r['wbs_code']}
+    parsed_codes = set(p[1] for p in parsed)
+    add, upd, missing = [], [], []
+    for (row_idx, code, name, work_content, owner, collab,
+         p_start, p_end, deliverable, status, progress, remark) in parsed:
+        old = by_code.get(code)
+        if old is None:
+            add.append({'code': code, 'name': name})
+            continue
+        warn = []
+        if (old['name'] or '').strip() != name:
+            warn.append('任务名会被改写（原：%s）' % (old['name'] or '（空）'))
+        if old['attachment_path']:
+            warn.append('这条任务已有产出物，文件仍挂在这条任务上')
+        if (old['notes'] or '').strip():
+            warn.append('这条任务已有进展流水，流水保留但任务含义可能变化')
+        if (old['status'] or '未开始') != status:
+            warn.append('状态 %s → %s' % (old['status'] or '未开始', status))
+        if (old['progress'] or 0) != progress:
+            warn.append('进度 %s%% → %s%%' % (old['progress'] or 0, progress))
+        upd.append({'code': code, 'name': name, 'old_name': old['name'] or '', 'warn': warn})
+    for code, r in by_code.items():
+        if code not in parsed_codes:
+            missing.append({'code': code, 'name': r['name'], 'has_att': bool(r['attachment_path'])})
+    # 疑似改编号：文件里新增了某个编号，同时某个老编号消失了，且两边名称完全一样
+    suspects = []
+    for a in add:
+        for m in missing:
+            if (a['name'] or '').strip() and a['name'].strip() == (m['name'] or '').strip():
+                suspects.append({'from': m['code'], 'to': a['code'], 'name': a['name']})
+    risky = [u for u in upd if u['warn']]
+    return jsonify({
+        'ok': not errors,
+        'errors': errors[:10],
+        'moreErrors': max(0, len(errors) - 10),
+        'add': add, 'update': upd, 'missing': missing, 'suspects': suspects,
+        'risky': len(risky),
+        'counts': {'add': len(add), 'update': len(upd), 'missing': len(missing), 'risky': len(risky)},
+    })
+
+
+def _parse_wbs_rows(ws):
+    """v13.0.0.22：Excel 解析与校验从 wbs_import 抽出，「正式导入」与「导入前预览」共用同一套规则，
+    保证预览看到的结果和真正写库的结果一致。"""
     parsed = []    # [(row_idx, code, name, work_content, owner, collab, p_start, p_end,
     #               deliverable, status, progress, remark)]
     errors = []    # 格式错误清单：'第 N 行：计划开始「xxx」无法识别为日期'
@@ -937,22 +947,91 @@ def wbs_import(pid):
         progress = max(0, min(100, progress))
         parsed.append((row_idx, code, name, work_content, owner, collab,
                        p_start, p_end, deliverable, status, progress, remark))
+    # v13.0.0.22：同一文件里编号重复直接拒绝（否则同一行会被覆盖两次，产出物归属更乱）
+    seen_codes = {}
+    for item in parsed:
+        code = item[1]
+        if code in seen_codes:
+            errors.append('第 %d 行：WBS 编号「%s」在本文件里重复（第 %d 行已经用过），同一编号只能出现一次'
+                          % (item[0], code, seen_codes[code]))
+        else:
+            seen_codes[code] = item[0]
+    return parsed, errors, unmatched_owners
+
+
+@blueprint.route('/wbs/<int:pid>/import', methods=['POST'])
+def wbs_import(pid):
+    """导入 WBS。列：WBS编号|阶段/任务|工作内容|负责人|协作/支撑|计划开始|计划结束|交付物/判定标准|状态|进度|备注
+    兼容旧 9 列格式（无状态/进度，备注在第 9 列）。
+    管理员导入：已存在 WBS 编号 → 更新该任务（批量更新模式）；新编号 → 新增。
+    普通用户导入：只能新增（待审批），已存在编号跳过。"""
+    db = get_db()
+    proj = db.execute('SELECT approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    if not proj:
+        flash('项目不存在', 'error')
+        return redirect(url_for('wbs.wbs_projects'))
+    if session.get('user_role') not in ('admin', 'platform_admin'):
+        # v13.0.0.22：导入 Excel 收口为「管理员 + 项目负责人」，参与人员与其他成员不再可导入
+        if not _wbs_is_project_owner(db, pid):
+            flash('导入 Excel 仅对管理员和项目负责人开放；参与人员与其他成员不能导入，需要调整任务请找项目负责人或管理员', 'error')
+            return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+        if proj['approval_status'] != '已通过':
+            flash('项目待审批通过后才能导入任务', 'error')
+            return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    f = request.files.get('file')
+    if not f:
+        flash('请选择文件', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    import openpyxl
+    # v12.7.10.18 修复：上传 CSV / 改了后缀的文本 / 损坏文件时，openpyxl 会抛 BadZipFile 直接 500
+    try:
+        wb = openpyxl.load_workbook(f, data_only=True)
+    except Exception:
+        flash('文件打不开：请上传 Excel（.xlsx）格式的 WBS 导入模板（CSV 请先用 Excel 另存为 .xlsx）', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+    ws = wb.active
+    db = get_db()
+    is_admin = session.get('user_role') in ('admin', 'platform_admin')
+    # v13.0.0.22：项目负责人也能导入更新自己项目的任务（新增仍按待审批口径）
+    can_update = is_admin or _wbs_is_project_owner(db, pid)
+    approval = '已通过' if is_admin else '待审批'
+    # 已存在的 WBS 编号 → 任务 id（管理员更新用）
+    existing = {}
+    for r in db.execute('SELECT id, wbs_code FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall():
+        if r['wbs_code']:
+            existing[r['wbs_code']] = r['id']
+    inserted = []  # (row_id, wbs_code)
+    updated = []   # (row_id, wbs_code)
+    skip = 0
+    risky_att = 0   # v13.0.0.22：名称被改写、但该任务还挂着产出物/进展流水的条数
+    renamed = 0
+    # ===== v12.7.6 预检：先全量解析校验，任何一行有问题都不写库（冗余设计）=====
+    parsed, errors, unmatched_owners = _parse_wbs_rows(ws)
+    # ===== v13.0.0.22（P0）：导入前预览，只算差异、不写库 =====
+    if request.form.get('preview') or request.args.get('preview'):
+        return _build_import_preview(db, pid, parsed, errors)
     if errors:
         head = '导入未执行：发现 %d 处格式问题，请修正后重新导入。' % len(errors)
         for e in errors[:10]:
-            head += '<br>· ' + e
+            head += ' ｜ ' + e
         if len(errors) > 10:
-            head += '<br>· …共 %d 处' % len(errors)
+            head += ' ｜ …共 %d 处' % len(errors)
         flash(head, 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid, snapshot=snapshot_name))
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     # ===== 预检通过，正式写入 =====
     # v13.0.0.21：写库前先把「导入前的计划」落一份快照，供用户对照/回退
     snapshot_name = _save_import_snapshot(db, pid)
     for (row_idx, code, name, work_content, owner, collab,
          p_start, p_end, deliverable, status, progress, remark) in parsed:
         if code in existing:
-            if is_admin:
+            if can_update:
                 # 批量更新：替换内容、状态、进度、备注（保留审批状态、进展、产出物、附件）
+                _old = db.execute('SELECT name, attachment_path, notes FROM wbs_tasks WHERE id=?',
+                                  (existing[code],)).fetchone()
+                if _old and (_old['name'] or '').strip() != name:
+                    renamed += 1
+                    if _old['attachment_path'] or (_old['notes'] or '').strip():
+                        risky_att += 1
                 db.execute('''UPDATE wbs_tasks SET name=?, work_content=?, owner=?, collaborators=?,
                     plan_start=?, plan_end=?, deliverable=?, remark=?, status=?, progress=? WHERE id=?''',
                     (name, work_content, owner, collab, p_start, p_end, deliverable, remark,
@@ -982,15 +1061,22 @@ def wbs_import(pid):
     # 导入后同步父任务时间：让阶段时间自动覆盖所有子任务
     for row_id, code in touched:
         _sync_parent_dates(db, row_id)
+    # v13.0.0.22：导入改了子任务状态后，父任务状态按事实重新上卷
+    for row_id, code in touched:
+        _rollup_parent_status(db, row_id)
     if snapshot_name:
         flash(f'导入前的计划已自动备份：{snapshot_name}（页面顶部可下载，也可在服务器 uploads/snapshots 里找回）', 'success')
-    if is_admin:
-        parts = [f'新增 {len(inserted)} 条']
+    if can_update:
+        parts = [f'新增 {len(inserted)} 条' + ('' if (is_admin or not inserted) else '（待管理员审批）')]
         if updated:
             parts.append(f'更新 {len(updated)} 条')
         if skip:
             parts.append(f'跳过 {skip} 条')
         msg = '导入完成：' + '，'.join(parts) + '。'
+        if risky_att:
+            msg += f' 注意：有 {risky_att} 条任务的任务名被改写，但它们原有的产出物/进展流水仍挂在这条任务上，请到列表逐条核对是否对应。'
+        elif renamed:
+            msg += f' 本次有 {renamed} 条任务名被改写（这些任务没有产出物，风险较小）。'
         if unmatched_owners:
             picks = '、'.join(f'第{r}行「{n}」' for r, n in unmatched_owners[:8])
             more = f' 等 {len(unmatched_owners)} 处' if len(unmatched_owners) > 8 else ''
@@ -1069,12 +1155,55 @@ def wbs_task_inline(tid):
     db.commit()
     if field in ('plan_start', 'plan_end'):
         _sync_parent_dates(db, tid)
+    if field == 'status':
+        # v13.0.0.22：子任务状态手动改动后，父任务状态按事实自动上卷
+        _rollup_parent_status(db, tid)
     disp = {'progress': lambda v: f'{v}%'}.get(field, lambda v: v)
     log_operation('WBS', '行内编辑', f'任务#{tid}「{t["name"]}」{field}: {disp(old_value)} → {disp(value)}',
                   session.get('username', ''))
     # v13.0.0.13：负责人回传显示名，页面即时切换为"余丽莎"而非账号
     return jsonify({'ok': True, 'value': value,
                     'disp': (_resolve_display(value) if field in ('owner', 'collaborators') else value)})
+
+
+def _rollup_by_parent(db, parent_id):
+    """v13.0.0.22：按直接子任务的状态推算父任务状态，并逐级向上。
+    规则：子任务全部「已完成」→ 父「已完成」；任一子任务不是「未开始」→ 父「进行中」。
+    子任务全为「未开始」时不回退父状态（避免把手工设的「进行中/阻塞」拉回未开始）。"""
+    try:
+        kids = db.execute('SELECT status FROM wbs_tasks WHERE parent_id=?', (parent_id,)).fetchall()
+        if not kids:
+            return
+        sts = [(k['status'] or '未开始') for k in kids]
+        if all(x == '已完成' for x in sts):
+            target = '已完成'
+        elif any(x != '未开始' for x in sts):
+            target = '进行中'
+        else:
+            target = None
+        if target:
+            p = db.execute('SELECT status, name FROM wbs_tasks WHERE id=?', (parent_id,)).fetchone()
+            if p and (p['status'] or '未开始') != target:
+                db.execute('UPDATE wbs_tasks SET status=? WHERE id=?', (target, parent_id))
+                db.commit()
+                log_operation('WBS', '父任务状态自动上卷',
+                              f'父任务#{parent_id}「{p["name"]}」{p["status"] or "未开始"} → {target}（按子任务汇总）',
+                              session.get('username', ''))
+        gp = db.execute('SELECT parent_id FROM wbs_tasks WHERE id=?', (parent_id,)).fetchone()
+        if gp and gp['parent_id']:
+            _rollup_by_parent(db, gp['parent_id'])
+    except Exception:
+        pass
+
+
+def _rollup_parent_status(db, tid):
+    """v13.0.0.22：某条任务状态变化后，重算它的所有上级。"""
+    try:
+        t = db.execute('SELECT parent_id FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
+        if t and t['parent_id']:
+            _rollup_by_parent(db, t['parent_id'])
+    except Exception:
+        pass
 
 
 def _sync_parent_dates(db, child_id):
@@ -1367,6 +1496,14 @@ def wbs_template():
     widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # v13.0.0.22（P0）：模板里的编号列也加批注，避免用户把改编号当成"改任务"
+    try:
+        from openpyxl.comments import Comment
+        ws['A1'].comment = Comment(
+            '编号列请勿修改：导入按编号匹配已有任务。要改编号，请在系统任务表格里对着编号单元格直接改，'
+            '产出物和进展都会保留。', '业务系统', width=330, height=120)
+    except Exception:
+        pass
     # 示例行（含状态/进度；状态可选：未开始/进行中/已完成/阻塞，进度 0-100）
     samples = [
         [1, '阶段一·资源诉求（输入梳理）', '汇总各渠道输入，为问题定位提供基线', '', '', '2026-10-12', '2026-10-16', '', '进行中', 30, ''],
@@ -1423,6 +1560,14 @@ def _build_wbs_workbook(db, pid):
     widths = [10, 22, 30, 10, 16, 12, 12, 22, 10, 8, 20, 42, 24]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    # v13.0.0.22（P0）：编号列加批注，提醒导入时按编号匹配、编号不能在这列改
+    try:
+        from openpyxl.comments import Comment
+        ws['A1'].comment = Comment(
+            '导入时系统按本列编号匹配任务：编号请勿修改（改编号 = 新增一条 + 老任务连同产出物留在原编号）。'
+            '要调整编号，请在系统任务表格里对着编号单元格直接改。', '业务系统', width=340, height=130)
+    except Exception:
+        pass
     r = 2
     for t in tasks:
         is_phase = '.' not in (t['wbs_code'] or '')
