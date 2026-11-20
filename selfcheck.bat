@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title v13.1.0.0 - Diagnose
+title v13.2.0.0 - Diagnose
 cd /d "%~dp0"
 
 if not exist "%~dp0python\python.exe" (

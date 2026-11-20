@@ -2702,6 +2702,7 @@ def index():
     # 按插件分区块展示（不统一排序，区块内各插件自排）。
     # v13.0.0.14：未登录态不能回退成 admin，否则会把管理员的待办显示给未识别用户。
     todo_groups = []
+    wf_pending, wf_mine, wf_open, wf_stats = [], [], [], {}
     if current_user:
         try:
             todo_groups = plugin_system.collect_my_todos(db, current_user)
@@ -2714,8 +2715,12 @@ def index():
             if _wf_items:
                 todo_groups.insert(0, {'plugin_id': 'workflow', 'plugin_name': '流程与审批',
                                        'icon': '🔄', 'items': _wf_items})
+            wf_pending = _wf.my_tasks(db, session.get('user_id'), session.get('user_role', ''))
+            wf_mine = _wf.my_instances(db, session.get('user_id'))
+            wf_open = _wf.open_instances(db)
+            wf_stats = _wf.stats(db)
         except Exception:
-            pass
+            wf_pending, wf_mine, wf_open, wf_stats = [], [], [], {}
     # v13.0.0.18：每组自带四格统计（分组标题下按本组任务计算）
     for _g in todo_groups:
         _items = _g['items']
@@ -2751,7 +2756,8 @@ def index():
                            todo_groups=todo_groups, todo_total=todo_total, todo_overdue=todo_overdue,
                            todo_stats=todo_stats,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
-                           now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on)
+                           now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on,
+                           wf_pending=wf_pending, wf_mine=wf_mine, wf_open=wf_open, wf_stats=wf_stats)
 
 # ============================================================
 # 启动

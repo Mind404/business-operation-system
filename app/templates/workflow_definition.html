@@ -7,50 +7,95 @@
 {% block content %}
 <style>
 .wf-form { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:20px; max-width:1180px; }
-.wf-form-row { display:grid; grid-template-columns:160px 1fr; gap:12px; margin-bottom:14px; align-items:start; }
-.wf-form-row label { font-size:13px; color:#475569; padding-top:8px; }
-.wf-form-row input, .wf-form-row select { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
-.wf-form-row textarea { width:100%; min-height:460px; padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-family:Consolas,Monaco,monospace; font-size:13px; line-height:1.55; box-sizing:border-box; }
-.wf-help { font-size:12px; color:#64748b; line-height:1.7; margin-bottom:14px; }
+.wf-grid { display:grid; grid-template-columns:150px 1fr; gap:12px; margin-bottom:14px; align-items:start; }
+.wf-grid label { font-size:13px; color:#475569; padding-top:8px; }
+.wf-grid input, .wf-grid select { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
+.wf-help { font-size:12.5px; color:#64748b; line-height:1.7; margin-bottom:14px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; padding:10px 12px; }
 .wf-error { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:14px; }
 .wf-versions { margin-top:18px; }
 .wf-versions table { width:100%; border-collapse:collapse; font-size:13px; }
 .wf-versions th, .wf-versions td { text-align:left; padding:8px 10px; border-bottom:1px solid #edf1f6; }
+.step-card { border:1px solid #dbe4ee; border-radius:10px; padding:14px; margin-bottom:12px; background:#fbfdff; }
+.step-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.step-title { font-weight:600; font-size:13.5px; color:#1e3a8a; }
+.step-body { display:grid; grid-template-columns:1.2fr 1fr 1.2fr 1fr; gap:10px; }
+.step-body label { display:block; font-size:12px; color:#64748b; margin-bottom:4px; }
+.step-body input, .step-body select { width:100%; padding:8px 9px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
+.step-actions { display:flex; gap:6px; }
+.mini-btn { border:1px solid #dbe4ee; background:#fff; border-radius:6px; padding:5px 8px; font-size:12px; cursor:pointer; color:#475569; }
+.mini-btn:hover { background:#f1f5f9; }
+.danger { color:#b91c1c; }
+.wf-preview { border:1px dashed #bfdbfe; background:#eff6ff; border-radius:10px; padding:14px; margin:14px 0; }
+.wf-flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:13px; }
+.wf-node { background:#fff; border:1px solid #93c5fd; border-radius:8px; padding:8px 10px; }
+.wf-node.action { border-color:#86efac; background:#f0fdf4; }
+.wf-arrow { color:#2563eb; }
+.wf-branches { margin-top:10px; font-size:12px; color:#64748b; }
+.advanced-box { display:none; margin-top:16px; }
+.advanced-box textarea { width:100%; min-height:360px; padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-family:Consolas,Monaco,monospace; font-size:13px; line-height:1.55; box-sizing:border-box; }
+.toggle-row { margin:10px 0; font-size:12.5px; color:#475569; }
 </style>
 {% if error %}<div class="wf-error">{{ error }}</div>{% endif %}
 <div class="wf-form">
     <div class="wf-help">
-        平台根据这份 JSON 自动生成 BPMN。节点类型：<code>start</code>、<code>approval</code>（审批）、<code>action</code>（插件动作）、<code>exclusive</code>（条件分支）、<code>parallel</code>（并行）、<code>end</code>。
-        审批节点的 <code>assignee</code> 支持 <code>initiator / user / role / record_field / project_participants</code>；<code>mode</code> 支持 <code>single / any / countersign</code>。
-        保存即发布新版本，已有实例继续使用旧版本。
+        <strong>简易模式：</strong>按顺序添加审批节点，选择审批人和审批方式；保存后系统自动生成流程，业务人员不需要编写 JSON。<br>
+        审批结果固定为：同意进入下一节点；驳回结束；退回发起人。需要复杂条件分支、并行网关时，可切到高级模式。
     </div>
-    <form method="post">
-        <div class="wf-form-row">
-            <label>模板 Key</label>
+    <form method="post" id="wfForm">
+        <input type="hidden" name="editor_mode" id="editorMode" value="simple">
+        <div class="wf-grid">
+            <label>流程 Key</label>
             <input name="def_key" value="{{ def_row.def_key if def_row else '' }}" {% if not is_new %}readonly{% endif %} placeholder="例如 purchase_approval">
         </div>
-        <div class="wf-form-row">
-            <label>名称</label>
+        <div class="wf-grid">
+            <label>流程名称</label>
             <input name="name" value="{{ def_row.name if def_row else '新流程' }}" required>
         </div>
-        <div class="wf-form-row">
+        <div class="wf-grid">
             <label>分类</label>
             <input name="category" value="{{ def_row.category if def_row else '通用' }}">
         </div>
-        <div class="wf-form-row">
-            <label>说明</label>
-            <input name="description" value="{{ def_row.description if def_row else '' }}" placeholder="一句话说明适用场景">
+        <div class="wf-grid">
+            <label>适用说明</label>
+            <input name="description" value="{{ def_row.description if def_row else '' }}" placeholder="一句话说明这个流程用在什么场景">
         </div>
-        <div class="wf-form-row">
-            <label>流程定义 JSON</label>
-            <textarea name="definition_json" spellcheck="false">{{ definition_json }}</textarea>
+
+        <div class="toggle-row">
+            <label><input type="checkbox" id="advancedToggle" onchange="toggleAdvanced()"> 高级模式（直接编辑流程 JSON，仅管理员/开发使用）</label>
         </div>
-        <div style="padding-left:172px;">
+
+        <div id="simpleEditor">
+            <div id="steps"></div>
+            <button type="button" class="mini-btn" onclick="addStep()">＋ 添加审批节点</button>
+
+            <div class="wf-grid" style="margin-top:16px;">
+                <label>通过后动作</label>
+                <select name="action_key" id="actionKey">
+                    <option value="">无动作，审批通过后直接结束</option>
+                    {% for a in actions %}
+                    <option value="{{ a.key }}" {% if simple.action and simple.action.key == a.key %}selected{% endif %}>{{ a.label }}（{{ a.plugin }}）</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="wf-preview">
+                <div class="wf-flow" id="previewFlow"></div>
+                <div class="wf-branches">驳回 → 已驳回；退回 → 已退回</div>
+            </div>
+        </div>
+
+        <div class="advanced-box" id="advancedBox">
+            <label style="font-size:12.5px;color:#475569;">流程定义 JSON</label>
+            <textarea name="definition_json" spellcheck="false" id="definitionJson">{{ definition_json }}</textarea>
+        </div>
+
+        <div style="margin-top:16px; display:flex; gap:10px;">
             <button class="btn btn-primary" type="submit">{{ '创建模板' if is_new else '保存并发布新版本' }}</button>
             <a class="btn btn-outline" href="{{ url_for('workflow.admin_home') }}">取消</a>
         </div>
     </form>
 </div>
+
 {% if versions %}
 <div class="wf-form wf-versions" style="margin-top:16px;">
     <h3 style="margin:0 0 10px;font-size:15px;">版本记录</h3>
@@ -64,4 +109,100 @@
     </table>
 </div>
 {% endif %}
+
+<script>
+const INITIAL_STEPS = {{ simple.steps|tojson }};
+const ACTIONS = {{ actions|tojson }};
+const TYPE_OPTIONS = [
+    ['initiator', '发起人本人'],
+    ['role', '管理员 / 角色'],
+    ['user', '指定用户'],
+    ['record_field', '业务字段（负责人/参与人等）'],
+    ['project_participants', '项目参与人']
+];
+const MODE_OPTIONS = [
+    ['any', '任一人同意即可'],
+    ['countersign', '会签：全部同意后通过']
+];
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function optionHtml(options, selected) {
+    return options.map(o => `<option value="${esc(o[0])}" ${String(selected)===String(o[0])?'selected':''}>${esc(o[1])}</option>`).join('');
+}
+
+function addStep(step) {
+    step = step || {name:'', assignee_type:'role', assignee_value:'admin', mode:'any'};
+    const box = document.createElement('div');
+    box.className = 'step-card';
+    box.innerHTML = `
+        <div class="step-head">
+            <span class="step-title">审批节点</span>
+            <div class="step-actions">
+                <button type="button" class="mini-btn" onclick="moveStep(this,-1)">↑ 上移</button>
+                <button type="button" class="mini-btn" onclick="moveStep(this,1)">↓ 下移</button>
+                <button type="button" class="mini-btn danger" onclick="removeStep(this)">删除</button>
+            </div>
+        </div>
+        <div class="step-body">
+            <div><label>节点名称</label><input name="step_name" class="step-name" value="${esc(step.name)}" placeholder="例如：项目经理审批"></div>
+            <div><label>审批人</label><select name="step_assignee_type" class="step-type" onchange="renderPreview()">${optionHtml(TYPE_OPTIONS, step.assignee_type)}</select></div>
+            <div><label>审批人值</label><input name="step_assignee_value" class="step-value" value="${esc(step.assignee_value)}" placeholder="角色 / 账号 / 字段名"></div>
+            <div><label>审批方式</label><select name="step_mode" class="step-mode">${optionHtml(MODE_OPTIONS, step.mode || 'any')}</select></div>
+        </div>`;
+    document.getElementById('steps').appendChild(box);
+    box.querySelectorAll('input,select').forEach(el => el.addEventListener('input', renderPreview));
+    renderPreview();
+}
+
+function removeStep(btn) {
+    btn.closest('.step-card').remove();
+    renderPreview();
+}
+
+function moveStep(btn, dir) {
+    const card = btn.closest('.step-card');
+    const parent = card.parentElement;
+    if (dir < 0 && card.previousElementSibling) parent.insertBefore(card, card.previousElementSibling);
+    if (dir > 0 && card.nextElementSibling) parent.insertBefore(card.nextElementSibling, card);
+    renderPreview();
+}
+
+function readSteps() {
+    return [...document.querySelectorAll('.step-card')].map(card => ({
+        name: card.querySelector('.step-name').value.trim(),
+        assignee_type: card.querySelector('.step-type').value,
+        assignee_value: card.querySelector('.step-value').value.trim(),
+        mode: card.querySelector('.step-mode').value
+    }));
+}
+
+function renderPreview() {
+    const steps = readSteps();
+    const action = document.getElementById('actionKey');
+    const actionLabel = action.selectedOptions[0] ? action.selectedOptions[0].text : '';
+    const nodes = ['开始'];
+    steps.forEach((s, i) => nodes.push(s.name || `审批 ${i+1}`));
+    if (action.value) nodes.push(actionLabel);
+    nodes.push('已通过');
+    document.getElementById('previewFlow').innerHTML = nodes.map((n, i) => {
+        const isAction = action.value && i === nodes.length - 2;
+        const prefix = i ? `<span class="wf-arrow">→</span>` : '';
+        return `${prefix}<span class="wf-node ${isAction?'action':''}">${esc(n)}</span>`;
+    }).join('');
+}
+
+function toggleAdvanced() {
+    const on = document.getElementById('advancedToggle').checked;
+    document.getElementById('advancedBox').style.display = on ? 'block' : 'none';
+    document.getElementById('simpleEditor').style.display = on ? 'none' : 'block';
+    document.getElementById('editorMode').value = on ? 'advanced' : 'simple';
+    if (!on) renderPreview();
+}
+
+document.getElementById('actionKey').addEventListener('change', renderPreview);
+INITIAL_STEPS.forEach(addStep);
+if (!INITIAL_STEPS.length) addStep();
+renderPreview();
+</script>
 {% endblock %}

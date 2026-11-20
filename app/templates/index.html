@@ -50,6 +50,73 @@
     </div>
     {% endif %}
 
+    <!-- v13.2：流程与审批并入工作台：待我审批 / 我发起的 / 运行中与异常 -->
+    <div class="dash-panel wf-panel">
+        <div class="panel-head">
+            <h3 class="panel-title">🔄 流程与审批</h3>
+            <div style="display:flex;gap:10px;align-items:center;">
+                <span class="todo-sum">运行中 {{ wf_stats.running or 0 }} · 异常 {{ wf_stats.error or 0 }}</span>
+                <a class="btn btn-primary btn-sm" href="{{ url_for('workflow.start') }}">＋ 发起流程</a>
+            </div>
+        </div>
+        <div class="wf-tabs">
+            <button type="button" class="wf-tab active" onclick="wfTab(this,'wfPending')">待我审批（{{ wf_pending|length }}）</button>
+            <button type="button" class="wf-tab" onclick="wfTab(this,'wfMine')">我发起的（{{ wf_mine|length }}）</button>
+            <button type="button" class="wf-tab" onclick="wfTab(this,'wfOpen')">运行中 / 异常（{{ wf_open|length }}）</button>
+        </div>
+
+        <div id="wfPending" class="wf-section">
+            {% if wf_pending %}
+            <table class="todo-table">
+                <thead><tr><th class="th-title">待办流程</th><th class="th-proj">业务单号</th><th class="th-status">状态</th></tr></thead>
+                <tbody>
+                {% for t in wf_pending %}
+                <tr class="todo-tr" onclick="location.href='{{ url_for('workflow.instance', instance_id=t.instance_id) }}'">
+                    <td class="todo-td-title">{{ t.instance_title or t.title }}</td>
+                    <td class="todo-td-dim td-proj">{{ t.business_key or '—' }}</td>
+                    <td class="todo-td-dim"><span class="todo-status-pill">{{ t.instance_status or '待审批' }}</span></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}<div class="todo-empty">当前没有待你处理的审批</div>{% endif %}
+        </div>
+
+        <div id="wfMine" class="wf-section" style="display:none;">
+            {% if wf_mine %}
+            <table class="todo-table">
+                <thead><tr><th class="th-title">我发起的流程</th><th class="th-proj">发起时间</th><th class="th-status">状态</th></tr></thead>
+                <tbody>
+                {% for t in wf_mine %}
+                <tr class="todo-tr" onclick="location.href='{{ url_for('workflow.instance', instance_id=t.id) }}'">
+                    <td class="todo-td-title">{{ t.title }}</td>
+                    <td class="todo-td-dim td-proj">{{ t.created_at or '' }}</td>
+                    <td class="todo-td-dim"><span class="todo-status-pill">{{ t.status }}</span></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}<div class="todo-empty">你还没有发起流程</div>{% endif %}
+        </div>
+
+        <div id="wfOpen" class="wf-section" style="display:none;">
+            {% if wf_open %}
+            <table class="todo-table">
+                <thead><tr><th class="th-title">流程</th><th class="th-proj">发起人</th><th class="th-status">状态</th></tr></thead>
+                <tbody>
+                {% for t in wf_open %}
+                <tr class="todo-tr" onclick="location.href='{{ url_for('workflow.instance', instance_id=t.id) }}'">
+                    <td class="todo-td-title">{{ t.title }}</td>
+                    <td class="todo-td-dim td-proj">{{ t.initiator_name or '—' }}</td>
+                    <td class="todo-td-dim"><span class="todo-status-pill">{{ t.status }}</span></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}<div class="todo-empty">没有运行中或异常的流程</div>{% endif %}
+        </div>
+    </div>
+
     <!-- 我的待办（v13.0.0.18：分组标题 + 可点击筛选统计 + 筛选式清单） -->
     <div class="dash-panel">
         <div class="panel-head">
@@ -242,7 +309,14 @@
 .log-clear-btn { background: #b91c1c; margin-left: 6px; border: none; cursor: pointer; font-size: 12px; }
 .log-clear-btn:hover { background: #dc2626; }
 
-/* 待办紧凑列表 */
+/* v13.2 工作台流程面板 */
+.wf-panel { margin-bottom: 16px; }
+.wf-tabs { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.wf-tab { border: 1px solid #dbe4ee; background: #f8fafc; color: #475569; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; cursor: pointer; }
+.wf-tab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+.wf-section { min-height: 60px; }
+.wf-section .todo-table { margin-top: 8px; }
+
 .todo-compact { display: flex; flex-direction: column; gap: 8px; }
 .todo-row {
     display: flex; align-items: center; gap: 10px; padding: 10px 12px;
@@ -396,6 +470,14 @@
 }
 </style>
 <script>
+function wfTab(btn, sectionId) {
+    document.querySelectorAll('.wf-tab').forEach(function(x) { x.classList.remove('active'); });
+    document.querySelectorAll('.wf-section').forEach(function(x) { x.style.display = 'none'; });
+    btn.classList.add('active');
+    var el = document.getElementById(sectionId);
+    if (el) el.style.display = 'block';
+}
+
 // v13.0.0.18 我的待办：四个统计块即四个筛选，点击展开对应清单；再点同一块收起
 function todoFilter(btn, f) {
     var block = btn.closest('.todo-block');

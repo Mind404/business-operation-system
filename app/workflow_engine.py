@@ -349,17 +349,111 @@ def _build_bpmn(definition):
 # 动作注册
 # ============================================================
 _ACTION_HANDLERS = {}
+_ACTION_META = {}
 
 
-def register_action(name, handler):
+def register_action(name, handler, label=None, plugin='platform'):
     """插件注册动作：handler(ctx) -> dict|None；ctx 含 db/instance/node/task/decision/context。"""
     if not name or not callable(handler):
         raise ValueError('动作名和 handler 必填')
     _ACTION_HANDLERS[name] = handler
+    _ACTION_META[name] = {'label': label or name, 'plugin': plugin or 'platform'}
 
 
 def registered_actions():
     return sorted(_ACTION_HANDLERS.keys())
+
+
+def action_options():
+    """供管理端/简易设计器下拉展示；元数据可被插件覆盖。"""
+    return [
+        {'key': key, 'label': _ACTION_META.get(key, {}).get('label') or key,
+         'plugin': _ACTION_META.get(key, {}).get('plugin') or 'platform'}
+        for key in sorted(_ACTION_HANDLERS.keys())
+    ]
+
+
+def build_simple_definition(def_key, name, steps, action=None, category='通用', description=''):
+    """把业务人员填写的线性审批步骤编译成平台流程定义。"""
+    def_key = str(def_key or '').strip()
+    name = str(name or '').strip()
+    if not re.match(r'^[a-z0-9][a-z0-9_\-]{1,60}$', def_key):
+        raise ValueError('流程 Key 只能使用小写字母、数字、下划线、短横线')
+    if not name:
+        raise ValueError('流程名称不能为空')
+    if not isinstance(steps, list) or not steps:
+        raise ValueError('至少需要一个审批节点')
+
+    nodes = []
+    approvals = []
+    for i, step in enumerate(steps):
+        nid = 'approve_%d' % (i + 1)
+        rule_type = step.get('assignee_type') or 'role'
+        rule_value = str(step.get('assignee_value') or '').strip()
+        if rule_type not in ('initiator', 'user', 'role', 'record_field', 'project_participants'):
+            raise ValueError('审批人类型不合法')
+        if rule_type in ('user', 'role', 'record_field') and not rule_value:
+            raise ValueError('请填写审批人/角色/字段')
+        assignee = {'type': rule_type}
+        if rule_type in ('user', 'role', 'record_field'):
+            assignee['value'] = rule_value
+        mode = step.get('mode') or 'any'
+        if mode not in ('single', 'any', 'countersign'):
+            mode = 'any'
+        approvals.append({'id': nid, 'name': str(step.get('name') or '审批').strip(),
+                           'assignee': assignee, 'mode': mode})
+
+    action = action or {}
+    action_key = str(action.get('key') or '').strip()
+    action_node = None
+    if action_key:
+        action_node = {
+            'id': 'apply', 'type': 'action',
+            'name': str(action.get('label') or '执行动作').strip(),
+            'plugin': str(action.get('plugin') or 'platform'),
+            'action': action_key, 'next': 'end_approve'
+        }
+
+    for i, node in enumerate(approvals):
+        last = i == len(approvals) - 1
+        if last and action_node:
+            approve_next = 'apply'
+        elif last:
+            approve_next = 'end_approve'
+        else:
+            approve_next = approvals[i + 1]['id']
+        nodes.append({
+            'id': node['id'], 'type': 'approval', 'name': node['name'],
+            'assignee': node['assignee'], 'mode': node['mode'],
+            'next': {'approve': approve_next, 'reject': 'end_reject', 'return': 'end_return'}
+        })
+    if action_node:
+        nodes.append(action_node)
+    nodes.extend([
+        {'id': 'end_approve', 'type': 'end', 'name': '已通过'},
+        {'id': 'end_reject', 'type': 'end', 'name': '已驳回'},
+        {'id': 'end_return', 'type': 'end', 'name': '已退回'},
+    ])
+    nodes.insert(0, {'id': 'start', 'type': 'start', 'name': '开始', 'next': approvals[0]['id']})
+    return {'key': def_key, 'name': name, 'category': category, 'description': description, 'nodes': nodes}
+
+
+def parse_simple_definition(definition):
+    """从已有定义中提取线性审批步骤和动作，供简易设计器回显。"""
+    approvals, action = [], None
+    for node in (definition or {}).get('nodes', []):
+        if node.get('type') == 'approval':
+            rule = node.get('assignee') or {'type': 'initiator'}
+            approvals.append({
+                'name': node.get('name') or '审批',
+                'assignee_type': rule.get('type') or 'role',
+                'assignee_value': rule.get('value') or '',
+                'mode': node.get('mode') or 'any'
+            })
+        elif node.get('type') == 'action':
+            action = {'key': node.get('action') or '', 'label': node.get('name') or '',
+                      'plugin': node.get('plugin') or 'platform'}
+    return {'steps': approvals, 'action': action}
 
 
 def _resolve_action_handler(action, plugin_id=''):
@@ -409,9 +503,9 @@ def _wbs_task_apply(ctx):
     return {'ok': True, 'status': status}
 
 
-register_action('demo.record_decision', _demo_record_decision)
-register_action('wbs.project.set_approval', _wbs_project_apply)
-register_action('wbs.task.set_approval', _wbs_task_apply)
+register_action('demo.record_decision', _demo_record_decision, label='记录审批结果', plugin='platform')
+register_action('wbs.project.set_approval', _wbs_project_apply, label='写回 WBS 项目审批状态', plugin='wbs')
+register_action('wbs.task.set_approval', _wbs_task_apply, label='写回 WBS 任务审批状态', plugin='wbs')
 
 
 # ============================================================
@@ -967,6 +1061,24 @@ def list_instances(db, status='', plugin_id='', limit=100):
     sql += ' ORDER BY created_at DESC LIMIT ?'
     params.append(int(limit))
     return db.execute(sql, params).fetchall()
+
+
+def my_instances(db, user_id, status='', limit=20):
+    sql = 'SELECT * FROM wf_instances WHERE initiator_id=?'
+    params = [user_id]
+    if status:
+        sql += ' AND status=?'
+        params.append(status)
+    sql += ' ORDER BY created_at DESC LIMIT ?'
+    params.append(int(limit))
+    return db.execute(sql, params).fetchall()
+
+
+def open_instances(db, limit=20):
+    return db.execute(
+        "SELECT * FROM wf_instances WHERE status IN ('running','waiting','error') "
+        "ORDER BY CASE status WHEN 'error' THEN 0 ELSE 1 END, created_at DESC LIMIT ?",
+        (limit,)).fetchall()
 
 
 def get_instance(db, instance_id):

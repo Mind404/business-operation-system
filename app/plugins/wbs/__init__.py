@@ -15,4 +15,11 @@ manifest = {
     'menu': [
         {'name': 'WBS计划', 'endpoint': 'wbs.wbs_projects', 'icon': '📊'},
     ],
+    'workflow': {
+        'actions': [
+            {'key': 'wbs.project.set_approval', 'label': '写回 WBS 项目审批状态'},
+            {'key': 'wbs.task.set_approval', 'label': '写回 WBS 任务审批状态'},
+        ],
+        'templates': ['wbs_project_approval', 'wbs_task_approval']
+    },
 }

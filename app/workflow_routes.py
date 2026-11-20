@@ -32,12 +32,38 @@ def _login_required():
 def _admin_required():
     if session.get('user_role') != 'platform_admin':
         flash('仅平台管理员可以管理流程模板', 'error')
-        return redirect(url_for('workflow.my_tasks'))
+        return redirect(url_for('index'))
     return None
 
 
 def _db():
     return get_db()
+
+
+def _simple_payload_from_form(def_key, name, category, description):
+    names = request.form.getlist('step_name')
+    types = request.form.getlist('step_assignee_type')
+    values = request.form.getlist('step_assignee_value')
+    modes = request.form.getlist('step_mode')
+    steps = []
+    for i, raw_name in enumerate(names):
+        step_type = types[i] if i < len(types) else ''
+        if not (raw_name.strip() or step_type):
+            continue
+        steps.append({
+            'name': raw_name.strip(),
+            'assignee_type': step_type,
+            'assignee_value': values[i].strip() if i < len(values) else '',
+            'mode': modes[i] if i < len(modes) and modes[i] else 'any'
+        })
+    action_key = (request.form.get('action_key') or '').strip()
+    action = None
+    if action_key:
+        meta = next((a for a in wf.action_options() if a['key'] == action_key), None)
+        if not meta:
+            raise ValueError('所选动作不存在，请刷新后重试')
+        action = {'key': action_key, 'label': meta['label'], 'plugin': meta['plugin']}
+    return wf.build_simple_definition(def_key, name, steps, action, category, description)
 
 
 def _instance_visible(inst, user):
@@ -90,12 +116,8 @@ def _workflow_before():
 
 @workflow_bp.route('/')
 def my_tasks():
-    user = _current_user()
-    db = _db()
-    rows = wf.my_tasks(db, user['id'], user['role'])
-    st = wf.stats(db)
-    return render_template('workflow_my.html', tasks=rows, stats=st, user=user,
-                           now_date=datetime.now().strftime('%Y-%m-%d'))
+    # v13.2：流程待办已并入我的工作台；保留入口做兼容跳转。
+    return redirect(url_for('index'))
 
 
 @workflow_bp.route('/instance/<instance_id>')
@@ -105,7 +127,7 @@ def instance(instance_id):
     inst = wf.get_instance(db, instance_id)
     if not inst or not _instance_visible(inst, user):
         flash('流程不存在或无权查看', 'error')
-        return redirect(url_for('workflow.my_tasks'))
+        return redirect(url_for('index'))
     definition_row = db.execute(
         'SELECT * FROM wf_definition_versions WHERE def_key=? AND version=?',
         (inst['def_key'], inst['def_version'])).fetchone()
@@ -140,7 +162,7 @@ def task_action(task_id):
         task = db.execute('SELECT * FROM wf_tasks WHERE id=?', (task_id,)).fetchone()
         if task:
             return redirect(url_for('workflow.instance', instance_id=task['instance_id']))
-        return redirect(url_for('workflow.my_tasks'))
+        return redirect(url_for('index'))
 
 
 @workflow_bp.route('/start', methods=['GET', 'POST'])
@@ -277,20 +299,27 @@ def admin_definition(def_key):
         flash('流程模板不存在', 'error')
         return redirect(url_for('workflow.admin_home'))
     error = None
+    definition = json.loads(ver['graph_json']) if ver else {}
     if request.method == 'POST':
         try:
-            payload = json.loads(request.form.get('definition_json') or '{}')
             name = (request.form.get('name') or row['name']).strip()
+            category = (request.form.get('category') or row['category']).strip()
+            description = (request.form.get('description') or row['description']).strip()
+            if request.form.get('editor_mode') == 'simple':
+                payload = _simple_payload_from_form(def_key, name, category, description)
+            else:
+                payload = json.loads(request.form.get('definition_json') or '{}')
             wf.save_definition(db, def_key, name, payload, actor=_current_user()['name'],
-                               category=(request.form.get('category') or row['category']).strip(),
-                               description=(request.form.get('description') or row['description']).strip())
+                               category=category, description=description)
             flash('新版本已发布；运行中的实例仍使用旧版本', 'success')
             return redirect(url_for('workflow.admin_definition', def_key=def_key))
         except Exception as e:
             error = str(e)
-    definition = json.loads(ver['graph_json']) if ver else {}
+            definition = json.loads(json.dumps(payload)) if 'payload' in locals() else definition
     return render_template('workflow_definition.html', def_row=row, ver=ver,
                            definition_json=json.dumps(definition, ensure_ascii=False, indent=2),
+                           simple=wf.parse_simple_definition(definition),
+                           actions=wf.action_options(),
                            versions=wf.list_versions(db, def_key), error=error)
 
 
@@ -307,27 +336,35 @@ def admin_definition_new():
             {'id': 'start', 'type': 'start', 'name': '开始', 'next': 'approve'},
             {'id': 'approve', 'type': 'approval', 'name': '负责人审批',
              'assignee': {'type': 'role', 'value': 'admin'}, 'mode': 'any',
-             'next': {'approve': 'end_approve', 'reject': 'end_reject'}},
+             'next': {'approve': 'end_approve', 'reject': 'end_reject', 'return': 'end_return'}},
             {'id': 'end_approve', 'type': 'end', 'name': '已通过'},
             {'id': 'end_reject', 'type': 'end', 'name': '已驳回'},
+            {'id': 'end_return', 'type': 'end', 'name': '已退回'},
         ],
     }
     if request.method == 'POST':
         try:
             def_key = (request.form.get('def_key') or '').strip()
             name = (request.form.get('name') or '').strip()
-            payload = json.loads(request.form.get('definition_json') or '{}')
-            payload['key'] = def_key
-            payload['name'] = name
+            category = (request.form.get('category') or '通用').strip()
+            description = (request.form.get('description') or '').strip()
+            if request.form.get('editor_mode') == 'simple':
+                payload = _simple_payload_from_form(def_key, name, category, description)
+            else:
+                payload = json.loads(request.form.get('definition_json') or '{}')
+                payload['key'] = def_key
+                payload['name'] = name
             wf.save_definition(db, def_key, name, payload, actor=_current_user()['name'],
-                               category=(request.form.get('category') or '通用').strip(),
-                               description=(request.form.get('description') or '').strip())
+                               category=category, description=description)
             flash('流程模板已创建', 'success')
             return redirect(url_for('workflow.admin_definition', def_key=def_key))
         except Exception as e:
             error = str(e)
+            starter = payload if 'payload' in locals() else starter
     return render_template('workflow_definition.html', def_row=None, ver=None,
                            definition_json=json.dumps(starter, ensure_ascii=False, indent=2),
+                           simple=wf.parse_simple_definition(starter),
+                           actions=wf.action_options(),
                            versions=[], error=error, is_new=True)
 
 

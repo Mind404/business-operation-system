@@ -2,7 +2,7 @@
 {% block title %}发起流程{% endblock %}
 {% block page_title %}发起流程{% endblock %}
 {% block header_actions %}
-<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.my_tasks') }}">← 返回流程中心</a>
+<a class="btn btn-outline btn-sm" href="{{ url_for('index') }}">← 返回工作台</a>
 {% endblock %}
 {% block content %}
 <style>
@@ -13,6 +13,8 @@
 .wf-start textarea { min-height:150px; font-family:Consolas,Monaco,monospace; }
 .wf-hint { font-size:12px; color:#64748b; margin-top:6px; }
 .wf-err { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:14px; }
+.wf-advanced { display:none; margin-top:14px; border-top:1px dashed #dbe4ee; padding-top:14px; }
+.wf-toggle { font-size:12.5px; color:#475569; margin:10px 0; }
 </style>
 {% if error %}<div class="wf-err">{{ error }}</div>{% endif %}
 <div class="wf-start">
@@ -33,17 +35,25 @@
             <label>业务单号 / business_key</label>
             <input name="business_key" placeholder="例如：WBS-PROJECT-12">
         </div>
-        <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-            <div><label>插件 ID</label><input name="plugin_id" value="platform"></div>
-            <div><label>记录类型</label><input name="record_type" placeholder="project / task"></div>
-            <div><label>记录 ID</label><input name="record_id" placeholder="业务表主键"></div>
-        </div>
-        <div class="row">
-            <label>业务上下文 JSON</label>
-            <textarea name="context_json" spellcheck="false" placeholder='{"owner":"zhangsan","participants":"lisi,wangwu"}'>{}</textarea>
-            <div class="wf-hint">审批人规则若是 record_field / project_participants，会从这里取对应字段；填入的用户名或姓名需在平台账号中存在。</div>
+        <label class="wf-toggle"><input type="checkbox" id="advancedToggle" onchange="toggleAdvanced()"> 高级选项（插件绑定、记录关联、上下文 JSON，仅需要按字段找人或对接插件时填写）</label>
+        <div class="wf-advanced" id="advancedBox">
+            <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                <div><label>插件 ID</label><input name="plugin_id" value="platform"></div>
+                <div><label>记录类型</label><input name="record_type" placeholder="project / task"></div>
+                <div><label>记录 ID</label><input name="record_id" placeholder="业务表主键"></div>
+            </div>
+            <div class="row">
+                <label>业务上下文 JSON</label>
+                <textarea name="context_json" spellcheck="false" placeholder='{"owner":"zhangsan","participants":"lisi,wangwu"}'>{}</textarea>
+                <div class="wf-hint">审批人规则若是 record_field / project_participants，会从这里取对应字段；填入的用户名或姓名需在平台账号中存在。</div>
+            </div>
         </div>
         <button class="btn btn-primary" type="submit">发起流程</button>
     </form>
 </div>
+<script>
+function toggleAdvanced() {
+  document.getElementById('advancedBox').style.display = document.getElementById('advancedToggle').checked ? 'block' : 'none';
+}
+</script>
 {% endblock %}
