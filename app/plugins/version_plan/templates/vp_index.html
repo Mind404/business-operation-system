@@ -45,7 +45,7 @@
         </div>
         <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>
       </div>
-      {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner'] }}</div>{% endif %}
+      {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner_display'] }}</div>{% endif %}
       <div class="vp-prod-stats">
         <div><b>{{ p['demands'] }}</b><span>需求</span></div>
         <div><b>{{ p['pool'] }}</b><span>规划池</span></div>

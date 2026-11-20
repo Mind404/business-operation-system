@@ -687,22 +687,22 @@ def admin_trigger_delete(trigger_id):
 def queue_start(queue_id):
     user = _current_user()
     if not user['id']:
-        return redirect(url_for('workflow.index'))
+        return redirect(url_for('workflow.my_tasks'))
     db = _db()
     item = wf.get_queue_item(db, queue_id)
     if not item:
         flash('待发起记录不存在', 'error')
-        return redirect(url_for('workflow.index'))
+        return redirect(url_for('workflow.my_tasks'))
     if user['role'] != 'platform_admin' and item['initiator_id'] and item['initiator_id'] != user['id']:
         flash('只能发起与自己相关的业务审批', 'error')
-        return redirect(url_for('workflow.index'))
+        return redirect(url_for('workflow.my_tasks'))
     try:
         inst = wf.start_from_queue(db, queue_id, user['id'], user['name'])
         flash('流程已发起，等待审批', 'success')
         return redirect(url_for('workflow.instance', instance_id=inst['id']))
     except Exception as e:
         flash('发起失败：%s' % e, 'error')
-        return redirect(url_for('workflow.index'))
+        return redirect(url_for('workflow.my_tasks'))
 
 
 @workflow_bp.route('/queue/<int:queue_id>/ignore', methods=['POST'])
@@ -714,4 +714,36 @@ def queue_ignore(queue_id):
         flash('已忽略该待发起项', 'success')
     except Exception as e:
         flash('操作失败：%s' % e, 'error')
-    return redirect(url_for('workflow.index'))
+    return redirect(url_for('workflow.my_tasks'))
+
+
+@workflow_bp.route('/notification/<int:nid>/open')
+def notification_open(nid):
+    """工作台通知：标为已读后跳到通知指向的业务页面。"""
+    user = _current_user()
+    deny = _login_required()
+    if deny:
+        return deny
+    db = _db()
+    row = wf.mark_notification_read(db, nid, user['id'])
+    if not row:
+        flash('通知不存在或不属于当前用户', 'error')
+        return redirect(url_for('index'))
+    target = (row['url'] or '').strip()
+    # 只允许站内单斜杠路径；排除 //evil.com、反斜杠绕过等协议相对跳转。
+    if (not target.startswith('/') or target.startswith('//')
+            or '\\' in target or '\r' in target or '\n' in target):
+        target = url_for('workflow.my_tasks')
+    return redirect(target)
+
+
+@workflow_bp.route('/notifications/read-all', methods=['POST'])
+def notifications_read_all():
+    user = _current_user()
+    deny = _login_required()
+    if deny:
+        return deny
+    db = _db()
+    n = wf.mark_all_notifications_read(db, user['id'])
+    flash('已将 %d 条通知标为已读' % n, 'success')
+    return redirect(url_for('index'))

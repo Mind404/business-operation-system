@@ -2686,85 +2686,66 @@ def validation_error(message, back_url=None):
 @app.route('/')
 def index():
     db = get_db()
-    # v10.5.0 只保留 WBS：工作台统计聚焦 WBS 计划
-    stats = {
-        'wbs_projects_total': db.execute('SELECT COUNT(*) FROM wbs_projects').fetchone()[0],
-        'wbs_projects_active': db.execute("SELECT COUNT(*) FROM wbs_projects WHERE status IN ('进行中','规划中')").fetchone()[0],
-        'wbs_projects_done': db.execute("SELECT COUNT(*) FROM wbs_projects WHERE status='已完成'").fetchone()[0],
-        'wbs_tasks_total': db.execute('SELECT COUNT(*) FROM wbs_tasks').fetchone()[0],
-        'wbs_tasks_pending': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE approval_status='待审批'").fetchone()[0],
-        'wbs_tasks_active': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status IN ('进行中','待开始') AND approval_status='已通过'").fetchone()[0],
-        'wbs_tasks_done': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE status='已完成'").fetchone()[0],
-        # v12.7.3 口径统一：与 WBS 预警看板一致（叶子任务 + 审批已通过 + 截止<今天 + 非完成/取消 + 截止非空）
-        'wbs_tasks_overdue': db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end < date('now','localtime') AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'").fetchone()[0],
-    }
+    # v13.6：工作台不再维护独立的计数看板，改为「按插件分化模块」；
+    # 每个插件只展示与自己相关的待办/通知，平台统一用用户管理中的真实人员做关联。
+    identity = plugin_system.resolve_workbench_user(db, {
+        'id': session.get('user_id'),
+        'username': session.get('username', ''),
+        'display_name': session.get('user_name', ''),
+        'role': session.get('user_role', ''),
+    })
+    current_user = identity.get('username') or ''
     # v12.5.39：最近动态仅平台管理员可见（非 platform_admin 不取数）
     recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall() if session.get('user_role') == 'platform_admin' else []
-    # 我的待办任务
-    current_user = session.get('username', '')
-    my_tasks = db.execute("SELECT * FROM tasks WHERE assignee=? AND status IN ('待处理','进行中') ORDER BY priority DESC, due_date ASC LIMIT 8", (current_user,)).fetchall()
-    my_tasks_count = db.execute("SELECT COUNT(*) FROM tasks WHERE assignee=? AND status IN ('待处理','进行中')", (current_user,)).fetchone()[0]
-    # v13.0.0.13 跨插件「我的待办」：遍历已启用插件，各自按 my_todos 契约返回，
-    # 按插件分区块展示（不统一排序，区块内各插件自排）。
-    # v13.0.0.14：未登录态不能回退成 admin，否则会把管理员的待办显示给未识别用户。
     todo_groups = []
-    wf_pending, wf_mine, wf_open, wf_stats, wf_queue = [], [], [], {}, []
+    notice_groups = []
+    unread_notice = 0
+    wf_pending, wf_mine, wf_open, wf_queue = [], [], [], []
     if current_user:
         try:
-            todo_groups = plugin_system.collect_my_todos(db, current_user)
+            todo_groups = plugin_system.collect_workbench_modules(db, identity)
         except Exception:
             todo_groups = []
-        # v13.1 平台流程待办并入统一工作台（优先于插件分组展示）
         try:
             import workflow_engine as _wf
-            _wf_items = _wf.collect_my_todos(db, current_user)
-            if _wf_items:
-                todo_groups.insert(0, {'plugin_id': 'workflow', 'plugin_name': '流程与审批',
-                                       'icon': '🔄', 'items': _wf_items})
-            wf_pending = _wf.my_tasks(db, session.get('user_id'), session.get('user_role', ''))
-            wf_mine = _wf.my_instances(db, session.get('user_id'))
+            # 流程待办本身也是一个插件模块，排在最前，保持统一审批入口。
+            wf_modules = _wf.workbench_modules(db, identity)
+            if wf_modules:
+                todo_groups = wf_modules + todo_groups
+            notice_groups = _wf.collect_notification_groups(db, identity.get('id'))
+            unread_notice = _wf.unread_notification_count(db, identity.get('id'))
+            wf_pending = _wf.my_tasks(db, identity.get('id'), session.get('user_role', ''))
+            wf_mine = _wf.my_instances(db, identity.get('id'))
             wf_open = _wf.open_instances(db)
-            wf_stats = _wf.stats(db)
-            wf_queue = _wf.pending_starts(db, session.get('user_id'), session.get('user_role', ''))
+            wf_queue = _wf.pending_starts(db, identity.get('id'), session.get('user_role', ''))
         except Exception:
-            wf_pending, wf_mine, wf_open, wf_stats, wf_queue = [], [], [], {}, []
-    # v13.0.0.18：每组自带四格统计（分组标题下按本组任务计算）
+            pass
+    # 每个插件模块只保留自己的局部统计（筛选用），不再有任何跨插件总计数。
     for _g in todo_groups:
-        _items = _g['items']
+        _items = _g.get('items') or []
         _g['stats'] = {
             'total': len(_items),
             'overdue': sum(1 for it in _items if it.get('level') == 'overdue'),
             'soon': sum(1 for it in _items if it.get('level') == 'soon'),
             'within7': sum(1 for it in _items if it.get('level') in ('soon', 'near')),
         }
-    todo_total = sum(len(g['items']) for g in todo_groups)
-    todo_overdue = sum(1 for g in todo_groups for it in g['items'] if it.get('level') == 'overdue')
-    # v13.0.0.16：面板头部四格统计（总数/逾期/3天内/7天内）+ 收起态预览
-    _all_todos = [it for g in todo_groups for it in g['items']]
-    todo_stats = {
-        'total': todo_total,
-        'overdue': todo_overdue,
-        'soon': sum(1 for it in _all_todos if it.get('level') == 'soon'),
-        'within7': sum(1 for it in _all_todos if it.get('level') in ('soon', 'near')),
-    }
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。
-    # 这里把 WBS 的启用状态传给模板，停用时不渲染对应入口。
     wbs_on = True
     try:
         _row = db.execute("SELECT enabled FROM plugin_registry WHERE id='wbs'").fetchone()
         wbs_on = bool(_row and _row['enabled'])
     except Exception:
         wbs_on = True
-    return render_template('index.html', stats=stats,
+    return render_template('index.html',
                            recent_logs=recent_logs,
-                           my_tasks=my_tasks, my_tasks_count=my_tasks_count,
-                           todo_groups=todo_groups, todo_total=todo_total, todo_overdue=todo_overdue,
-                           todo_stats=todo_stats,
+                           todo_groups=todo_groups,
+                           notice_groups=notice_groups, unread_notice=unread_notice,
+                           current_user_meta=identity,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on,
-                           wf_pending=wf_pending, wf_mine=wf_mine, wf_open=wf_open, wf_stats=wf_stats,
+                           wf_pending=wf_pending, wf_mine=wf_mine, wf_open=wf_open,
                            wf_queue=wf_queue)
 
 # ============================================================

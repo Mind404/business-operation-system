@@ -212,6 +212,23 @@ CREATE TABLE IF NOT EXISTS wf_event_log (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_wf_event_log_key ON wf_event_log(plugin_id, event_key, created_at);
+CREATE TABLE IF NOT EXISTS wf_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    username TEXT DEFAULT '',
+    display_name TEXT DEFAULT '',
+    plugin_id TEXT DEFAULT 'workflow',
+    event_key TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    body TEXT DEFAULT '',
+    url TEXT DEFAULT '',
+    instance_id TEXT DEFAULT '',
+    business_key TEXT DEFAULT '',
+    read_at TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_wf_notifications_user ON wf_notifications(user_id, read_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_wf_notifications_instance ON wf_notifications(instance_id, user_id, event_key);
 """
 
 
@@ -230,7 +247,63 @@ def init_tables(db=None):
     except sqlite3.IntegrityError as e:
         print('[workflow] 未创建业务单号唯一索引（存在历史重复实例）：%s' % e)
         con.rollback()
+    # v13.6：通知幂等索引，兜住并发写入的 check-then-insert 竞态。
+    try:
+        con.execute(
+            "DELETE FROM wf_notifications WHERE id NOT IN ("
+            "SELECT MAX(id) FROM wf_notifications WHERE instance_id<>'' AND event_key<>'' "
+            "GROUP BY instance_id, user_id, event_key) "
+            "AND instance_id<>'' AND event_key<>''")
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_notification_instance_event "
+            "ON wf_notifications(instance_id, user_id, event_key) "
+            "WHERE instance_id<>'' AND event_key<>''")
+        con.commit()
+    except Exception as e:
+        print('[workflow] 通知幂等索引未创建：%s' % e)
+        con.rollback()
+    try:
+        prune_event_log(con)
+    except Exception as e:
+        print('[workflow] 事件流水清理跳过：%s' % e)
     return con
+
+
+# v13.6 事件流水保留策略：默认保留 180 天，且最多 50 万条。
+# 每次进程首次初始化触发一次（内部按自然日节流），不放在每个请求里跑。
+_EVENT_LOG_KEEP_DAYS = 180
+_EVENT_LOG_MAX_ROWS = 500000
+_last_event_log_prune = ''
+
+
+def prune_event_log(db, keep_days=None, max_rows=None, force=False):
+    """清理超期/超量 wf_event_log；返回删除条数。
+
+    - 先删除早于保留天数的行；
+    - 若总量仍超过上限，再按 id 从旧到新删除多余行。
+    同一个进程每个自然日只真正执行一次（force=True 可绕过，供测试/手动维护）。
+    """
+    global _last_event_log_prune
+    keep_days = int(_EVENT_LOG_KEEP_DAYS if keep_days is None else keep_days)
+    max_rows = int(_EVENT_LOG_MAX_ROWS if max_rows is None else max_rows)
+    today = datetime.now().strftime('%Y-%m-%d')
+    if not force and _last_event_log_prune == today:
+        return 0
+    deleted = 0
+    cutoff = (datetime.now() - timedelta(days=max(1, keep_days))).strftime('%Y-%m-%d %H:%M:%S')
+    cur = db.execute('DELETE FROM wf_event_log WHERE created_at < ?', (cutoff,))
+    deleted += max(0, cur.rowcount or 0)
+    if max_rows > 0:
+        total = db.execute('SELECT COUNT(*) c FROM wf_event_log').fetchone()['c']
+        if total > max_rows:
+            extra = total - max_rows
+            cur = db.execute(
+                'DELETE FROM wf_event_log WHERE id IN ('
+                'SELECT id FROM wf_event_log ORDER BY id ASC LIMIT ?)', (extra,))
+            deleted += max(0, cur.rowcount or 0)
+    db.commit()
+    _last_event_log_prune = today
+    return deleted
 
 
 # ============================================================
@@ -1619,7 +1692,7 @@ def approve_task(db, task_id, user_id, user_name, role, decision, comment=''):
             wf.do_engine_steps()
             _save_workflow(db, inst['id'], wf)
             sync_runtime(db, inst, wf, definition)
-            _run_reject_writeback(db, inst, task, definition, user_name)
+            _run_reject_writeback(db, inst, task, definition, user_name, comment)
         except Exception as e:
             db.execute("UPDATE wf_instances SET status='error', last_error=?, updated_at=? WHERE id=?",
                        (str(e)[:2000], _now(), inst['id']))
@@ -1631,7 +1704,7 @@ def approve_task(db, task_id, user_id, user_name, role, decision, comment=''):
     return db.execute('SELECT * FROM wf_instances WHERE id=?', (inst['id'],)).fetchone()
 
 
-def _run_reject_writeback(db, inst, wf_task, definition, actor_name=''):
+def _run_reject_writeback(db, inst, wf_task, definition, actor_name='', comment=''):
     """流程以「驳回」结束时，调用插件注册的驳回写回动作（只执行一次）。"""
     cur = db.execute('SELECT status FROM wf_instances WHERE id=?', (inst['id'],)).fetchone()
     if not cur or cur['status'] != 'rejected':
@@ -1639,11 +1712,16 @@ def _run_reject_writeback(db, inst, wf_task, definition, actor_name=''):
     trg = get_trigger_for_def(db, inst['def_key'])
     event = get_event(trg['event_key']) if trg else None
     hook = (event or {}).get('on_reject') or {}
+    # v13.6：无论插件是否配置驳回写回，都向发起人写一条工作台通知。
+    # 通知按「实例 + 事件」幂等，可安全重试；写回失败时先不通知，避免用户
+    # 看到“已驳回”但业务实际停在 error。
     if not hook.get('key'):
+        _notify_instance_rejected(db, inst, wf_task, definition, actor_name, comment)
         return
     done = db.execute("SELECT 1 FROM wf_events WHERE instance_id=? AND event_type='reject_writeback'",
                       (inst['id'],)).fetchone()
     if done:
+        _notify_instance_rejected(db, inst, wf_task, definition, actor_name, comment)
         return
     handler = _resolve_action_handler(hook['key'], hook.get('plugin') or (event or {}).get('plugin') or '')
     if not handler:
@@ -1662,6 +1740,7 @@ def _run_reject_writeback(db, inst, wf_task, definition, actor_name=''):
     result = handler(ctx)
     _event(db, inst['id'], 'reject_writeback', inst['initiator_id'], actor_name,
            {'action': hook['key'], 'result': result or {}})
+    _notify_instance_rejected(db, inst, wf_task, definition, actor_name, comment)
     db.commit()
 
 
@@ -1778,6 +1857,157 @@ def _user_for_name(db, username):
     return db.execute(
         "SELECT * FROM users WHERE (username=? OR display_name=?) AND is_active=1 AND COALESCE(deleted,0)=0 LIMIT 1",
         (username, username)).fetchone()
+
+
+def _plugin_label(db, plugin_id):
+    """插件展示名/图标；流程本身作为独立模块展示。"""
+    if plugin_id == 'workflow':
+        return '流程与审批', '🔄'
+    try:
+        row = db.execute('SELECT name, icon FROM plugin_registry WHERE id=?', (plugin_id,)).fetchone()
+        if row:
+            return row['name'] or plugin_id, row['icon'] or '🔌'
+    except Exception:
+        pass
+    return plugin_id or '平台', '🔌'
+
+
+def _notification_user(db, user_id=None, user_name=''):
+    if user_id:
+        row = db.execute(
+            'SELECT * FROM users WHERE id=? AND is_active=1 AND COALESCE(deleted,0)=0', (user_id,)).fetchone()
+        if row:
+            return row
+    if user_name:
+        return _user_for_name(db, user_name)
+    return None
+
+
+def notify_user(db, user_id, title, body='', plugin_id='workflow', event_key='',
+                url='', instance_id='', business_key='', user_name='', commit=True):
+    """向用户管理中的具体人员写一条工作台通知（同一实例同一事件只写一次）。"""
+    u = _notification_user(db, user_id, user_name)
+    if not u:
+        return None
+    instance_id = str(instance_id or '')[:100]
+    event_key = str(event_key or '')[:100]
+    plugin_id = str(plugin_id or 'workflow')[:50]
+    title = str(title or '')[:200]
+    body = str(body or '')[:2000]
+    business_key = str(business_key or '')[:200]
+    url = str(url or '').strip()[:500]
+    # 通知只允许站内单斜杠路径，避免存储 javascript:/协议相对地址。
+    if (not url.startswith('/') or url.startswith('//')
+            or '\\' in url or '\r' in url or '\n' in url):
+        url = ''
+    if instance_id and event_key:
+        dup = db.execute(
+            'SELECT * FROM wf_notifications WHERE instance_id=? AND user_id=? AND event_key=? '
+            'ORDER BY id DESC LIMIT 1', (instance_id, u['id'], event_key)).fetchone()
+        if dup:
+            return dup
+    try:
+        cur = db.execute(
+            'INSERT INTO wf_notifications '
+            '(user_id, username, display_name, plugin_id, event_key, title, body, url, instance_id, business_key) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (u['id'], u['username'] or '', u['display_name'] or u['username'] or '',
+             plugin_id, event_key, title, body, url, instance_id, business_key))
+        new_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        # 并发同实例同事件：唯一索引兜底，返回已存在的那条
+        if instance_id and event_key:
+            return db.execute(
+                'SELECT * FROM wf_notifications WHERE instance_id=? AND user_id=? AND event_key=? '
+                'ORDER BY id DESC LIMIT 1',
+                (instance_id, u['id'], event_key)).fetchone()
+        raise
+    if commit:
+        db.commit()
+    return db.execute('SELECT * FROM wf_notifications WHERE id=?', (new_id,)).fetchone()
+
+
+def _notify_instance_rejected(db, inst, wf_task, definition, actor_name='', comment=''):
+    """流程最终被驳回后，通知发起人；与插件是否注册驳回写回无关。"""
+    u = _notification_user(db, inst['initiator_id'], inst['initiator_name'])
+    if not u:
+        return None
+    trg = get_trigger_for_def(db, inst['def_key'])
+    event_key = (trg['event_key'] if trg else '') or ''
+    try:
+        node = _definition_node(definition, wf_task['node_id']) if wf_task else {}
+    except Exception:
+        node = {}
+    node_name = node.get('name') or node.get('label') or (wf_task['name'] if wf_task else '审批节点')
+    comment = (comment or (wf_task['comment'] if wf_task and 'comment' in wf_task.keys() else '') or '未填写意见')
+    body = '审批节点「%s」由 %s 驳回：%s' % (node_name, actor_name or '审批人', comment)
+    return notify_user(
+        db, u['id'], '审批驳回：%s' % (inst['title'] or inst['def_key']),
+        body=body, plugin_id=inst['plugin_id'] or 'workflow', event_key=event_key,
+        url='/workflow/instance/%s' % inst['id'], instance_id=inst['id'],
+        business_key=inst['business_key'] or '', commit=False)
+
+
+def notifications_for_user(db, user_id, limit=50):
+    if not user_id:
+        return []
+    return db.execute(
+        "SELECT * FROM wf_notifications WHERE user_id=? ORDER BY "
+        "CASE WHEN read_at='' THEN 0 ELSE 1 END, id DESC LIMIT ?",
+        (user_id, int(limit))).fetchall()
+
+
+def collect_notification_groups(db, user_id, limit=50):
+    """工作台按插件分组的通知列表。"""
+    rows = notifications_for_user(db, user_id, limit=limit)
+    groups = []
+    idx = {}
+    for r in rows:
+        pid = r['plugin_id'] or 'workflow'
+        if pid not in idx:
+            name, icon = _plugin_label(db, pid)
+            idx[pid] = len(groups)
+            groups.append({'plugin_id': pid, 'plugin_name': name, 'icon': icon,
+                           'kind': 'notice', 'items': []})
+        groups[idx[pid]]['items'].append(r)
+    return groups
+
+
+def unread_notification_count(db, user_id):
+    if not user_id:
+        return 0
+    row = db.execute("SELECT COUNT(*) c FROM wf_notifications WHERE user_id=? AND read_at=''",
+                     (user_id,)).fetchone()
+    return row['c'] if row else 0
+
+
+def mark_notification_read(db, notification_id, user_id):
+    row = db.execute('SELECT * FROM wf_notifications WHERE id=? AND user_id=?',
+                     (notification_id, user_id)).fetchone()
+    if not row:
+        return None
+    if not row['read_at']:
+        db.execute('UPDATE wf_notifications SET read_at=? WHERE id=?', (_now(), notification_id))
+        db.commit()
+        row = db.execute('SELECT * FROM wf_notifications WHERE id=?', (notification_id,)).fetchone()
+    return row
+
+
+def mark_all_notifications_read(db, user_id):
+    cur = db.execute(
+        "UPDATE wf_notifications SET read_at=? WHERE user_id=? AND read_at=''", (_now(), user_id))
+    db.commit()
+    return max(0, cur.rowcount or 0)
+
+
+def workbench_modules(db, user):
+    """流程待办作为一个插件模块返回，供工作台统一按插件渲染。"""
+    username = user.get('username') if isinstance(user, dict) else str(user or '')
+    items = collect_my_todos(db, username)
+    if not items:
+        return []
+    return [{'plugin_id': 'workflow', 'plugin_name': '流程与审批', 'icon': '🔄',
+             'kind': 'todo', 'items': items}]
 
 
 def collect_my_todos(db, username):

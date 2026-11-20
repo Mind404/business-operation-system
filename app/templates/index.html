@@ -4,58 +4,65 @@
 
 {% block content %}
 <div class="dashboard-v2">
-    <!-- v12.7.10.22：WBS 插件停用时不渲染它的入口，避免点进去被拦 -->
-    {% if wbs_on %}
-    <!-- 顶部：一句话欢迎 + 今日焦点（点击跳转 WBS 插件页） -->
+    <!-- v13.6：不再展示独立计数看板；工作台只按插件分模块，信息统一关联用户管理中的本人 -->
     <div class="hero-bar">
-        <a href="/wbs" class="hero-left" style="text-decoration:none;color:inherit;display:flex;gap:10px;align-items:baseline;">
+        <div class="hero-left">
             <div class="hero-greeting">
-                <span class="hero-role">{{ current_user or '工作台' }}</span>
+                <span class="hero-role">{{ current_user_meta.display_name or current_user_meta.username or '工作台' }}</span>
                 <span class="hero-date">{{ now_month }}月{{ now_day }}日 {{ now_week }}</span>
             </div>
-            <div class="hero-focus">WBS 计划管理 · 任务分解 · 进度跟踪 · 交付物管理 →</div>
-        </a>
-        <a href="/wbs" class="hero-right" style="text-decoration:none;color:inherit;">
-            <div class="hero-todo-card" title="统计口径：仅审批通过的具体任务，不含阶段节点、未审批/已驳回任务">
-                <div class="hero-todo-num {% if stats.wbs_tasks_overdue > 0 %}hero-todo-num-danger{% endif %}">{{ stats.wbs_tasks_overdue }}</div>
-                <div class="hero-todo-label">逾期任务 →</div>
+            <div class="hero-focus">
+                {% if current_user_meta.username %}账号：{{ current_user_meta.username }} · {% endif %}按插件查看我的待办、审批和通知
             </div>
-        </a>
+        </div>
+        {% if wbs_on %}
+        <a href="/wbs" class="hero-link">进入 WBS 计划管理 →</a>
+        {% endif %}
     </div>
-    {% endif %}
 
-    {% if wbs_on %}
-    <!-- WBS 统计卡片（点击跳转 WBS 插件页） -->
-    <div class="kpi-row">
-        <a href="/wbs" class="kpi-card kpi-blue" style="text-decoration:none;color:inherit;cursor:pointer;">
-            <div class="kpi-icon">🗓️</div>
-            <div class="kpi-value">{{ stats.wbs_projects_total }}</div>
-            <div class="kpi-label">WBS 项目总数（{{ stats.wbs_projects_active }} 进行中）→</div>
-        </a>
-        <a href="/wbs" class="kpi-card kpi-green" style="text-decoration:none;color:inherit;cursor:pointer;">
-            <div class="kpi-icon">🚧</div>
-            <div class="kpi-value">{{ stats.wbs_tasks_active }}</div>
-            <div class="kpi-label">进行中任务 →</div>
-        </a>
-        <a href="/wbs" class="kpi-card kpi-orange" style="text-decoration:none;color:inherit;cursor:pointer;">
-            <div class="kpi-icon">🕐</div>
-            <div class="kpi-value">{{ stats.wbs_tasks_pending }}</div>
-            <div class="kpi-label">待审批任务 →</div>
-        </a>
-        <a href="/wbs" class="kpi-card kpi-purple" style="text-decoration:none;color:inherit;cursor:pointer;">
-            <div class="kpi-icon">✅</div>
-            <div class="kpi-value">{{ stats.wbs_tasks_done }}</div>
-            <div class="kpi-label">已完成任务（共 {{ stats.wbs_tasks_total }}）→</div>
-        </a>
+    <!-- v13.6：审批驳回等工作台通知，按来源插件分组 -->
+    <div class="dash-panel notice-panel">
+        <div class="panel-head">
+            <h3 class="panel-title">🔔 插件通知</h3>
+            <div style="display:flex;gap:10px;align-items:center;">
+                {% if unread_notice %}<span class="notice-unread-sum">未读 {{ unread_notice }} 条</span>{% endif %}
+                {% if unread_notice %}
+                <form method="post" action="{{ url_for('workflow.notifications_read_all') }}" style="display:inline;">
+                    <button class="btn btn-outline btn-sm" type="submit">全部标为已读</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% if notice_groups %}
+        {% for g in notice_groups %}
+        <div class="notice-group">
+            <div class="notice-group-head">
+                <span class="notice-group-name">{{ g.icon }} {{ g.plugin_name }} · 通知</span>
+                <span class="notice-group-hint">来自插件业务事件，点开处理并自动标为已读</span>
+            </div>
+            {% for n in g['items'] %}
+            <a class="notice-row {% if not n['read_at'] %}notice-row-unread{% endif %}"
+               href="{{ url_for('workflow.notification_open', nid=n['id']) }}">
+                <span class="notice-dot {% if n['read_at'] %}notice-dot-read{% endif %}"></span>
+                <span class="notice-main">
+                    <span class="notice-title">{{ n['title'] }}</span>
+                    <span class="notice-body">{{ n['body'] }}</span>
+                </span>
+                <span class="notice-time">{{ (n['created_at'] or '')[5:16] }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-box"><div class="empty-text-lg">暂无插件通知；审批被驳回时会出现在这里</div></div>
+        {% endif %}
     </div>
-    {% endif %}
 
     <!-- v13.2：流程与审批并入工作台：待我审批 / 我发起的 / 运行中与异常 -->
     <div class="dash-panel wf-panel">
         <div class="panel-head">
             <h3 class="panel-title">🔄 流程与审批</h3>
             <div style="display:flex;gap:10px;align-items:center;">
-                <span class="todo-sum">运行中 {{ wf_stats.running or 0 }} · 异常 {{ wf_stats.error or 0 }}</span>
                 <a class="btn btn-primary btn-sm" href="{{ url_for('workflow.start') }}">＋ 发起流程</a>
             </div>
         </div>
@@ -147,9 +154,9 @@
     <!-- 我的待办（v13.0.0.18：分组标题 + 可点击筛选统计 + 筛选式清单） -->
     <div class="dash-panel">
         <div class="panel-head">
-            <h3 class="panel-title">📌 我的待办</h3>
-            {% if todo_groups %}
-            <span class="todo-sum">共 {{ todo_stats.total }} 项未完成{% if todo_stats.overdue %} · <em>{{ todo_stats.overdue }} 项已逾期</em>{% endif %}</span>
+            <h3 class="panel-title">📌 插件待办</h3>
+            {% if current_user_meta.username %}
+            <span class="todo-user-chip">关联用户：{{ current_user_meta.display_name or current_user_meta.username }}（{{ current_user_meta.username }}）</span>
             {% endif %}
         </div>
 
@@ -215,10 +222,10 @@
         {% endfor %}
         {% else %}
         <div class="empty-box">
-            <div class="empty-text-lg">当前没有指派给你的未完成任务</div>
+            <div class="empty-text-lg">当前没有与你关联的插件待办</div>
             <div style="font-size:12.5px;color:#94a3b8;margin-top:8px;line-height:1.8">
-                这里只统计「负责人是你」且尚未完成的任务，逾期的一直保留，标记完成后才消失。<br>
-                负责人填账号或姓名都能识别；如果任务确实归你却没出现，到项目详情核对负责人是否正确。
+                每个插件只展示自己的待办模块；负责人按用户管理中的账号或姓名关联，逾期事项保留到完成为止。<br>
+                如果任务确实归你却没出现，请到对应插件核对负责人是否已选择用户管理里的本人。
             </div>
         </div>
         {% endif %}
@@ -304,6 +311,28 @@
 .hero-todo-num { font-size: 30px; font-weight: 800; line-height: 1; }
 .hero-todo-num-danger { color: #fecaca; }
 .hero-todo-label { font-size: 11px; opacity: 0.9; margin-top: 4px; }
+.hero-link { color: #fff; text-decoration: none; font-size: 12.5px; border: 1px solid rgba(255,255,255,0.45); padding: 8px 14px; border-radius: 8px; white-space: nowrap; }
+.hero-link:hover { background: rgba(255,255,255,0.14); }
+
+/* v13.6 插件通知 */
+.notice-panel { margin-bottom: 16px; }
+.notice-unread-sum { font-size: 12px; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 2px 9px; }
+.notice-group { border-top: 1px solid #eef1f5; padding-top: 10px; margin-top: 8px; }
+.notice-group:first-of-type { border-top: none; margin-top: 0; }
+.notice-group-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.notice-group-name { font-size: 13px; font-weight: 700; color: #1f2937; padding-left: 9px; border-left: 3px solid #1e3a8a; }
+.notice-group-hint { font-size: 11.5px; color: #9ca3af; }
+.notice-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin: 6px 0; border: 1px solid #e5e7eb; border-radius: 8px; text-decoration: none; background: #fff; }
+.notice-row:hover { background: #f8fafc; border-color: #cbd5e1; }
+.notice-row-unread { background: #fffaf0; border-color: #fde68a; }
+.notice-dot { width: 7px; height: 7px; border-radius: 50%; background: #dc2626; margin-top: 7px; flex-shrink: 0; }
+.notice-dot-read { background: #cbd5e1; }
+.notice-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.notice-title { font-size: 13px; color: #111827; font-weight: 600; }
+.notice-body { font-size: 12px; color: #6b7280; line-height: 1.55; }
+.notice-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
+.todo-user-chip { font-size: 12px; color: #1e40af; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 3px 10px; }
+
 
 /* KPI卡片 */
 .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }

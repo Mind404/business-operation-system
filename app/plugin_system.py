@@ -18,7 +18,7 @@ PLUGINS = [
     {'id': 'profile',      'name': '个人中心',         'icon': '👤', 'group': '核心', 'core': 1,
      'desc': '我的信息、我的待办、修改密码', 'endpoint': 'profile', 'nav_path': '/profile'},
     {'id': 'workbench',    'name': '我的工作台',       'icon': '📊', 'group': '核心', 'core': 1,
-     'desc': '系统首页：WBS统计与快捷入口', 'endpoint': 'index', 'nav_path': '/',
+     'desc': '系统首页：按插件聚合我的待办、审批与通知', 'endpoint': 'index', 'nav_path': '/',
      'tables': ['tasks']},
 
     # --- 唯一业务插件：WBS（所有登录用户可用） ---
@@ -389,6 +389,119 @@ def collect_my_todos(db, username):
             'icon': p.get('icon') or '',
             'items': items,
         })
+    return groups
+
+
+def resolve_workbench_user(db, user):
+    """把会话身份归一为「用户管理」中的真实人员。"""
+    raw = ''
+    uid = None
+    if isinstance(user, dict):
+        raw = (user.get('username') or user.get('display_name') or '').strip()
+        try:
+            uid = int(user.get('id')) if user.get('id') else None
+        except Exception:
+            uid = None
+    else:
+        raw = str(user or '').strip()
+        if raw.isdigit():
+            uid = int(raw)
+    row = None
+    if uid:
+        row = db.execute('SELECT * FROM users WHERE id=? AND is_active=1 AND COALESCE(deleted,0)=0',
+                         (uid,)).fetchone()
+    if not row and raw:
+        rows = db.execute(
+            'SELECT * FROM users WHERE (username=? OR display_name=?) '
+            'AND is_active=1 AND COALESCE(deleted,0)=0 ORDER BY id',
+            (raw, raw)).fetchall()
+        exact = [r for r in rows if (r['username'] or '').strip() == raw]
+        if exact:
+            row = exact[0]
+        elif len(rows) == 1:
+            row = rows[0]
+        elif len(rows) > 1:
+            # 同名显示名无法确定是谁：不猜测身份，避免把别人的待办/通知串过来。
+            return {'id': None, 'username': '', 'display_name': raw,
+                    'role': '', 'aliases': [], 'ambiguous': True}
+    if row:
+        un = (row['username'] or '').strip()
+        dn = (row['display_name'] or '').strip()
+        return {'id': row['id'], 'username': un, 'display_name': dn or un,
+                'role': row['role'] or '', 'aliases': [x for x in (un, dn) if x]}
+    if isinstance(user, dict):
+        un = (user.get('username') or '').strip()
+        dn = (user.get('display_name') or '').strip()
+        return {'id': uid, 'username': un, 'display_name': dn or un,
+                'role': user.get('role') or '', 'aliases': [x for x in (un, dn, raw) if x]}
+    return {'id': uid, 'username': raw, 'display_name': raw, 'role': '',
+            'aliases': [raw] if raw else []}
+
+
+def collect_workbench_modules(db, user):
+    """v13.6 工作台插件模块聚合。
+
+    新契约：插件可在 routes.py 暴露 workbench_modules(db, user_ctx) -> list[module]。
+    module = {plugin_id, plugin_name, icon, kind, title, items}；items 内统一使用
+    title/url/status/due/days_left/level 字段，并可带 owner 的用户管理身份。
+    兼容旧契约 my_todos(db, username)。
+    """
+    ctx = resolve_workbench_user(db, user)
+    groups = []
+    import importlib
+    try:
+        enabled = _enabled_ids()
+    except Exception:
+        enabled = set()
+    # 插件清单以 plugin_registry/manifest 为准，不能只看静态 PLUGINS——
+    # version_plan 等目录型插件就是动态注册进来的。
+    core_ids = {p.get('id') for p in PLUGINS if p.get('core')}
+    man_map = {}
+    try:
+        man_map = _manifest_map()
+    except Exception:
+        man_map = {}
+    pids = sorted(enabled) if enabled else sorted(man_map)
+    for pid in pids:
+        if not pid or pid in core_ids:
+            continue
+        man = man_map.get(pid) or {}
+        try:
+            mod = importlib.import_module('plugins.%s.routes' % pid)
+        except Exception:
+            continue
+        modules = []
+        fn_new = getattr(mod, 'workbench_modules', None)
+        if callable(fn_new):
+            try:
+                modules = fn_new(db, ctx) or []
+            except Exception:
+                modules = []
+        else:
+            fn_old = getattr(mod, 'my_todos', None)
+            if callable(fn_old):
+                try:
+                    items = fn_old(db, ctx['username'] or ctx['display_name']) or []
+                except Exception:
+                    items = []
+                if items:
+                    modules = [{'plugin_id': pid, 'plugin_name': man.get('name') or pid,
+                                'icon': man.get('icon') or '', 'kind': 'todo', 'items': items}]
+        for m in modules:
+            if not m or not m.get('items'):
+                continue
+            m.setdefault('plugin_id', pid)
+            m.setdefault('plugin_name', man.get('name') or pid)
+            m.setdefault('icon', man.get('icon') or '')
+            m.setdefault('kind', 'todo')
+            m['user'] = {'id': ctx['id'], 'username': ctx['username'],
+                         'display_name': ctx['display_name']}
+            for it in m['items']:
+                if isinstance(it, dict):
+                    it.setdefault('owner_user_id', ctx['id'])
+                    it.setdefault('owner_username', ctx['username'])
+                    it.setdefault('owner_display_name', ctx['display_name'])
+            groups.append(m)
     return groups
 
 
@@ -910,7 +1023,11 @@ _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'user_plugins', 'operation_logs', 'ai_providers',
                            'ai_chat_logs', 'approval_requests',
                            # v12.7.10.10 平台自身新表（非插件建表，无需登记 plugin_tables）
-                           'user_sessions', 'ui_prefs'}
+                           'user_sessions', 'ui_prefs',
+                           # v13.1-v13.6 流程内核表（平台自身建表，非插件业务表）
+                           'wf_definitions', 'wf_definition_versions', 'wf_instances',
+                           'wf_tasks', 'wf_events', 'wf_subscriptions', 'wf_outbox',
+                           'wf_triggers', 'wf_trigger_queue', 'wf_event_log', 'wf_notifications'}
 # 平台早期无前缀遗留业务表（白名单豁免；v12.4.8 已删除 42 张 8 模块时代业务表，
 # 仅剩 users/tasks 两张核心在用：登录与工作台待办）
 _PLATFORM_LEGACY_TABLES = {'users', 'tasks'}

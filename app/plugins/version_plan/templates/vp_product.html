@@ -6,7 +6,7 @@
 <div class="vp-page-head">
   <div>
     <h1>📦 {{ p['name'] }} <span class="vp-code" style="font-size:13px">{{ p['code'] }}</span></h1>
-    <p>{% if p['owner'] %}负责人：{{ p['owner'] }}　{% endif %}{{ p['description'] or '产品空间：需求过滤、版本规划与流转受控' }}</p>
+    <p>{% if p['owner'] %}负责人：{{ p['owner_display'] }}　{% endif %}{{ p['description'] or '产品空间：需求过滤、版本规划与流转受控' }}</p>
   </div>
   <div class="vp-head-actions">
     <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>

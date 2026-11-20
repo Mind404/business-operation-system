@@ -362,41 +362,72 @@ def _todo_days_left(plan_end, today):
 
 
 def _owner_aliases(db, u):
-    """一个用户可能出现在 owner 字段的写法：账号 + 显示名。
+    """一个用户可能出现在 owner 字段的写法：账号 + 唯一显示名。
 
     v13.0.0.14：存量任务负责人很多还是人名（没跑过迁移脚本），
     只按账号精确匹配会让这些人的待办全部为空。这里把两种写法都收进来，
     不要求用户先做数据转换也能看到自己的任务。
+
+    v13.6：显示名只有在用户管理里唯一时才纳入匹配。两人同名时，
+    按姓名归属无法判断任务到底是谁的，宁可只按账号匹配，也不能把
+    别人的任务串到当前用户名下。
     """
-    names = {u}
+    rows = []
     try:
         rows = db.execute(
             "SELECT username, display_name FROM users "
-            "WHERE username=? OR display_name=?", (u, u)).fetchall()
-        for r in rows:
-            un = (r['username'] or '').strip()
-            dn = (r['display_name'] or '').strip()
-            if un:
-                names.add(un)
-            if dn:
-                names.add(dn)
+            "WHERE (username=? OR display_name=?) AND is_active=1 AND COALESCE(deleted,0)=0 "
+            "ORDER BY id", (u, u)).fetchall()
     except Exception:
-        # 用户表不可用时退回只用账号匹配
-        pass
+        return [u] if u else []
+
+    # 账号是精确身份；有账号命中时以账号为准。
+    exact = [r for r in rows if (r['username'] or '').strip() == u]
+    if exact:
+        row = exact[0]
+    elif len(rows) == 1:
+        row = rows[0]
+    elif rows:
+        # 只命中多人同名显示名 → 归属有歧义，不做姓名匹配
+        return []
+    else:
+        # 用户管理里查不到：兼容历史自由填写的负责人字符串
+        return [u] if u else []
+
+    names = set()
+    un = (row['username'] or '').strip()
+    dn = (row['display_name'] or '').strip()
+    if un:
+        names.add(un)
+    if dn:
+        try:
+            dup = db.execute(
+                "SELECT COUNT(*) c FROM users WHERE display_name=? AND is_active=1 "
+                "AND COALESCE(deleted,0)=0", (dn,)).fetchone()['c']
+        except Exception:
+            dup = 1
+        if dup == 1:
+            names.add(dn)
     return [n for n in names if n]
 
-
-def my_todos(db, username):
+def my_todos(db, user):
     """我负责的、尚未完成的 WBS 任务（跨项目）。
 
-    口径与「到期预警」一致：未完成/未取消、审批已通过、只取任务级行
-    （parent_id>0 或历史数据 NULL）。不同点是不限 7 天窗口 ——
-    待办要回答"我还有哪些事"，逾期永不消失、完成才消失。
+    v13.6：user 可以是用户上下文 dict（含 id/username/display_name），
+    也可以继续传账号字符串；统一通过用户管理解析账号 + 姓名别名。
     """
-    u = (username or '').strip()
+    if isinstance(user, dict):
+        u = (user.get('username') or user.get('display_name') or '').strip()
+        owner_meta = user
+    else:
+        u = (user or '').strip()
+        owner_meta = {}
     if not u:
         return []
     aliases = _owner_aliases(db, u)
+    if not aliases:
+        # 显示名重名且没有账号可锚定：无法安全判断归属，宁可不出待办也不能串号。
+        return []
     owner_where = ' OR '.join(['t.owner = ?'] * len(aliases))
     today = date.today()
     rows = db.execute(
@@ -439,11 +470,23 @@ def my_todos(db, username):
             'level': level,
             # 与「到期预警」同一跳转：进项目详情并定位高亮该任务行
             'url': '/wbs/%d?task_highlight=%d' % (r['project_id'], r['id']),
+            'owner_user_id': owner_meta.get('id'),
+            'owner_username': owner_meta.get('username') or u,
+            'owner_display_name': owner_meta.get('display_name') or u,
         })
     items.sort(key=lambda x: (TODO_LEVEL_ORDER.get(x['level'], 9),
                               x['days_left'] if x['days_left'] is not None else 9999,
                               x['id']))
     return items
+
+
+def workbench_modules(db, user):
+    """工作台插件模块：WBS 个人待办。"""
+    items = my_todos(db, user)
+    if not items:
+        return []
+    return [{'plugin_id': 'wbs', 'plugin_name': 'WBS 计划管理', 'icon': '🗓️',
+             'kind': 'todo', 'title': '我的任务', 'items': items}]
 
 
 @blueprint.route('/wbs', strict_slashes=False)

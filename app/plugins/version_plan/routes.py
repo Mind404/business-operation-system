@@ -762,7 +762,7 @@ def index():
         active = sum(1 for v in vrows if v['status'] in ('规划中', '已冻结', '开发中', '测试中'))
         prod_cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
                            'pool': dstat['规划池'], 'versions': len(vrows), 'active': active,
-                           'released': dstat['已发布']})
+                           'released': dstat['已发布'], 'owner_display': _owner_display(p.get('owner'))})
     return render_template('vp_index.html', products=prod_cards, prod_map=_product_map(db), **ov,
                            can_manage=_can_edit(), can_admin=_can_admin(), today=_today())
 
@@ -776,11 +776,191 @@ def product_home(code):
         flash('产品不存在或已停用', 'error')
         return redirect(url_for('version_plan.index'))
     ov = _overview(db, code)
-    return render_template('vp_product.html', p=dict(p), **ov,
+    p = dict(p)
+    p['owner_display'] = _owner_display(p.get('owner'))
+    return render_template('vp_product.html', p=p, **ov,
                            can_manage=_can_edit(), can_admin=_can_admin(), today=_today())
 
 
 # ---------------------------------------------------------------- 产品管理
+# ============ v13.6 工作台插件模块 / 用户管理关联 ============
+
+def _system_user_options():
+    """从平台用户管理读取启用用户，供产品负责人选择。"""
+    db = get_main_db()
+    try:
+        rows = db.execute(
+            "SELECT id, username, display_name, department FROM users "
+            "WHERE is_active=1 AND COALESCE(deleted,0)=0 ORDER BY username").fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _resolve_system_user(value):
+    """姓名/账号 → 用户管理中的账号；多义或不存在返回 None。"""
+    v = (value or '').strip()
+    if not v:
+        return None
+    db = get_main_db()
+    try:
+        rows = db.execute(
+            "SELECT username, display_name FROM users "
+            "WHERE (username=? OR display_name=?) AND is_active=1 AND COALESCE(deleted,0)=0 "
+            "ORDER BY id", (v, v)).fetchall()
+        uniq = []
+        for r in rows:
+            if r['username'] and r['username'] not in uniq:
+                uniq.append(r['username'])
+        return uniq[0] if len(uniq) == 1 else None
+    except Exception:
+        return None
+
+
+def _owner_display(owner):
+    v = (owner or '').strip()
+    if not v:
+        return ''
+    db = get_main_db()
+    try:
+        rows = db.execute(
+            "SELECT username, display_name FROM users "
+            "WHERE (username=? OR display_name=?) AND is_active=1 AND COALESCE(deleted,0)=0 "
+            "ORDER BY id", (v, v)).fetchall()
+        exact = [r for r in rows if (r['username'] or '').strip() == v]
+        if exact:
+            row = exact[0]
+        elif len(rows) == 1:
+            row = rows[0]
+        elif len(rows) > 1:
+            return '%s（未关联账号·重名）' % v
+        else:
+            return '%s（未关联账号）' % v
+        dn = row['display_name'] or row['username']
+        return '%s（%s）' % (dn, row['username'])
+    except Exception:
+        pass
+    return '%s（未关联账号）' % v
+
+
+def _workbench_table(logical):
+    """工作台请求属于 core，不能走 _ensure_tables 的当前请求路由；
+    这里只读 plugin_tables 已登记的实际表名，避免把插件表建到主库。"""
+    if logical in _T:
+        return _T[logical]
+    db = get_main_db()
+    try:
+        row = db.execute(
+            'SELECT actual_name FROM plugin_tables WHERE plugin_id=? AND logical_name=?',
+            (PID, logical)).fetchone()
+        if row:
+            _T[logical] = row['actual_name']
+            return _T[logical]
+    except Exception:
+        pass
+    return logical
+
+
+def _todo_level(due_s):
+    if not due_s:
+        return 'none', None
+    try:
+        d = datetime.strptime(str(due_s)[:10], '%Y-%m-%d').date()
+    except Exception:
+        return 'none', None
+    days = (d - date.today()).days
+    if days < 0:
+        return 'overdue', days
+    if days <= 3:
+        return 'soon', days
+    if days <= 7:
+        return 'near', days
+    return 'later', days
+
+
+def my_todos(db, user):
+    """版本规划插件的工作台待办：我负责产品下需要推进的版本节点。"""
+    ctx = user if isinstance(user, dict) else {'username': str(user or '')}
+    un = (ctx.get('username') or '').strip()
+    dn = (ctx.get('display_name') or '').strip()
+    if not un:
+        return []
+    # 账号是精确身份；显示名只有在用户管理中唯一、且确实指向当前账号时才纳入，
+    # 避免两人同名时把对方负责的产品版本串进本人待办。
+    owner_list = [un]
+    if dn and _resolve_system_user(dn) == un and dn not in owner_list:
+        owner_list.append(dn)
+    vpdb = get_plugin_db(PID)
+    items = []
+    try:
+        pwhere = ' OR '.join(['p.owner=?'] * len(owner_list))
+        products = vpdb.execute(
+            'SELECT p.code, p.name, p.owner FROM %s p WHERE p.status=\'启用\' AND (%s)'
+            % (_workbench_table(L_PRODUCTS), pwhere), tuple(owner_list)).fetchall()
+        for p in products:
+            rows = vpdb.execute(
+                'SELECT * FROM %s WHERE product_code=? AND status IN (\'规划中\',\'已冻结\',\'开发中\',\'测试中\') '
+                'ORDER BY release_date, version_no' % _workbench_table(L_VERSIONS),
+                (p['code'],)).fetchall()
+            for v in rows:
+                status = v['status']
+                due = ''
+                title = ''
+                if status == '规划中':
+                    has_demand = vpdb.execute(
+                        'SELECT COUNT(*) c FROM %s WHERE product_code=? AND version_no=? '
+                        "AND status IN ('规划池','已排期')" % _workbench_table(L_DEMANDS),
+                        (p['code'], v['version_no'])).fetchone()['c']
+                    if not has_demand:
+                        continue
+                    due = v['freeze_date'] or v['release_date'] or ''
+                    title = '版本 %s · 待发起冻结审批' % v['version_no']
+                elif status in ('已冻结', '开发中'):
+                    due = v['test_date'] or v['release_date'] or ''
+                    title = '版本 %s · 待提测' % v['version_no']
+                elif status == '测试中':
+                    passed = vpdb.execute(
+                        'SELECT COUNT(*) c FROM %s WHERE product_code=? AND version_no=? AND result=\'通过\''
+                        % _workbench_table(L_CHECKS), (p['code'], v['version_no'])).fetchone()['c']
+                    due = v['release_date'] or ''
+                    if passed < 7:
+                        title = '版本 %s · 发布清单未齐（%d/7）' % (v['version_no'], passed)
+                    else:
+                        title = '版本 %s · 待发起发布审批' % v['version_no']
+                else:
+                    continue
+                level, days = _todo_level(due)
+                items.append({
+                    'id': '%s-%s' % (p['code'], v['version_no']),
+                    'title': title,
+                    'wbs_code': v['version_no'],
+                    'project': p['name'],
+                    'status': status,
+                    'due': due,
+                    'days_left': days,
+                    'level': level,
+                    'url': '/version_plan/versions?product=%s' % p['code'],
+                    'owner_user_id': ctx.get('id'),
+                    'owner_username': ctx.get('username') or '',
+                    'owner_display_name': ctx.get('display_name') or '',
+                })
+    finally:
+        vpdb.close()
+    order = {'overdue': 0, 'soon': 1, 'near': 2, 'later': 3, 'none': 4}
+    items.sort(key=lambda x: (order.get(x['level'], 9),
+                              x['days_left'] if x['days_left'] is not None else 9999,
+                              x['title']))
+    return items[:20]
+
+
+def workbench_modules(db, user):
+    items = my_todos(db, user)
+    if not items:
+        return []
+    return [{'plugin_id': PID, 'plugin_name': '版本规划管理', 'icon': '🧭',
+             'kind': 'todo', 'title': '我负责产品的版本节点', 'items': items}]
+
+
 @blueprint.route('/version_plan/products')
 def products():
     _ensure_tables()
@@ -798,8 +978,10 @@ def products():
         active = sum(1 for v in vrows if v['status'] in ('规划中', '已冻结', '开发中', '测试中'))
         cards.append({**p, 'demands': sum(dstat.values()), 'pending': dstat['待过滤'],
                       'pool': dstat['规划池'], 'released': dstat['已发布'],
-                      'versions': len(vrows), 'active': active, 'customers': cust_n})
-    return render_template('vp_products.html', products=cards, can_manage=_can_edit(), can_admin=_can_admin())
+                      'versions': len(vrows), 'active': active, 'customers': cust_n,
+                      'owner_display': _owner_display(p.get('owner'))})
+    return render_template('vp_products.html', products=cards, can_manage=_can_edit(),
+                           can_admin=_can_admin(), user_options=_system_user_options())
 
 
 @blueprint.route('/version_plan/products/new', methods=['POST'])
@@ -823,11 +1005,16 @@ def product_new():
     if db.execute(f'SELECT 1 FROM {_t(L_PRODUCTS)} WHERE name=?', (name,)).fetchone():
         flash(f'产品名称「{name}」已存在', 'error')
         return redirect(url_for('version_plan.products'))
+    owner_raw = (f.get('owner') or '').strip()
+    owner = _resolve_system_user(owner_raw)
+    if owner_raw and not owner:
+        flash('负责人必须从「用户管理」中选择有效用户（可输入姓名或账号）', 'error')
+        return redirect(url_for('version_plan.products'))
     now = _now()
     db.execute(
         f'''INSERT INTO {_t(L_PRODUCTS)} (code, name, owner, status, description, created_at, updated_at)
         VALUES (?,?,?,?,?,?,?)''',
-        (code, name, (f.get('owner') or '').strip(), '启用',
+        (code, name, owner or '', '启用',
          (f.get('description') or '').strip(), now, now))
     db.commit()
     _ulog('产品', code, '新建', name)
@@ -857,10 +1044,16 @@ def product_edit(code):
         return redirect(url_for('version_plan.products'))
     if status not in ('启用', '停用'):
         status = '启用'
+    owner_raw = (f.get('owner') or '').strip()
+    owner = _resolve_system_user(owner_raw)
+    if owner_raw and not owner and owner_raw != (p['owner'] or '').strip():
+        flash('负责人必须从「用户管理」中选择有效用户（可输入姓名或账号）', 'error')
+        return redirect(url_for('version_plan.products'))
     db.execute(
         f'''UPDATE {_t(L_PRODUCTS)} SET name=?, owner=?, status=?, description=?, updated_at=?
         WHERE code=?''',
-        (name, (f.get('owner') or '').strip(), status, (f.get('description') or '').strip(), _now(), code))
+        (name, owner or (p['owner'] if owner_raw == (p['owner'] or '').strip() else ''), status,
+         (f.get('description') or '').strip(), _now(), code))
     db.commit()
     _ulog('产品', code, '编辑', f'{name} / {status}')
     flash(f'产品「{name}」已更新', 'success')

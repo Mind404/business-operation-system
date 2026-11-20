@@ -26,7 +26,7 @@
           </div>
           <span class="vp-tag {{ 't-no' if p['status'] != '启用' else 't-done' }}">{{ p['status'] }}</span>
         </div>
-        {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner'] }}</div>{% endif %}
+        {% if p['owner'] %}<div class="vp-muted">负责人：{{ p['owner_display'] }}</div>{% endif %}
         {% if p['description'] %}<div class="vp-muted" style="margin-top:2px">{{ p['description'] }}</div>{% endif %}
         <div class="vp-prod-stats">
           <div><b>{{ p['demands'] }}</b><span>需求</span></div>
@@ -46,7 +46,7 @@
             <div class="vp-field"><label class="vp-label">产品名称</label>
               <input class="vp-input" name="name" value="{{ p['name'] }}" required></div>
             <div class="vp-field"><label class="vp-label">负责人</label>
-              <input class="vp-input" name="owner" value="{{ p['owner'] or '' }}"></div>
+              <input class="vp-input" name="owner" list="vp-user-list" value="{{ p['owner'] or '' }}" placeholder="输入用户姓名或账号"></div>
             <div class="vp-field"><label class="vp-label">状态</label>
               <select class="vp-select" name="status">
                 <option value="启用" {{ 'selected' if p['status']=='启用' }}>启用</option>
@@ -80,6 +80,12 @@
     {% endif %}
   </div>
 
+  <datalist id="vp-user-list">
+    {% for u in user_options or [] %}
+    <option value="{{ u.display_name or u.username }}">{{ u.display_name or u.username }}{% if u.department %} · {{ u.department }}{% endif %}</option>
+    {% endfor %}
+  </datalist>
+
   <!-- 新建产品 -->
   <div>
     <div class="vp-card">
@@ -97,7 +103,7 @@
         </div>
         <div class="vp-field">
           <label class="vp-label">负责人</label>
-          <input class="vp-input" name="owner" placeholder="可选">
+          <input class="vp-input" name="owner" list="vp-user-list" placeholder="从用户管理中选择（可选）">
         </div>
         <div class="vp-field">
           <label class="vp-label">说明</label>
