@@ -781,17 +781,32 @@ def wbs_project_detail(pid):
     p['participants_disp'] = _resolve_display(p.get('participants'))
     # v13.0.0.29：进详情页先把父任务的「状态/进度」按子任务对账一次，自愈历史不一致数据
     _reconcile_project_rollups(db, pid)
-    tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
+    all_tasks = db.execute('SELECT * FROM wbs_tasks WHERE project_id=?', (pid,)).fetchall()
     # 自然排序：按 WBS 编号的数字分段排序（1.10 排在 1.2 之后），同编号按 id 稳定
-    tasks = sorted(tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
+    all_tasks = sorted(all_tasks, key=lambda t: (_natural_key(t['wbs_code'] or ''), t['id']))
+    total_tasks = len(all_tasks)
+    # v13.6.3：详情页分页，默认每页 100 条。1000 条任务一次性渲染约 3.3MB，
+    # 浏览器解析/绘制会明显卡顿；分页后首屏约 1/5 体积。
+    PER_PAGE = 100
+    total_pages = max(1, (total_tasks + PER_PAGE - 1) // PER_PAGE)
+    page = request.args.get('page', 1, type=int) or 1
+    highlight_id = request.args.get('task_highlight', type=int)
+    if highlight_id:
+        for idx, t in enumerate(all_tasks):
+            if t['id'] == highlight_id:
+                page = idx // PER_PAGE + 1
+                break
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * PER_PAGE
+    tasks = all_tasks[offset:offset + PER_PAGE]
     # v13.0.0.13：任务负责人显示名（v13 起 owner 存 username，展示统一转人名）
     tasks = [_with_owner_disp(t) for t in tasks]
     # v13.0.0.30：标出「有子任务的行」，这类行的进度由子任务自动汇总，页面不再给可拖的进度条
-    _pids = set(x['parent_id'] for x in tasks if x['parent_id'])
+    _pids = set(x['parent_id'] for x in all_tasks if x['parent_id'])
     for x in tasks:
         x['has_kids'] = x['id'] in _pids
     # 分组：父任务（阶段）和子任务
-    phases = [t for t in tasks if t['parent_id'] == 0]
+    phases = [dict(t) for t in all_tasks if t['parent_id'] == 0]
     pending_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='待审批'", (pid,)).fetchone()[0]
     rejected_count = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE project_id=? AND approval_status='已驳回'", (pid,)).fetchone()[0]
     can_edit, _ = _wbs_project_editable(db, pid)
@@ -834,6 +849,8 @@ def wbs_project_detail(pid):
                          .replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026'))
     return render_template('wbs_project_detail.html', p=p, tasks=tasks, phases=phases,
                            project_name_json=project_name_json,
+                           page=page, total_pages=total_pages, total_tasks=total_tasks,
+                           page_size=PER_PAGE,
                            pending_count=pending_count, rejected_count=rejected_count,
                            can_edit=can_edit, can_quickadd=can_quickadd,
                            can_import=can_quickadd,

@@ -190,7 +190,9 @@
             <div class="todo-list" id="todoList{{ loop.index0 }}">
                 <div class="todo-list-bar">
                     <span class="todo-list-cur">全部任务</span>
-                    <span class="todo-list-count"><b class="todo-count-shown">{{ g.stats.total }}</b> 项</span>
+                    <span class="todo-list-count"><b class="todo-count-shown">{{ g['items']|length }}</b> 项
+                        {% if g.total_items > g.shown_items %}· 共 {{ g.total_items }} 项，仅显示前 {{ g.shown_items }} 项{% endif %}
+                    </span>
                 </div>
                 <table class="todo-table">
                     <thead>
@@ -217,6 +219,11 @@
                     </tbody>
                 </table>
                 <div class="todo-empty">该分类下暂无任务</div>
+                {% if g.total_items > g.shown_items %}
+                <div style="padding:8px 10px;border-top:1px solid #eef2f7;font-size:12px;color:#64748b;">
+                    仅显示最紧急的 {{ g.shown_items }} 项；其余 {{ g.total_items - g.shown_items }} 项请进入「{{ g.plugin_name }}」查看全部。
+                </div>
+                {% endif %}
             </div>
         </div>
         {% endfor %}

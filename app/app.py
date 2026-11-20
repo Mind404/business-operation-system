@@ -2344,10 +2344,10 @@ def get_db():
         conn = None
         for _try in range(8):
             try:
-                conn = sqlite3.connect(app.config['DATABASE'], timeout=5.0)
+                conn = sqlite3.connect(app.config['DATABASE'], timeout=30.0)
                 conn.row_factory = sqlite3.Row
                 conn.execute('PRAGMA foreign_keys = ON')
-                conn.execute('PRAGMA busy_timeout = 5000')
+                conn.execute('PRAGMA busy_timeout = 30000')
                 # v12.5.28 性能修复：WAL 模式下 synchronous=NORMAL 为官方推荐（崩溃不损坏库，
                 # 仅可能丢失最近未 checkpoint 事务），提交无需每次 fsync，写吞吐显著提升
                 conn.execute('PRAGMA synchronous = NORMAL')
@@ -2382,7 +2382,10 @@ def close_db(exception):
 def init_db():
     """初始化数据库表结构（从schema.sql读取）"""
     schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
-    db = sqlite3.connect(app.config['DATABASE'])
+    db = sqlite3.connect(app.config['DATABASE'], timeout=30.0)
+    db.execute('PRAGMA busy_timeout = 30000')
+    db.execute('PRAGMA journal_mode = WAL')
+    db.execute('PRAGMA synchronous = NORMAL')
     with open(schema_path, 'r', encoding='utf-8') as f:
         db.executescript(f.read())
     # v12.7.2 性能优化：高频查询索引（CREATE INDEX IF NOT EXISTS 幂等）
@@ -2440,7 +2443,7 @@ def _ensure_schema_tables(db_path=None):
     try:
         import workflow_engine
         _wfc = sqlite3.connect(path, timeout=30)
-        workflow_engine.init_tables(_wfc)
+        workflow_engine.init_tables(_wfc, force=True)
         _wfc.commit()
         _wfc.close()
     except Exception as e:
@@ -2705,6 +2708,8 @@ def index():
         except Exception:
             pass
     # 每个插件模块只保留自己的局部统计（筛选用），不再有任何跨插件总计数。
+    # v13.6.3：统计基于全量，首屏只渲染前 40 条，避免 1000 条待办生成近 600KB HTML。
+    WORKBENCH_MAX_ITEMS = 40
     for _g in todo_groups:
         _items = _g.get('items') or []
         _g['stats'] = {
@@ -2713,6 +2718,9 @@ def index():
             'soon': sum(1 for it in _items if it.get('level') == 'soon'),
             'within7': sum(1 for it in _items if it.get('level') in ('soon', 'near')),
         }
+        _g['total_items'] = len(_items)
+        _g['shown_items'] = min(len(_items), WORKBENCH_MAX_ITEMS)
+        _g['items'] = _items[:WORKBENCH_MAX_ITEMS]
     now = datetime.now()
     week_map = {0:'周一',1:'周二',2:'周三',3:'周四',4:'周五',5:'周六',6:'周日'}
     # v12.7.10.22 修复：插件停用后工作台仍显示它的卡片/快捷入口，点进去被拦截。

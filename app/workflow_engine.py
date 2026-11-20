@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta
 
@@ -51,9 +52,9 @@ def _today():
 def _connect(db=None):
     if db is not None:
         return db
-    con = sqlite3.connect(current_app.config['DATABASE'], timeout=5.0)
+    con = sqlite3.connect(current_app.config['DATABASE'], timeout=30.0)
     con.row_factory = sqlite3.Row
-    con.execute('PRAGMA busy_timeout = 5000')
+    con.execute('PRAGMA busy_timeout = 30000')
     return con
 
 
@@ -232,9 +233,28 @@ CREATE INDEX IF NOT EXISTS idx_wf_notifications_instance ON wf_notifications(ins
 """
 
 
-def init_tables(db=None):
+_INIT_LOCK = threading.Lock()
+_INITIALIZED_PATHS = set()
+
+def _db_identity(con):
+    try:
+        rows = con.execute('PRAGMA database_list').fetchall()
+        return rows[0][2] if rows else ''
+    except Exception:
+        return ''
+
+def init_tables(db=None, force=False):
     con = _connect(db)
-    con.executescript(WORKFLOW_SCHEMA)
+    # v13.6.3：流程页 before_request 每次都会调用本函数。原实现每次执行
+    # 通知去重 DELETE + 建索引 + 流水清理，在 1.8 万通知下会长时间持有写锁，
+    # 并发登录/写入就会 database is locked。进程内每库只做一次完整初始化。
+    path = _db_identity(con)
+    if not force and path and path in _INITIALIZED_PATHS:
+        return con
+    with _INIT_LOCK:
+        if not force and path and path in _INITIALIZED_PATHS:
+            return con
+        con.executescript(WORKFLOW_SCHEMA)
     con.commit()
     # v13.5：同一流程模板 + 同一业务单号只允许一个未结束实例。
     # 用部分唯一索引兜住并发上报的 check-then-insert 竞态；老库若已有重复数据，
@@ -266,6 +286,8 @@ def init_tables(db=None):
         prune_event_log(con)
     except Exception as e:
         print('[workflow] 事件流水清理跳过：%s' % e)
+    if path:
+        _INITIALIZED_PATHS.add(path)
     return con
 
 

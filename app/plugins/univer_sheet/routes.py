@@ -18,6 +18,7 @@
 import io
 import json
 import os
+import threading
 import re
 import sqlite3
 import urllib.parse
@@ -52,7 +53,27 @@ def close_db(exception):
         db.close()
 
 
+_UNIVER_INIT_LOCK = threading.Lock()
+_UNIVER_INIT_PATHS = set()
+
+
 def _init_tables():
+    """首屏会并发调用本函数；每库只完整初始化一次，避免多线程同时建表/登记。"""
+    try:
+        path = get_db().execute('PRAGMA database_list').fetchone()[2] or ''
+    except Exception:
+        path = ''
+    if path and path in _UNIVER_INIT_PATHS:
+        return
+    with _UNIVER_INIT_LOCK:
+        if path and path in _UNIVER_INIT_PATHS:
+            return
+        _do_init_tables()
+        if path:
+            _UNIVER_INIT_PATHS.add(path)
+
+
+def _do_init_tables():
     """插件自管表：走平台统一建表入口（登记 plugin_tables + 幂等建表 + 老库补列），
     消除插件管理页「未走统一建表入口」提示（v12.5.39）"""
     create_plugin_table('univer_sheet', 'univer_rooms', '''

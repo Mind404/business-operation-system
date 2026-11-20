@@ -164,11 +164,12 @@ def _main_db():
     except Exception:
         pass
     if 'db' not in g:
-        g.db = sqlite3.connect(current_app.config['DATABASE'], timeout=5.0)
+        g.db = sqlite3.connect(current_app.config['DATABASE'], timeout=30.0)
         g.db.row_factory = sqlite3.Row
         g.db.execute('PRAGMA foreign_keys = ON')
-        g.db.execute('PRAGMA journal_mode = WAL')
-        g.db.execute('PRAGMA busy_timeout = 5000')
+        # v13.6.3：WAL 已在启动时持久化，不能每请求重设 journal_mode（需独占写锁，
+        # 16 线程并发时会互相等待并报 database is locked）。
+        g.db.execute('PRAGMA busy_timeout = 30000')
     return g.db
 
 def _db_for_plugin_id(plugin_id):
@@ -181,11 +182,11 @@ def _db_for_plugin_id(plugin_id):
     key = 'pdb_' + plugin_id
     conn = getattr(g, key, None)
     if conn is None:
-        conn = sqlite3.connect(pdb, timeout=5.0)
+        conn = sqlite3.connect(pdb, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
         # WAL 模式已持久化在库文件头，不要每请求重设 journal_mode（需独占写锁，恢复/备份时易触发 I/O 冲突）
-        conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA busy_timeout = 30000')
         conn.execute('PRAGMA synchronous = NORMAL')
         setattr(g, key, conn)
     return conn
@@ -210,16 +211,16 @@ def get_plugin_db(plugin_id):
             db_path = _runtime_main_db
         if not db_path:
             raise RuntimeError('无法确定平台主库路径（缺少应用上下文）')
-        conn = sqlite3.connect(db_path, timeout=5.0)
+        conn = sqlite3.connect(db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
-        conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA busy_timeout = 30000')
         return conn
     os.makedirs(os.path.dirname(pdb), exist_ok=True)
-    conn = sqlite3.connect(pdb, timeout=5.0)
+    conn = sqlite3.connect(pdb, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
-    conn.execute('PRAGMA busy_timeout = 5000')
+    conn.execute('PRAGMA busy_timeout = 30000')
     conn.execute('PRAGMA synchronous = NORMAL')
     return conn
 
@@ -1047,7 +1048,7 @@ def create_plugin_table(plugin_id, desired_name, ddl, register_only=False):
             actual = _allocate_table_name(main, desired_name)   # 被其他插件占用 → 自动分配
         else:
             actual = desired_name                              # 空闲或存量裸表 → 沿用并补登记
-        main.execute('INSERT INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
+        main.execute('INSERT OR IGNORE INTO plugin_tables (plugin_id, logical_name, actual_name) VALUES (?,?,?)',
                      (plugin_id, desired_name, actual))
         main.commit()
     # 执行 DDL（表名替换为实际名；IF NOT EXISTS 幂等；register_only 只登记不建表）
