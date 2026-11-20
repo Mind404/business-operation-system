@@ -62,6 +62,9 @@ def _app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 _upload_ids_cache = None
+_upload_ids_db = None
+_runtime_main_db = None
+_runtime_plugin_dir = None
 
 # v12.7.10.15：平台自带的目录型插件（随安装包发布，不是外部插件）。
 # 目录发现的插件默认按外部插件(dir)登记，命中这里的仍记为 builtin。
@@ -88,15 +91,21 @@ def _upload_plugin_ids():
     data/<id>.db 里，不能落主库。是否套"返回平台"外壳页由 _shell_plugin_ids() 决定，
     两者不能混用：目录型插件（如 version_plan）同样需要独立库，但它自带平台导航，
     不需要外壳页。"""
-    global _upload_ids_cache
-    if _upload_ids_cache is None:
+    global _upload_ids_cache, _upload_ids_db
+    try:
+        db_key = current_app.config['DATABASE']
+    except Exception:
+        # 无应用上下文时用上次缓存（动作/后台线程里也需要知道哪些插件是独立库）
+        return _upload_ids_cache or set()
+    if _upload_ids_cache is None or _upload_ids_db != db_key:
         try:
-            con = sqlite3.connect(current_app.config['DATABASE'], timeout=3.0)
+            con = sqlite3.connect(db_key, timeout=3.0)
             _upload_ids_cache = {r[0] for r in con.execute(
                 "SELECT id FROM plugin_registry WHERE install_type IN ('upload','dir')").fetchall()}
             con.close()
+            _upload_ids_db = db_key
         except Exception:
-            _upload_ids_cache = set()
+            return set()
     return _upload_ids_cache
 
 
@@ -120,15 +129,25 @@ def _shell_plugin_ids():
     return _shell_ids_cache
 
 def _invalidate_upload_cache():
-    global _upload_ids_cache, _shell_ids_cache
+    global _upload_ids_cache, _upload_ids_db, _shell_ids_cache
     _upload_ids_cache = None
+    _upload_ids_db = None
     _shell_ids_cache = None
 
 def _plugin_db_path(plugin_id):
-    """upload 插件 → app/data/<id>.db；内置/核心/未登记 → None（主库）"""
+    """upload 插件 → app/data/<id>.db；内置/核心/未登记 → None（主库）
+
+    测试/备份场景可用 app.config['PLUGIN_DB_DIR'] 把插件库目录指到临时目录，
+    避免回归脚本直接写生产插件库。
+    """
     if not plugin_id or plugin_id not in _upload_plugin_ids():
         return None
-    return os.path.join(_app_dir(), 'data', plugin_id + '.db')
+    base = None
+    try:
+        base = current_app.config.get('PLUGIN_DB_DIR')
+    except Exception:
+        base = _runtime_plugin_dir
+    return os.path.join(base or os.path.join(_app_dir(), 'data'), plugin_id + '.db')
 
 def _endpoint_plugin_id():
     """当前请求所属插件 id（endpoint 前缀 = blueprint 名 = 插件 id）；非请求上下文返回 None"""
@@ -139,6 +158,12 @@ def _endpoint_plugin_id():
 
 def _main_db():
     """平台主库连接（系统表 / 登记表 plugin_tables / 内置插件数据）"""
+    global _runtime_main_db, _runtime_plugin_dir
+    try:
+        _runtime_main_db = current_app.config['DATABASE']
+        _runtime_plugin_dir = current_app.config.get('PLUGIN_DB_DIR')
+    except Exception:
+        pass
     if 'db' not in g:
         g.db = sqlite3.connect(current_app.config['DATABASE'], timeout=5.0)
         g.db.row_factory = sqlite3.Row
@@ -169,6 +194,40 @@ def _db_for_plugin_id(plugin_id):
 def get_db():
     """当前请求的数据库连接：上传插件的请求自动路由到其独立库，其余走主库"""
     return _db_for_plugin_id(_endpoint_plugin_id())
+
+
+def get_plugin_db(plugin_id):
+    """按插件 id 打开它自己的业务库（与请求无关，供流程动作写回使用）。
+
+    外部接入插件（install_type in upload/dir）返回 data/<id>.db；
+    内置插件返回平台主库。调用方负责 close()。
+    """
+    pdb = _plugin_db_path(plugin_id)
+    if pdb is None:
+        db_path = None
+        try:
+            db_path = current_app.config['DATABASE']
+        except Exception:
+            db_path = _runtime_main_db
+        if not db_path:
+            raise RuntimeError('无法确定平台主库路径（缺少应用上下文）')
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA busy_timeout = 5000')
+        return conn
+    os.makedirs(os.path.dirname(pdb), exist_ok=True)
+    conn = sqlite3.connect(pdb, timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    conn.execute('PRAGMA busy_timeout = 5000')
+    conn.execute('PRAGMA synchronous = NORMAL')
+    return conn
+
+
+def get_main_db():
+    """平台主库连接（不受当前请求所属插件影响，供外部插件写流程事件/查询绑定）。"""
+    return _main_db()
 
 
 def init_plugin_tables():

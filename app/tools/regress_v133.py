@@ -56,7 +56,9 @@ def main():
                      'wbs.task.progress', 'wbs.task.completed'}
     check('WBS 已注册 5 个状态变更节点', expect_events <= set(events), str(sorted(events)))
     catalog = wf.event_catalog(conn)
-    check('目录按插件分组且带插件名', catalog and catalog[0]['plugin_name'] == '计划管理', str(catalog[:1]))
+    wbs_group = next((g for g in catalog if g['plugin_id'] == 'wbs'), None)
+    check('目录按插件分组且带插件名', bool(wbs_group) and wbs_group['plugin_name'] == '计划管理',
+          str([(g['plugin_id'], g['plugin_name']) for g in catalog]))
     check('节点含默认审批步骤', bool(events['wbs.project.created']['default_steps']))
     check('未绑定时节点 trigger 为空', events['wbs.task.created'].get('trigger') is None)
 
@@ -99,7 +101,7 @@ def main():
     r1 = wf.emit_state_change(conn, 'wbs', 'wbs.project.created', business_key='REG-P-001',
                               title='项目「回归项目」创建', context={'name': '回归项目'},
                               record_type='project', record_id=9, initiator_id=1, initiator_name='admin')
-    check('自动模式直接创建实例', r1['matched'] and r1['instance_id'] and r1['mode'] == 'auto', str(r1))
+    check('自动模式直接创建实例', r1['matched'] and r1['instance_id'] and r1['mode'] in ('auto', 'started'), str(r1))
     r2 = wf.emit_state_change(conn, 'wbs', 'wbs.project.created', business_key='REG-P-001',
                               title='项目「回归项目」重复变更', context={},
                               record_type='project', record_id=9, initiator_id=1, initiator_name='admin')
@@ -164,12 +166,10 @@ def main():
         'status': '进行中', 'approver': ''
     }, follow_redirects=False)
     check('WBS 新建项目 302', r.status_code == 302, str(r.status_code))
-    # 当前 wbs.project.created 绑定的是自动模式（第 3 步），应直接产生实例
-    qrows = conn.execute("SELECT * FROM wf_trigger_queue WHERE event_key='wbs.project.created' "
-                         "ORDER BY id DESC LIMIT 1").fetchone()
+    # v13.5 语义：管理员建项目直接「已通过」，不触发审批流程
     insts = conn.execute("SELECT * FROM wf_instances WHERE plugin_id='wbs' AND record_type='project' "
                          "AND title LIKE '%v13.3%' AND def_key='regress_trigger_auto' LIMIT 1").fetchone()
-    check('WBS 项目创建已触发流程（自动）', bool(insts), str(insts and dict(insts)))
+    check('WBS 管理员建项目免流程（v13.5 语义）', not insts, str(insts and dict(insts)))
 
     # 新增任务 → 触发 wbs.task.created（当前该节点已解绑，不应入队）
     n_queue_before = conn.execute("SELECT COUNT(*) c FROM wf_trigger_queue").fetchone()['c']
@@ -207,7 +207,7 @@ def main():
         check(f'页面 {path} 状态 {expected}', rr.status_code == expected, f'实际 {rr.status_code}')
 
     st = wf.stats(conn)
-    check('统计含待发起与节点数', st['pending_starts'] >= 1 and st['events'] == 5, str(st))
+    check('统计含待发起与节点数', st['pending_starts'] >= 1 and st['events'] >= 10, str(st))
     trs = wf.list_triggers(conn)
     check('绑定列表可查询且带流程名', all(r['def_name'] for r in trs) and len(trs) >= 2,
           str([dict(x) for x in trs]))

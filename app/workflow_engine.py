@@ -198,6 +198,20 @@ CREATE TABLE IF NOT EXISTS wf_trigger_queue (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_wf_queue_status ON wf_trigger_queue(status, created_at);
+CREATE TABLE IF NOT EXISTS wf_event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    business_key TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    context_json TEXT DEFAULT '{}',
+    matched INTEGER DEFAULT 0,
+    mode TEXT DEFAULT 'unmatched',
+    instance_id TEXT DEFAULT '',
+    queue_id INTEGER,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_wf_event_log_key ON wf_event_log(plugin_id, event_key, created_at);
 """
 
 
@@ -205,6 +219,17 @@ def init_tables(db=None):
     con = _connect(db)
     con.executescript(WORKFLOW_SCHEMA)
     con.commit()
+    # v13.5：同一流程模板 + 同一业务单号只允许一个未结束实例。
+    # 用部分唯一索引兜住并发上报的 check-then-insert 竞态；老库若已有重复数据，
+    # 建索引会失败，此时降级为无索引并打印告警，不阻断系统启动。
+    try:
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_open_business "
+                    "ON wf_instances(def_key, business_key) "
+                    "WHERE business_key<>'' AND status IN ('running','waiting','error')")
+        con.commit()
+    except sqlite3.IntegrityError as e:
+        print('[workflow] 未创建业务单号唯一索引（存在历史重复实例）：%s' % e)
+        con.rollback()
     return con
 
 
@@ -420,7 +445,8 @@ EVENT_MODES = {
 
 
 def register_event(plugin_id, key, label, description='', icon='', record_type='',
-                   context_fields=None, default_steps=None, plugin_name=''):
+                   context_fields=None, default_steps=None, plugin_name='',
+                   write_back=None, on_reject=None):
     """插件注册一个状态变更节点。
 
     plugin_id: 插件 ID，如 wbs
@@ -430,6 +456,11 @@ def register_event(plugin_id, key, label, description='', icon='', record_type='
     record_type/record_id: 触发时对应插件内的业务记录类型，便于回跳
     context_fields: 会带进流程上下文的字段说明，如 [{'key':'owner','label':'项目负责人'}]
     default_steps: 一键生成默认审批流程时使用的步骤
+    write_back: v13.5 审批写回动作 {'key':..., 'label':..., 'plugin':...}；
+                一键生成的默认流程会自动在「通过」分支挂上该动作。
+                只有注册了写回动作的节点，才会被视为「可托管审批」的节点。
+    on_reject: v13.5 审批驳回时的写回动作 {'key':..., 'label':..., 'plugin':...}；
+               流程末端为「驳回」时由引擎调用，避免业务单据永远停在待审批。
     """
     plugin_id = str(plugin_id or '').strip()
     key = str(key or '').strip()
@@ -445,6 +476,8 @@ def register_event(plugin_id, key, label, description='', icon='', record_type='
         'context_fields': list(context_fields or []),
         'default_steps': list(default_steps or []),
         'plugin_name': plugin_name or plugin_id,
+        'write_back': dict(write_back) if isinstance(write_back, dict) else None,
+        'on_reject': dict(on_reject) if isinstance(on_reject, dict) else None,
     }
 
 
@@ -475,7 +508,8 @@ def event_catalog(db=None):
     if db is not None:
         try:
             for row in db.execute(
-                    'SELECT t.*, d.name AS def_name, d.current_version AS def_version '
+                    'SELECT t.*, d.name AS def_name, d.current_version AS def_version, '
+                    'd.enabled AS def_enabled '
                     'FROM wf_triggers t LEFT JOIN wf_definitions d ON d.def_key=t.def_key').fetchall():
                 triggers[(row['plugin_id'], row['event_key'])] = dict(row)
         except Exception:
@@ -490,13 +524,53 @@ def event_catalog(db=None):
             'events': [],
         })
         ev = dict(meta)
-        ev['trigger'] = triggers.get((pid, key))
+        trg = triggers.get((pid, key))
+        ev['trigger'] = trg
+        ev['managed'] = bool(trg and int(trg.get('enabled') or 0) and int(trg.get('def_enabled') or 0))
+        wb = (meta.get('write_back') or {}).get('key') or ''
+        ev['managed_ready'] = bool(ev['managed'] and wb and
+                                   wb in definition_action_keys(db, trg.get('def_key')))
         g['events'].append(ev)
     return sorted(groups.values(), key=lambda x: x['plugin_id'])
 
 
 def get_event(event_key):
     return dict(_EVENT_META.get(str(event_key or '').strip()) or {})
+
+
+def event_managed(db, plugin_id, event_key):
+    """该业务节点的审批是否已由流程引擎托管（绑定存在且流程启用）。
+
+    返回 None 或 {'trigger':..., 'definition':..., 'event':...}。
+    插件用它决定：本地审批按钮是否停用、业务动作是立即执行还是发起流程等审批。
+    """
+    plugin_id = str(plugin_id or '').strip()
+    event_key = str(event_key or '').strip()
+    if not plugin_id or not event_key or not get_event(event_key):
+        return None
+    try:
+        row = db.execute(
+            "SELECT t.*, d.name AS def_name, d.enabled AS def_enabled "
+            "FROM wf_triggers t JOIN wf_definitions d ON d.def_key=t.def_key "
+            "WHERE t.plugin_id=? AND t.event_key=? AND t.enabled=1 AND d.enabled=1",
+            (plugin_id, event_key)).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    event = get_event(event_key)
+    write_back = (event.get('write_back') or {}).get('key') or ''
+    has_write_back = bool(write_back) and write_back in definition_action_keys(db, row['def_key'])
+    return {'trigger': dict(row), 'definition': {'def_key': row['def_key'],
+                                                 'name': row['def_name'],
+                                                 'enabled': row['def_enabled'],
+                                                 'has_write_back': has_write_back,
+                                                 'write_back': write_back},
+            'event': event}
+
+
+def is_event_managed(db, plugin_id, event_key):
+    return bool(event_managed(db, plugin_id, event_key))
 
 
 # ---------- 节点 ↔ 流程绑定 ----------
@@ -573,11 +647,14 @@ def _current_actor():
 
 
 def emit_state_change(db, plugin_id, event_key, business_key='', title='', context=None,
-                      record_type='', record_id='', initiator_id=None, initiator_name=''):
+                      record_type='', record_id='', initiator_id=None, initiator_name='',
+                      start_now=False):
     """插件在业务状态变更后调用。
 
     - 绑定方式为 confirm：只生成一条「待发起」，由业务人员在工作台一键发起；
     - 绑定方式为 auto：直接创建流程实例；
+    - start_now=True：无论绑定模式，立即创建实例（供「必须先审批才能落地」的门禁动作，
+      例如版本发布、项目立项审批）；
     - 同一业务单号已有运行中实例时跳过，避免重复发起。
     返回 {'matched': bool, 'mode': str, 'instance_id': str, 'queue_id': int}
     """
@@ -587,6 +664,13 @@ def emit_state_change(db, plugin_id, event_key, business_key='', title='', conte
     result = {'matched': False, 'mode': '', 'instance_id': '', 'queue_id': None}
     if not plugin_id or not event or event['plugin'] != plugin_id:
         return result
+    # 先落事件流水：无论是否绑定流程，插件上报过的状态变化都可追溯
+    log_id = db.execute(
+        'INSERT INTO wf_event_log (plugin_id, event_key, business_key, title, context_json, matched, mode) '
+        "VALUES (?,?,?,?,?,0,'unmatched')",
+        (plugin_id, event_key, business_key, title or event['label'],
+         json.dumps(dict(context or {}), ensure_ascii=False))).lastrowid
+    db.commit()
     trigger = db.execute(
         'SELECT * FROM wf_triggers WHERE plugin_id=? AND event_key=? AND enabled=1',
         (plugin_id, event_key)).fetchone()
@@ -604,6 +688,8 @@ def emit_state_change(db, plugin_id, event_key, business_key='', title='', conte
     definition = db.execute('SELECT * FROM wf_definitions WHERE def_key=?', (trigger['def_key'],)).fetchone()
     if not definition or not int(definition['enabled'] or 0):
         result['mode'] = 'skipped'
+        db.execute("UPDATE wf_event_log SET matched=1, mode='skipped' WHERE id=?", (log_id,))
+        db.commit()
         return result
     # 幂等：同一模板 + 业务单号已有运行中/异常实例，不再重复发起
     if business_key:
@@ -614,13 +700,35 @@ def emit_state_change(db, plugin_id, event_key, business_key='', title='', conte
         if open_inst:
             result['instance_id'] = open_inst['id']
             result['mode'] = 'duplicate'
+            db.execute("UPDATE wf_event_log SET matched=1, mode='duplicate', instance_id=? WHERE id=?",
+                       (open_inst['id'], log_id))
+            db.commit()
             return result
-    if trigger['mode'] == 'auto':
-        inst = start_instance(
-            db, trigger['def_key'], plugin_id=plugin_id, record_type=record_type or event['record_type'],
-            record_id=str(record_id or ''), business_key=business_key, title=title or event['label'],
-            context=ctx, initiator_id=initiator_id, initiator_name=initiator_name)
+    if trigger['mode'] == 'auto' or start_now:
+        try:
+            inst = start_instance(
+                db, trigger['def_key'], plugin_id=plugin_id, record_type=record_type or event['record_type'],
+                record_id=str(record_id or ''), business_key=business_key, title=title or event['label'],
+                context=ctx, initiator_id=initiator_id, initiator_name=initiator_name)
+        except sqlite3.IntegrityError:
+            # 并发窗口内另一请求已创建实例：按 duplicate 处理，不把业务报成失败
+            open_inst = db.execute(
+                "SELECT id FROM wf_instances WHERE def_key=? AND business_key=? "
+                "AND status IN ('running','waiting','error') ORDER BY created_at DESC LIMIT 1",
+                (trigger['def_key'], business_key)).fetchone()
+            if not open_inst:
+                raise
+            result['instance_id'] = open_inst['id']
+            result['mode'] = 'duplicate'
+            db.execute("UPDATE wf_event_log SET matched=1, mode='duplicate', instance_id=? WHERE id=?",
+                       (open_inst['id'], log_id))
+            db.commit()
+            return result
         result['instance_id'] = inst['id']
+        result['mode'] = 'started'
+        db.execute("UPDATE wf_event_log SET matched=1, mode='started', instance_id=? WHERE id=?",
+                   (inst['id'], log_id))
+        db.commit()
         return result
     cur = db.execute(
         "INSERT INTO wf_trigger_queue (trigger_id, def_key, plugin_id, event_key, record_type, record_id, "
@@ -631,6 +739,9 @@ def emit_state_change(db, plugin_id, event_key, business_key='', title='', conte
          json.dumps(ctx, ensure_ascii=False), initiator_id, initiator_name))
     db.commit()
     result['queue_id'] = cur.lastrowid
+    db.execute("UPDATE wf_event_log SET matched=1, mode='queue', queue_id=? WHERE id=?",
+               (cur.lastrowid, log_id))
+    db.commit()
     return result
 
 
@@ -800,7 +911,7 @@ def build_default_definition_for_event(plugin_id, event_key, def_key=None, name=
     steps = event.get('default_steps') or [
         {'name': '负责人审批', 'assignee_type': 'initiator', 'assignee_value': '', 'mode': 'any'},
     ]
-    return build_simple_definition(def_key, name, steps, None, category='业务流程',
+    return build_simple_definition(def_key, name, steps, event.get('write_back'), category='业务流程',
                                    description='由状态变更节点「%s」自动生成' % event['label'])
 
 
@@ -938,6 +1049,17 @@ def _wbs_project_apply(ctx):
     db.execute("UPDATE wbs_projects SET approval_status=?, approver=?, updated_at=datetime('now','localtime') WHERE id=?",
                (status, ctx.get('actor_name') or '平台流程', pid))
     db.commit()
+    try:
+        emit_state_change(db, 'wbs', 'wbs.project.approval', business_key='WBS-P%d' % pid,
+                          title='项目「%s」审批%s' % (ctx['context'].get('name') or pid, status),
+                          context={'name': ctx['context'].get('name') or '',
+                                   'owner': ctx['context'].get('owner') or '',
+                                   'approval_status': status, 'project_id': pid},
+                          record_type='project', record_id=pid,
+                          initiator_id=ctx['instance'].get('initiator_id'),
+                          initiator_name=ctx.get('actor_name') or '')
+    except Exception as e:
+        print('[WBS] 项目审批结果上报失败：', e)
     return {'ok': True, 'status': status}
 
 
@@ -950,6 +1072,19 @@ def _wbs_task_apply(ctx):
         raise RuntimeError('WBS 任务不存在：%s' % tid)
     db.execute("UPDATE wbs_tasks SET approval_status=? WHERE id=?", (status, tid))
     db.commit()
+    try:
+        emit_state_change(db, 'wbs', 'wbs.task.approval', business_key='WBS-T%d' % tid,
+                          title='任务「%s」审批%s' % (ctx['context'].get('task_name') or tid, status),
+                          context={'task_name': ctx['context'].get('task_name') or '',
+                                   'owner': ctx['context'].get('owner') or '',
+                                   'project_name': ctx['context'].get('project_name') or '',
+                                   'project_id': ctx['context'].get('project_id') or 0,
+                                   'status': status},
+                          record_type='task', record_id=tid,
+                          initiator_id=ctx['instance'].get('initiator_id'),
+                          initiator_name=ctx.get('actor_name') or '')
+    except Exception as e:
+        print('[WBS] 任务审批结果上报失败：', e)
     return {'ok': True, 'status': status}
 
 
@@ -975,6 +1110,20 @@ def get_current_version(db, def_key):
         'SELECT * FROM wf_definition_versions WHERE def_key=? AND version=?',
         (def_key, row['current_version'])).fetchone()
     return row, ver
+
+
+def definition_action_keys(db, def_key):
+    """当前版本流程里配置的动作节点 key 集合（用于校验「审批通过后会写回业务」）。"""
+    try:
+        pair = get_current_version(db, def_key)
+        if not pair:
+            return set()
+        ver = pair[1]
+        definition = json.loads(ver['graph_json'] or '{}')
+        return {str(n.get('action') or '') for n in definition.get('nodes', [])
+                if n.get('type') == 'action'}
+    except Exception:
+        return set()
 
 
 def save_definition(db, def_key, name, definition, actor='系统', category='通用', description=''):
@@ -1066,6 +1215,39 @@ def seed_defaults(db):
             save_definition(db, key, name, definition, actor='系统', category=category, description=desc)
         except Exception as e:
             print('[流程初始化] %s 失败：%s' % (key, e))
+    _seed_gate_bindings(db)
+
+
+def _auto_gate_def_key(event_key):
+    s = re.sub(r'[^a-z0-9_\-]', '_', str(event_key or '').lower())
+    return ('auto_' + s)[:61]
+
+
+def _seed_gate_bindings(db):
+    """v13.5：凡是注册了写回动作（= 必须先审批再落地）的节点，若从未绑定过流程，
+    自动生成默认审批流程并绑定，保证升级后「冻结/解冻/发布」不会因为漏配而绕过审批。
+    已被管理员绑定过（含停用）的节点一律尊重现状，不覆盖、不重新启用。"""
+    for event_key, meta in list(_EVENT_META.items()):
+        if not (meta.get('write_back') or {}).get('key'):
+            continue
+        pid = meta['plugin']
+        try:
+            if db.execute('SELECT 1 FROM wf_triggers WHERE plugin_id=? AND event_key=?',
+                          (pid, event_key)).fetchone():
+                continue
+            def_key = _auto_gate_def_key(event_key)
+            row = db.execute('SELECT * FROM wf_definitions WHERE def_key=?', (def_key,)).fetchone()
+            need_build = True
+            if row:
+                wb = (meta.get('write_back') or {}).get('key') or ''
+                need_build = wb not in definition_action_keys(db, def_key)
+            if need_build:
+                d = build_default_definition_for_event(pid, event_key, def_key=def_key, db=db)
+                save_definition(db, def_key, d['name'], d, actor='系统', category='业务流程',
+                                description='升级自动生成：%s' % meta.get('label', event_key))
+            bind_trigger(db, def_key, pid, event_key, mode='confirm', actor='系统')
+        except Exception as e:
+            print('[流程初始化] 自动绑定 %s 失败：%s' % (event_key, e))
 
 
 # ============================================================
@@ -1395,9 +1577,14 @@ def approve_task(db, task_id, user_id, user_name, role, decision, comment=''):
     node = _definition_node(definition, task['node_id'])
     wf = _load_workflow(inst)
 
-    db.execute('UPDATE wf_tasks SET status=?, decision=?, comment=?, completed_at=? WHERE id=?',
-               ({'approve': 'approved', 'reject': 'rejected', 'return': 'returned'}[decision], decision,
-                comment or '', _now(), task_id))
+    # v13.5：原子抢占任务，防止两人并发审批同一节点导致动作重复执行。
+    # 依赖 wf_tasks.status='pending' 条件更新；后到者 rowcount=0 直接失败。
+    cur = db.execute('UPDATE wf_tasks SET status=?, decision=?, comment=?, completed_at=? '
+                     "WHERE id=? AND status='pending'",
+                     ({'approve': 'approved', 'reject': 'rejected', 'return': 'returned'}[decision], decision,
+                      comment or '', _now(), task_id))
+    if cur.rowcount != 1:
+        raise RuntimeError('该任务已被其他人处理，请刷新后查看')
     _event(db, inst['id'], 'task_decided', user_id, user_name, {
         'task_id': task_id, 'node': task['node_id'], 'decision': decision, 'comment': comment or ''
     })
@@ -1432,6 +1619,7 @@ def approve_task(db, task_id, user_id, user_name, role, decision, comment=''):
             wf.do_engine_steps()
             _save_workflow(db, inst['id'], wf)
             sync_runtime(db, inst, wf, definition)
+            _run_reject_writeback(db, inst, task, definition, user_name)
         except Exception as e:
             db.execute("UPDATE wf_instances SET status='error', last_error=?, updated_at=? WHERE id=?",
                        (str(e)[:2000], _now(), inst['id']))
@@ -1441,6 +1629,40 @@ def approve_task(db, task_id, user_id, user_name, role, decision, comment=''):
     _save_workflow(db, inst['id'], wf)
     db.commit()
     return db.execute('SELECT * FROM wf_instances WHERE id=?', (inst['id'],)).fetchone()
+
+
+def _run_reject_writeback(db, inst, wf_task, definition, actor_name=''):
+    """流程以「驳回」结束时，调用插件注册的驳回写回动作（只执行一次）。"""
+    cur = db.execute('SELECT status FROM wf_instances WHERE id=?', (inst['id'],)).fetchone()
+    if not cur or cur['status'] != 'rejected':
+        return
+    trg = get_trigger_for_def(db, inst['def_key'])
+    event = get_event(trg['event_key']) if trg else None
+    hook = (event or {}).get('on_reject') or {}
+    if not hook.get('key'):
+        return
+    done = db.execute("SELECT 1 FROM wf_events WHERE instance_id=? AND event_type='reject_writeback'",
+                      (inst['id'],)).fetchone()
+    if done:
+        return
+    handler = _resolve_action_handler(hook['key'], hook.get('plugin') or (event or {}).get('plugin') or '')
+    if not handler:
+        raise RuntimeError('驳回写回动作未注册：%s' % hook['key'])
+    ctx = {
+        'db': db,
+        'instance': dict(inst),
+        'node': {'id': 'reject_writeback', 'type': 'action', 'action': hook['key'],
+                 'plugin': hook.get('plugin') or ''},
+        'task': wf_task,
+        'decision': 'reject',
+        'context': json.loads(inst['context_json'] or '{}'),
+        'actor_name': actor_name,
+        'payload': {},
+    }
+    result = handler(ctx)
+    _event(db, inst['id'], 'reject_writeback', inst['initiator_id'], actor_name,
+           {'action': hook['key'], 'result': result or {}})
+    db.commit()
 
 
 def cancel_instance(db, instance_id, actor_id, actor_name, reason=''):

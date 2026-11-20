@@ -47,13 +47,14 @@
     <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="to" value="{{ nxt }}">
       <button class="vp-btn {{ 'vp-btn-green' if nxt in ('已发布','开发中') else 'vp-btn-primary' }}" type="submit"
-        onclick="return confirm('把 {{ v['version_no'] }} 推进到「{{ nxt }}」？')">
+        {% if wf_release_inst and nxt in ('已发布','已冻结') %}disabled title="审批流程进行中，请等待处理结果"{% endif %}
+        onclick="return confirm('把 {{ v['version_no'] }} 推进到「{{ nxt }}」？{% if wf_release_managed and nxt == '已发布' %} 发布审批将在流程引擎发起，通过后才真正发布。{% elif wf_freeze_managed and nxt == '已冻结' %} 冻结审批将在流程引擎发起，通过后才锁定需求。{% endif %}')">
         {% if nxt == '已冻结' %}🔒 冻结版本{% elif nxt == '开发中' %}▶ 开始开发{% elif nxt == '测试中' %}🧪 转测试{% elif nxt == '已发布' %}🚀 发布{% elif nxt == '已归档' %}📦 归档{% endif %}
       </button>
     </form>
     {% endfor %}
-    {% if v['status'] == '已冻结' and is_platform %}
-    <form method="post" action="{{ url_for('version_plan.version_status', no=v['version_no']) }}" class="vp-inline" style="margin:0" onsubmit="return confirm('强制解冻会打开需求增删闸门，确定？')">
+    {% if v['status'] == '已冻结' and (is_platform or wf_unfreeze_managed) %}
+    <form method="post" action="{{ url_for('version_plan.version_status', no=v['version_no']) }}" class="vp-inline" style="margin:0" onsubmit="return confirm('{% if is_platform %}强制解冻会立即打开需求增删闸门，确定？{% else %}解冻需要管理员审批，提交后等待审批结果，确定？{% endif %}')">
     <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
       <input type="hidden" name="to" value="规划中">
       <input class="vp-input" name="reason" required placeholder="解冻原因（必填，会留痕）" style="max-width:220px">
@@ -63,8 +64,19 @@
   {% endif %}
 </div>
 
+{% if wf_release_inst %}
+<div class="vp-warnbox" style="border-color:#91caff;background:#eaf4ff;color:#0958d9">
+  🔄 该版本已有流程在审批中（{{ wf_release_inst['title'] }}，{{ wf_release_inst['created_at'] }}）。审批通过后业务状态会自动写回，请勿在业务页重复操作。
+</div>
+{% endif %}
+{% if wf_release_managed or wf_freeze_managed or wf_unfreeze_managed %}
+<div class="vp-warnbox" style="border-color:#d6e4ff;background:#f5f9ff;color:#1d4ed8">
+  🛡️ 审批由流程引擎统一管理：{% if wf_freeze_managed %}冻结{% endif %}{% if wf_release_managed %} 发布{% endif %}{% if wf_unfreeze_managed %} 解冻{% endif %} 将发起流程审批，通过后自动写回业务状态；业务页不再单独签核。
+</div>
+{% endif %}
+
 {% if v['status'] == '已冻结' %}
-<div class="vp-warnbox">🔒 已冻结：需求构成锁定，不能再增删（R1）。{% if is_platform %}管理员或平台管理员可强制解冻并留痕。{% else %}需要调整请找管理员强制解冻。{% endif %}</div>
+<div class="vp-warnbox">🔒 已冻结：需求构成锁定，不能再增删（R1）。{% if is_platform %}管理员或平台管理员可强制解冻并留痕（免审批）。{% elif wf_unfreeze_managed %}可提交解冻申请，由管理员在流程中心审批；通过后自动解冻并留痕。{% else %}需要调整请联系管理员强制解冻。{% endif %}</div>
 {% endif %}
 {% if v['vtype'] == '客户定制' %}
 <div class="vp-card"><h3>🧩 定制分支合回计划（R2）</h3>
@@ -178,7 +190,7 @@
     {% if gate['ok'] %}<span class="vp-tag t-done">可发布</span>
     {% else %}<span class="vp-tag t-red">不可发布</span>{% endif %}
   </h3>
-  <p class="vp-muted" style="margin-bottom:8px">7 项确认清单全部「通过」+ 应签角色全部「同意」才可发布；定制版客户代表必签。清单与签核均按「产品 + 版本号」双键隔离，不会与同号的其它产品串号。</p>
+  <p class="vp-muted" style="margin-bottom:8px">{% if wf_release_managed %}业务硬门禁：7 项确认清单全部「通过」即可发起发布审批；发布审批由流程引擎完成，通过后自动发布。{% else %}7 项确认清单全部「通过」+ 应签角色全部「同意」才可发布；定制版客户代表必签。{% endif %}清单与签核均按「产品 + 版本号」双键隔离，不会与同号的其它产品串号。</p>
   {% if not gate['ok'] %}
   <div class="vp-warnbox">{% for r in gate['reasons'] %}<div>· {{ r }}</div>{% endfor %}</div>
   {% endif %}
@@ -226,10 +238,15 @@
 
 <div class="vp-card">
   <h3>🖋️ 发布签核（{{ sign_roles | length }} 方）
+    {% if not wf_release_managed %}
     <span class="vp-tag {{ 't-done' if signs.values() | selectattr('verdict','equalto','同意') | list | length == sign_roles | length else 't-wait' }}">
       {{ signs.values() | selectattr('verdict','equalto','同意') | list | length }}/{{ sign_roles | length }}
     </span>
+    {% endif %}
   </h3>
+  {% if wf_release_managed %}
+  <p class="vp-muted" style="margin:0">发布签核已由流程引擎的审批节点承接，不再在业务页重复签核。请在「流程中心」完成发布审批；通过后系统自动把版本置为「已发布」并生成 Release Note。</p>
+  {% else %}
   <p class="vp-muted" style="margin-bottom:10px">产品负责人 · 测试负责人 · 发布经理{% if v['vtype'] == '客户定制' %} · 客户代表（定制版必签）{% endif %}</p>
   <div class="vp-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
     {% for role in sign_roles %}
@@ -257,6 +274,7 @@
     </div>
     {% endfor %}
   </div>
+  {% endif %}
 </div>
 
 <div class="vp-card">

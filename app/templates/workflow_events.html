@@ -103,6 +103,8 @@
                 <div class="ev-bound">
                     <span class="ev-flow-name">{{ e.trigger.def_name or e.trigger.def_key }}</span>
                     {% if not e.trigger.enabled %}<span class="ev-badge off">已停用</span>{% endif %}
+                    {% if e.managed %}<span class="ev-badge">🔐 审批托管中</span>{% endif %}
+                    {% if e.trigger.enabled and e.managed and not e.managed_ready %}<span class="ev-badge off" title="流程里没有配置写回动作，审批通过后业务状态不会变化">⚠ 未配置写回</span>{% endif %}
                     <span class="ev-badge">流程 Key：{{ e.trigger.def_key }}</span>
                 </div>
                 <div class="ev-actions">

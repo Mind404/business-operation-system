@@ -20,19 +20,38 @@ def get_db():
     return g.db
 
 
-def _emit_wf(event_key, business_key='', title='', context=None, record_type='', record_id=''):
+def _emit_wf(event_key, business_key='', title='', context=None, record_type='', record_id='',
+             start_now=False):
     """v13.3：把业务状态变更上报流程引擎。失败只记日志，绝不影响业务提交。"""
     try:
         import workflow_engine as wf
         return wf.emit_state_change(get_db(), 'wbs', event_key, business_key=business_key,
                                     title=title, context=context or {},
-                                    record_type=record_type, record_id=str(record_id or ''))
+                                    record_type=record_type, record_id=str(record_id or ''),
+                                    start_now=start_now)
     except Exception as e:
         try:
             from flask import current_app
             current_app.logger.warning('workflow emit failed (%s): %s', event_key, e)
         except Exception:
             pass
+        return None
+
+
+def _wf_managed(event_key):
+    """v13.5：该审批节点是否已由流程引擎托管。
+
+    托管后插件内的「通过/驳回」按钮与接口一律停用，审批只在流程中心做，
+    通过后由流程动作写回业务状态，避免同一件事被审批两次。
+    """
+    try:
+        import workflow_engine as wf
+        info = wf.event_managed(get_db(), 'wbs', event_key)
+        # 只有流程里真的配了写回动作才算托管，避免审批通过后业务状态永远不变
+        if info and (info.get('definition') or {}).get('has_write_back'):
+            return info
+        return None
+    except Exception:
         return None
 
 @blueprint.teardown_request
@@ -448,7 +467,8 @@ def wbs_projects():
     overdue = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end IS NOT NULL AND plan_end!='' AND plan_end<? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today,)).fetchone()[0]
     due3 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>=? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (today, soon3)).fetchone()[0]
     due7 = db.execute("SELECT COUNT(*) FROM wbs_tasks WHERE plan_end>? AND plan_end<=? AND status NOT IN ('已完成','已取消') AND (parent_id>0 OR parent_id IS NULL) AND approval_status='已通过'", (soon3, soon7)).fetchone()[0]
-    return render_template('wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today)
+    return render_template('wbs_projects.html', rows=rows, overdue=overdue, due3=due3, due7=due7, today=today,
+                           wf_project_managed=_wf_managed('wbs.project.created'))
 
 
 @blueprint.route('/wbs/alerts')
@@ -490,9 +510,10 @@ def wbs_project_add():
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         is_admin = session.get('user_role') in ('admin', 'platform_admin')
         approval_status = '已通过' if is_admin else '待审批'
-        approver = '' if is_admin else (request.form.get('approver') or '').strip()
-        # v12.5.26 漏洞修复：普通用户提交审批必须选择审批人（后端强校验，防止绕过表单直建）
-        if not is_admin and not approver:
+        approval_managed = (not is_admin) and _wf_managed('wbs.project.created')
+        approver = '' if (is_admin or approval_managed) else (request.form.get('approver') or '').strip()
+        # v12.5.26 漏洞修复：普通用户提交审批必须选择审批人（托管给流程引擎后不再要求）
+        if not is_admin and not approval_managed and not approver:
             flash('请选择审批管理员', 'error')
             return redirect(url_for('wbs.wbs_projects'))
         # v12.5.26 漏洞修复：日期格式强校验（YYYY-MM-DD 且为真实日期）
@@ -514,19 +535,27 @@ def wbs_project_add():
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
         db.commit()
         log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
-        _emit_wf('wbs.project.created',
-                 business_key='WBS-P%d' % pid,
-                 title='项目「%s」创建' % request.form.get('name', ''),
-                 context={'name': request.form.get('name', ''), 'owner': owner,
-                          'approval_status': approval_status, 'project_id': pid},
-                 record_type='project', record_id=pid)
+        wf_res = None
+        if not is_admin:   # v13.5：管理员/平台管理员自建项目直接通过，不发起审批
+            wf_res = _emit_wf('wbs.project.created',
+                              business_key='WBS-P%d' % pid,
+                              title='项目「%s」创建' % request.form.get('name', ''),
+                              context={'name': request.form.get('name', ''), 'owner': owner,
+                                       'approval_status': approval_status, 'project_id': pid},
+                              record_type='project', record_id=pid, start_now=approval_managed)
+            if approval_managed and not wf_res:
+                flash('项目已保存，但流程发起失败；请联系管理员在流程中心补发起。', 'warning')
         if is_admin:
             return redirect(url_for('wbs.wbs_project_detail', pid=pid))
+        elif approval_managed:
+            flash('项目已提交，审批已在流程中心发起，通过后自动写回项目状态。', 'success')
+            return redirect(url_for('wbs.wbs_projects'))
         else:
             flash('项目已提交，等待管理员审批通过后才能导入任务。', 'success')
             return redirect(url_for('wbs.wbs_projects'))
     return render_template('wbs_project_form.html', p=None, admins=admins, users=users,
                            can_change_members=True,
+                           wf_project_managed=_wf_managed('wbs.project.created'),
                            owner_sel=[], part_sel=[])
 
 
@@ -586,6 +615,10 @@ def wbs_project_approve(pid):
     if session.get('user_role') not in ('admin', 'platform_admin'):
         flash('只有管理员可以审批项目。', 'error')
         return redirect(url_for('wbs.wbs_projects'))
+    # v13.5：审批已由流程引擎托管时，禁止在业务页再点一次「通过」
+    if _wf_managed('wbs.project.created'):
+        flash('该项目审批已由流程引擎接管，请在「流程中心」处理，通过后会自动写回项目状态。', 'error')
+        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
     db = get_db()
     action = request.form.get('action','')
     status = '已通过' if action == 'approve' else '已驳回'
@@ -619,6 +652,13 @@ def wbs_project_resubmit(pid):
     db.execute('''UPDATE wbs_projects SET approval_status='待审批', updated_at=datetime("now","localtime") WHERE id=?''', (pid,))
     db.commit()
     log_operation('WBS', '重新提交', f'项目#{pid} 重新提交审批', session.get('username','admin'))
+    # v13.5：托管审批时，重新提交必须重新发起一条新流程（旧流程已结束，幂等检查不会误判）
+    if _wf_managed('wbs.project.created'):
+        _emit_wf('wbs.project.created', business_key='WBS-P%d' % pid,
+                 title='项目「%s」重新提交审批' % (p['name'] or pid),
+                 context={'name': p['name'] or '', 'owner': p['owner'] or '',
+                          'approval_status': '待审批', 'project_id': pid},
+                 record_type='project', record_id=pid, start_now=True)
     return jsonify({'ok': True})
 
 
@@ -784,7 +824,9 @@ def wbs_project_detail(pid):
                            can_edit=can_edit, can_quickadd=can_quickadd,
                            can_import=can_quickadd,
                            attach_mb=attach_mb, attach_count=attach_count,
-                           pick_users=pick_users, pick_users_json=pick_users_json)
+                           pick_users=pick_users, pick_users_json=pick_users_json,
+                           wf_project_managed=_wf_managed('wbs.project.created'),
+                           wf_task_managed=_wf_managed('wbs.task.created'))
 
 
 def _natural_key(code):
@@ -870,13 +912,7 @@ def wbs_task_add(pid):
     log_operation('WBS', '新增任务', f'P{pid} {request.form.get("name","")}', session.get('username','admin'))
     _tid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
     _proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
-    _emit_wf('wbs.task.created', business_key='WBS-T%d' % _tid,
-             title='任务「%s」创建' % name,
-             context={'task_name': name, 'wbs_code': code,
-                      'owner': _to_username(request.form.get('owner', '')),
-                      'project_name': _proj['name'] if _proj else '', 'project_id': pid,
-                      'status': request.form.get('status', '未开始'), 'progress': progress},
-             record_type='task', record_id=_tid)
+    # v13.5：/task/add 仅管理员可用，管理员建任务直接「已通过」，不走审批
     return redirect(url_for('wbs.wbs_project_detail', pid=pid))
 
 
@@ -1500,6 +1536,7 @@ def wbs_task_quickadd(pid):
         if not proj or proj['approval_status'] != '已通过':
             return jsonify({'ok': False, 'msg': '项目待审批通过后才能新增任务'}), 403
         approval = '待审批'
+    task_managed = (approval == '待审批') and _wf_managed('wbs.task.created')
     db.execute('''INSERT INTO wbs_tasks
         (project_id, wbs_code, parent_id, name, work_content, owner, collaborators,
          plan_start, plan_end, deliverable, status, progress, approval_status, remark)
@@ -1516,13 +1553,14 @@ def wbs_task_quickadd(pid):
     log_operation('WBS', '快速新建', f'P{pid} 快速新建任务 WBS#{code}「{name}」(tid={new_id})',
                   session.get('username', ''))
     _proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
-    _emit_wf('wbs.task.created', business_key='WBS-T%d' % new_id,
-             title='任务「%s」创建' % name,
-             context={'task_name': name, 'wbs_code': code,
-                      'owner': _to_username(request.form.get('owner', '')),
-                      'project_name': _proj['name'] if _proj else '', 'project_id': pid,
-                      'status': '未开始', 'progress': 0},
-             record_type='task', record_id=new_id)
+    if approval == '待审批':   # v13.5：管理员建任务直接通过，不发起审批
+        _emit_wf('wbs.task.created', business_key='WBS-T%d' % new_id,
+                 title='任务「%s」创建' % name,
+                 context={'task_name': name, 'wbs_code': code,
+                          'owner': _to_username(request.form.get('owner', '')),
+                          'project_name': _proj['name'] if _proj else '', 'project_id': pid,
+                          'status': '未开始', 'progress': 0},
+                 record_type='task', record_id=new_id, start_now=task_managed)
     # v13.0.0.19：返回新任务 id，前端新建成功后直接跳转并高亮该行
     return jsonify({'ok': True, 'tid': new_id, 'pending': (approval == '待审批')})
 
@@ -1532,6 +1570,10 @@ def wbs_project_tasks_approve(pid):
     """管理员批量审批整个项目下所有待审批任务"""
     if session.get('user_role') not in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '无权限'}), 403
+    # v13.5：任务审批已托管给流程引擎时，不允许业务页批量放行
+    if _wf_managed('wbs.task.created'):
+        return jsonify({'ok': False,
+                        'msg': '任务审批已由流程引擎接管，请在流程中心逐条审批'}), 403
     db = get_db()
     action = request.form.get('action','')
     status = '已通过' if action == 'approve' else '已驳回'
@@ -1547,9 +1589,20 @@ def wbs_project_tasks_resubmit(pid):
     if session.get('user_role') in ('admin', 'platform_admin'):
         return jsonify({'ok': False, 'msg': '管理员无需重新提交'}), 400
     db = get_db()
+    rows = db.execute("SELECT id, name, owner FROM wbs_tasks WHERE project_id=? AND approval_status='已驳回'",
+                      (pid,)).fetchall()
     cur = db.execute("UPDATE wbs_tasks SET approval_status='待审批' WHERE project_id=? AND approval_status='已驳回'",
                      (pid,))
     db.commit()
+    # v13.5：托管审批时，逐条重新发起流程，否则任务会永远停在待审批
+    if rows and _wf_managed('wbs.task.created'):
+        proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+        for r in rows:
+            _emit_wf('wbs.task.created', business_key='WBS-T%d' % r['id'],
+                     title='任务「%s」重新提交审批' % (r['name'] or r['id']),
+                     context={'task_name': r['name'] or '', 'owner': r['owner'] or '',
+                              'project_name': proj['name'] if proj else '', 'project_id': pid},
+                     record_type='task', record_id=r['id'], start_now=True)
     return jsonify({'ok': True, 'count': cur.rowcount})
 
 

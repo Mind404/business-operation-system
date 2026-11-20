@@ -279,6 +279,15 @@ def train_to_version(code):
             return redirect(url_for('version_plan.train_board', code=code))
     _ulog('车次', code, '转版本', no)
     _log('车次转版本', f'{code} → {no}')
+    try:
+        from .routes import _wf_emit, _version_ctx, _vf_business_key
+        _v = _vrow(db, no, t['product_code'] or '')
+        _wf_emit('version_plan.train.converted', business_key=_vf_business_key(no, t['product_code']),
+                 title=f'车次 {code} 转版本 {no}',
+                 context=_version_ctx(_v, {'train_code': code}),
+                 record_type='version', record_id=no)
+    except Exception:
+        pass
     flash(f'{code} 已转成版本 {no}，去版本详情做冻结与签核', 'success')
     return redirect(url_for('version_plan.version_detail', no=no))
 
@@ -613,6 +622,14 @@ def version_sign(no):
     if not v:
         flash('版本不存在', 'error')
         return redirect(url_for('version_plan.versions'))
+    # v13.5：发布审批已托管时，签核只在流程引擎做，防止同一版本被签两次
+    try:
+        from .routes import _wf_managed
+        if _wf_managed('version_plan.version.release'):
+            flash('该版本的发布审批已由流程引擎接管，请在「流程中心」审批；业务页签核已停用。', 'error')
+            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+    except Exception:
+        pass
     roles = ensure_signoffs(db, no, v['product_code'], v['vtype'])
     role = (request.form.get('role') or '').strip()
     if role not in roles:

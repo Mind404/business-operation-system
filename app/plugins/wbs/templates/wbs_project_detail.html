@@ -68,7 +68,7 @@
         <span style="font-size:12px;color:#6b7280;white-space:nowrap;cursor:help;border-bottom:1px dashed #cbd5e1;"
               title="模板含状态/进度列；已存在的WBS编号会同步更新，新编号自动新增并自动排序归类。计划开始/结束支持 2026-11-05、2026/11/05、2026.11.05、2026年11月5日 等格式；格式无法识别时整表不导入并提示行号。">ⓘ</span>
         {% endif %}
-        {% if current_role in ('admin','platform_admin') and pending_count > 0 %}
+        {% if current_role in ('admin','platform_admin') and pending_count > 0 and not wf_task_managed %}
         <button type="button" onclick="batchApprove('approve')" style="height:30px;padding:0 12px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;">
             ✓ 通过
         </button>
@@ -111,6 +111,7 @@
     <span style="font-size:16px;">⚠️</span>
     <span style="font-size:13px;color:#856404;">
         本项目有 <b>{{ pending_count }}</b> 条任务正在等待审批，审批通过后才能编辑状态、进度、进展和产出物。
+        {% if wf_task_managed %}<b>审批已由流程引擎接管，请到「流程中心」处理。</b>{% endif %}
     </span>
 </div>
 {% endif %}
