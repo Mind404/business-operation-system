@@ -165,6 +165,39 @@ CREATE TABLE IF NOT EXISTS wf_outbox (
     updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_wf_outbox_status ON wf_outbox(status, next_retry_at);
+CREATE TABLE IF NOT EXISTS wf_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    def_key TEXT NOT NULL UNIQUE,
+    plugin_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    mode TEXT DEFAULT 'confirm',
+    enabled INTEGER DEFAULT 1,
+    created_by TEXT DEFAULT '系统',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(plugin_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_wf_triggers_event ON wf_triggers(plugin_id, event_key, enabled);
+CREATE TABLE IF NOT EXISTS wf_trigger_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_id INTEGER,
+    def_key TEXT NOT NULL,
+    plugin_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    record_type TEXT DEFAULT '',
+    record_id TEXT DEFAULT '',
+    business_key TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    context_json TEXT DEFAULT '{}',
+    initiator_id INTEGER,
+    initiator_name TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    instance_id TEXT DEFAULT '',
+    handled_by TEXT DEFAULT '',
+    handled_at TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_wf_queue_status ON wf_trigger_queue(status, created_at);
 """
 
 
@@ -371,6 +404,329 @@ def action_options():
          'plugin': _ACTION_META.get(key, {}).get('plugin') or 'platform'}
         for key in sorted(_ACTION_HANDLERS.keys())
     ]
+
+
+# ============================================================
+# 状态变更节点注册（v13.3）
+# 插件在启动时声明「哪些业务状态变化值得走审批」，平台据此生成节点目录，
+# 管理员在流程管理里把节点绑定到流程模板，业务人员在工作台发起或由系统自动发起。
+# ============================================================
+_EVENT_META = {}
+
+EVENT_MODES = {
+    'confirm': '人工确认后发起',
+    'auto': '状态变更时自动发起',
+}
+
+
+def register_event(plugin_id, key, label, description='', icon='', record_type='',
+                   context_fields=None, default_steps=None, plugin_name=''):
+    """插件注册一个状态变更节点。
+
+    plugin_id: 插件 ID，如 wbs
+    key: 节点键，建议 `<plugin>.<对象>.<动作>`，如 wbs.project.created
+    label: 业务人员看到的名字，如「项目创建」
+    description: 一句话说明什么时候触发
+    record_type/record_id: 触发时对应插件内的业务记录类型，便于回跳
+    context_fields: 会带进流程上下文的字段说明，如 [{'key':'owner','label':'项目负责人'}]
+    default_steps: 一键生成默认审批流程时使用的步骤
+    """
+    plugin_id = str(plugin_id or '').strip()
+    key = str(key or '').strip()
+    if not plugin_id or not key or not label:
+        raise ValueError('插件、节点键、节点名称都不能为空')
+    _EVENT_META[key] = {
+        'key': key,
+        'plugin': plugin_id,
+        'label': label,
+        'description': description or '',
+        'icon': icon or '◆',
+        'record_type': record_type or '',
+        'context_fields': list(context_fields or []),
+        'default_steps': list(default_steps or []),
+        'plugin_name': plugin_name or plugin_id,
+    }
+
+
+def registered_events():
+    return sorted(_EVENT_META.keys())
+
+
+def event_options():
+    """扁平列表，供设计器下拉使用。"""
+    return [dict(_EVENT_META[k]) for k in sorted(_EVENT_META.keys())]
+
+
+def _plugin_display_name(plugin_id, fallback=''):
+    if fallback and fallback != plugin_id:
+        return fallback
+    try:
+        import plugin_system
+        man = plugin_system.plugin_manifest(plugin_id) or {}
+        return man.get('name') or plugin_id
+    except Exception:
+        return plugin_id
+
+
+def event_catalog(db=None):
+    """按插件分组的节点目录：[{plugin_id, plugin_name, icon, events:[...]}]。"""
+    groups = {}
+    triggers = {}
+    if db is not None:
+        try:
+            for row in db.execute(
+                    'SELECT t.*, d.name AS def_name, d.current_version AS def_version '
+                    'FROM wf_triggers t LEFT JOIN wf_definitions d ON d.def_key=t.def_key').fetchall():
+                triggers[(row['plugin_id'], row['event_key'])] = dict(row)
+        except Exception:
+            triggers = {}
+    for key in sorted(_EVENT_META.keys()):
+        meta = _EVENT_META[key]
+        pid = meta['plugin']
+        g = groups.setdefault(pid, {
+            'plugin_id': pid,
+            'plugin_name': _plugin_display_name(pid, meta.get('plugin_name')),
+            'icon': meta['icon'],
+            'events': [],
+        })
+        ev = dict(meta)
+        ev['trigger'] = triggers.get((pid, key))
+        g['events'].append(ev)
+    return sorted(groups.values(), key=lambda x: x['plugin_id'])
+
+
+def get_event(event_key):
+    return dict(_EVENT_META.get(str(event_key or '').strip()) or {})
+
+
+# ---------- 节点 ↔ 流程绑定 ----------
+
+def bind_trigger(db, def_key, plugin_id, event_key, mode='confirm', actor='系统'):
+    def_key = str(def_key or '').strip()
+    plugin_id = str(plugin_id or '').strip()
+    event_key = str(event_key or '').strip()
+    if not def_key or not plugin_id or not event_key:
+        raise ValueError('流程、插件、状态变更节点都不能为空')
+    if not get_event(event_key):
+        raise ValueError('状态变更节点不存在：%s' % event_key)
+    if get_event(event_key)['plugin'] != plugin_id:
+        raise ValueError('状态变更节点与插件不匹配')
+    mode = mode if mode in EVENT_MODES else 'confirm'
+    # 一个状态变更节点只绑定一个流程，避免同一次变更重复发起
+    db.execute('DELETE FROM wf_triggers WHERE plugin_id=? AND event_key=? AND def_key<>?',
+               (plugin_id, event_key, def_key))
+    db.execute(
+        "INSERT INTO wf_triggers (def_key, plugin_id, event_key, mode, enabled, created_by, created_at, updated_at) "
+        "VALUES (?,?,?,?,1,?,datetime('now','localtime'),datetime('now','localtime')) "
+        "ON CONFLICT(def_key) DO UPDATE SET plugin_id=excluded.plugin_id, event_key=excluded.event_key, "
+        "mode=excluded.mode, enabled=1, updated_at=datetime('now','localtime')",
+        (def_key, plugin_id, event_key, mode, actor or '系统'))
+    db.commit()
+    return get_trigger_for_def(db, def_key)
+
+
+def get_trigger_for_def(db, def_key):
+    row = db.execute('SELECT * FROM wf_triggers WHERE def_key=?', (def_key,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_triggers(db):
+    return db.execute(
+        'SELECT t.*, d.name AS def_name, d.enabled AS def_enabled, d.current_version '
+        'FROM wf_triggers t LEFT JOIN wf_definitions d ON d.def_key=t.def_key ORDER BY t.id'
+    ).fetchall()
+
+
+def unbind_trigger(db, trigger_id):
+    db.execute('DELETE FROM wf_triggers WHERE id=?', (trigger_id,))
+    db.commit()
+
+
+def set_trigger_mode(db, trigger_id, mode):
+    mode = mode if mode in EVENT_MODES else 'confirm'
+    db.execute("UPDATE wf_triggers SET mode=?, updated_at=datetime('now','localtime') WHERE id=?",
+               (mode, trigger_id))
+    db.commit()
+
+
+def set_trigger_enabled(db, trigger_id, enabled):
+    db.execute("UPDATE wf_triggers SET enabled=?, updated_at=datetime('now','localtime') WHERE id=?",
+               (1 if enabled else 0, trigger_id))
+    db.commit()
+
+
+def unbind_by_def(db, def_key):
+    db.execute('DELETE FROM wf_triggers WHERE def_key=?', (def_key,))
+    db.commit()
+
+
+# ---------- 状态变更上报 ----------
+
+def _current_actor():
+    """取当前登录人；插件在请求内调用时可直接带上。"""
+    if not has_request_context():
+        return None, ''
+    try:
+        return session.get('user_id'), session.get('user_name') or session.get('username') or ''
+    except Exception:
+        return None, ''
+
+
+def emit_state_change(db, plugin_id, event_key, business_key='', title='', context=None,
+                      record_type='', record_id='', initiator_id=None, initiator_name=''):
+    """插件在业务状态变更后调用。
+
+    - 绑定方式为 confirm：只生成一条「待发起」，由业务人员在工作台一键发起；
+    - 绑定方式为 auto：直接创建流程实例；
+    - 同一业务单号已有运行中实例时跳过，避免重复发起。
+    返回 {'matched': bool, 'mode': str, 'instance_id': str, 'queue_id': int}
+    """
+    plugin_id = str(plugin_id or '').strip()
+    event_key = str(event_key or '').strip()
+    event = get_event(event_key)
+    result = {'matched': False, 'mode': '', 'instance_id': '', 'queue_id': None}
+    if not plugin_id or not event or event['plugin'] != plugin_id:
+        return result
+    trigger = db.execute(
+        'SELECT * FROM wf_triggers WHERE plugin_id=? AND event_key=? AND enabled=1',
+        (plugin_id, event_key)).fetchone()
+    if not trigger:
+        return result
+    result['matched'] = True
+    result['mode'] = trigger['mode']
+    ctx = dict(context or {})
+    actor_id, actor_name = _current_actor()
+    if initiator_id is None:
+        initiator_id = actor_id
+    if not initiator_name:
+        initiator_name = actor_name
+    # 绑定流程已停用时，不发起，避免把业务卡在半路
+    definition = db.execute('SELECT * FROM wf_definitions WHERE def_key=?', (trigger['def_key'],)).fetchone()
+    if not definition or not int(definition['enabled'] or 0):
+        result['mode'] = 'skipped'
+        return result
+    # 幂等：同一模板 + 业务单号已有运行中/异常实例，不再重复发起
+    if business_key:
+        open_inst = db.execute(
+            "SELECT id FROM wf_instances WHERE def_key=? AND business_key=? "
+            "AND status IN ('running','waiting','error') ORDER BY created_at DESC LIMIT 1",
+            (trigger['def_key'], business_key)).fetchone()
+        if open_inst:
+            result['instance_id'] = open_inst['id']
+            result['mode'] = 'duplicate'
+            return result
+    if trigger['mode'] == 'auto':
+        inst = start_instance(
+            db, trigger['def_key'], plugin_id=plugin_id, record_type=record_type or event['record_type'],
+            record_id=str(record_id or ''), business_key=business_key, title=title or event['label'],
+            context=ctx, initiator_id=initiator_id, initiator_name=initiator_name)
+        result['instance_id'] = inst['id']
+        return result
+    cur = db.execute(
+        "INSERT INTO wf_trigger_queue (trigger_id, def_key, plugin_id, event_key, record_type, record_id, "
+        "business_key, title, context_json, initiator_id, initiator_name, status, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',datetime('now','localtime'))",
+        (trigger['id'], trigger['def_key'], plugin_id, event_key, record_type or event['record_type'],
+         str(record_id or ''), business_key, title or event['label'],
+         json.dumps(ctx, ensure_ascii=False), initiator_id, initiator_name))
+    db.commit()
+    result['queue_id'] = cur.lastrowid
+    return result
+
+
+def pending_starts(db, user_id=None, role='', limit=50):
+    """待我发起：管理员看全部，其他人看自己触发的和未指定发起人的。"""
+    sql = ('SELECT q.*, d.name AS def_name FROM wf_trigger_queue q '
+           'LEFT JOIN wf_definitions d ON d.def_key=q.def_key '
+           "WHERE q.status='pending' ")
+    params = []
+    if role != 'platform_admin':
+        sql += 'AND (q.initiator_id=? OR q.initiator_id IS NULL) '
+        params.append(user_id)
+    sql += 'ORDER BY q.id DESC LIMIT ?'
+    params.append(limit)
+    return db.execute(sql, params).fetchall()
+
+
+def count_pending_starts(db, user_id=None, role=''):
+    sql = "SELECT COUNT(*) c FROM wf_trigger_queue WHERE status='pending' "
+    params = []
+    if role != 'platform_admin':
+        sql += 'AND (initiator_id=? OR initiator_id IS NULL) '
+        params.append(user_id)
+    return db.execute(sql, params).fetchone()['c']
+
+
+def get_queue_item(db, queue_id):
+    return db.execute('SELECT * FROM wf_trigger_queue WHERE id=?', (queue_id,)).fetchone()
+
+
+def start_from_queue(db, queue_id, user_id, user_name):
+    """业务人员在工作台一键发起；发起后队列项转为 started。"""
+    item = get_queue_item(db, queue_id)
+    if not item:
+        raise ValueError('待发起记录不存在')
+    if item['status'] != 'pending':
+        raise ValueError('该记录已处理')
+    ctx = json.loads(item['context_json'] or '{}')
+    inst = start_instance(
+        db, item['def_key'], plugin_id=item['plugin_id'], record_type=item['record_type'] or '',
+        record_id=item['record_id'] or '', business_key=item['business_key'] or '',
+        title=item['title'] or '', context=ctx,
+        initiator_id=user_id, initiator_name=user_name)
+    db.execute("UPDATE wf_trigger_queue SET status='started', instance_id=?, handled_by=?, "
+               "handled_at=datetime('now','localtime') WHERE id=?", (inst['id'], user_name or '', queue_id))
+    db.commit()
+    return inst
+
+
+def ignore_queue(db, queue_id, user_name=''):
+    item = get_queue_item(db, queue_id)
+    if not item:
+        raise ValueError('待发起记录不存在')
+    if item['status'] != 'pending':
+        raise ValueError('该记录已处理')
+    db.execute("UPDATE wf_trigger_queue SET status='ignored', handled_by=?, "
+               "handled_at=datetime('now','localtime') WHERE id=?", (user_name or '', queue_id))
+    db.commit()
+
+
+def queue_rows(db, limit=200):
+    return db.execute(
+        'SELECT q.*, d.name AS def_name FROM wf_trigger_queue q '
+        'LEFT JOIN wf_definitions d ON d.def_key=q.def_key ORDER BY q.id DESC LIMIT ?', (limit,)
+    ).fetchall()
+
+
+def build_default_definition_for_event(plugin_id, event_key, def_key=None, name=None):
+    """一键生成该状态变更节点的默认审批流程（业务人员可直接用，也可再改）。"""
+    event = get_event(event_key)
+    if not event or event['plugin'] != plugin_id:
+        raise ValueError('状态变更节点不存在')
+    safe = re.sub(r'[^a-z0-9_\-]', '_', event_key.lower())
+    def_key = def_key or safe
+    name = name or (event['label'] + '审批')
+    steps = event.get('default_steps') or [
+        {'name': '负责人审批', 'assignee_type': 'initiator', 'assignee_value': '', 'mode': 'any'},
+    ]
+    return build_simple_definition(def_key, name, steps, None, category='业务流程',
+                                   description='由状态变更节点「%s」自动生成' % event['label'])
+
+
+def trigger_summary(db, def_key):
+    """给实例/详情页展示：这个流程由哪个状态变更节点触发。"""
+    t = get_trigger_for_def(db, def_key)
+    if not t:
+        return None
+    ev = get_event(t['event_key'])
+    return {
+        'plugin_id': t['plugin_id'],
+        'event_key': t['event_key'],
+        'label': ev.get('label') or t['event_key'],
+        'mode': t['mode'],
+        'mode_label': EVENT_MODES.get(t['mode'], t['mode']),
+        'enabled': int(t['enabled'] or 0),
+    }
 
 
 def build_simple_definition(def_key, name, steps, action=None, category='通用', description=''):
@@ -1219,4 +1575,6 @@ def stats(db):
         'error': db.execute("SELECT COUNT(*) c FROM wf_instances WHERE status='error'").fetchone()['c'],
         'pending_tasks': db.execute("SELECT COUNT(*) c FROM wf_tasks WHERE status='pending'").fetchone()['c'],
         'dead_outbox': db.execute("SELECT COUNT(*) c FROM wf_outbox WHERE status='dead'").fetchone()['c'],
+        'pending_starts': db.execute("SELECT COUNT(*) c FROM wf_trigger_queue WHERE status='pending'").fetchone()['c'],
+        'events': len(_EVENT_META),
     }

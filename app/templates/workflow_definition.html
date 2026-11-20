@@ -34,6 +34,14 @@
 .advanced-box { display:none; margin-top:16px; }
 .advanced-box textarea { width:100%; min-height:360px; padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-family:Consolas,Monaco,monospace; font-size:13px; line-height:1.55; box-sizing:border-box; }
 .toggle-row { margin:10px 0; font-size:12.5px; color:#475569; }
+.wf-trigger-box { border:1px solid #dbeafe; background:#f0f9ff; border-radius:10px; padding:14px; margin-bottom:16px; }
+.wf-trigger-head { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
+.wf-trigger-title { font-size:14px; font-weight:600; color:#0f4c81; }
+.wf-trigger-hint { font-size:12px; color:#64748b; }
+.wf-trigger-grid { display:grid; grid-template-columns:1.6fr 1fr; gap:12px; }
+.wf-trigger-grid label { display:block; font-size:12px; color:#64748b; margin-bottom:4px; }
+.wf-trigger-grid select { width:100%; padding:8px 9px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; background:#fff; }
+.wf-trigger-desc { margin-top:10px; font-size:12.5px; color:#475569; min-height:18px; }
 </style>
 {% if error %}<div class="wf-error">{{ error }}</div>{% endif %}
 <div class="wf-form">
@@ -41,23 +49,58 @@
         <strong>简易模式：</strong>按顺序添加审批节点，选择审批人和审批方式；保存后系统自动生成流程，业务人员不需要编写 JSON。<br>
         审批结果固定为：同意进入下一节点；驳回结束；退回发起人。需要复杂条件分支、并行网关时，可切到高级模式。
     </div>
+    <!-- v13.3 触发方式：这个流程什么时候自动产生 -->
+    <div class="wf-trigger-box">
+        <div class="wf-trigger-head">
+            <span class="wf-trigger-title">⚡ 触发这个流程</span>
+            <span class="wf-trigger-hint">选择业务状态变更节点后，业务人员不需要记流程名字</span>
+        </div>
+        <div class="wf-trigger-grid">
+            <div>
+                <label>业务状态变更节点</label>
+                <select name="trigger_event" id="triggerEvent">
+                    <option value="">不绑定，仅在工作台手动发起</option>
+                    {% for g in event_groups %}
+                    <optgroup label="{{ g.plugin_name }}">
+                        {% for e in g.events %}
+                        <option value="{{ e.plugin }}:{{ e.key }}"
+                            data-desc="{{ e.description }}"
+                            data-bound="{{ (e.trigger.def_name if e.trigger else '') or '' }}"
+                            {% if (trigger and trigger.event_key == e.key) or event_key_param == e.key %}selected{% endif %}>{{ e.label }}（{{ e.key }}）</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>触发方式</label>
+                <select name="trigger_mode" id="triggerMode">
+                    {% for k, v in modes.items() %}
+                    <option value="{{ k }}" {% if trigger and trigger.mode == k %}selected{% endif %}>{{ v }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="wf-trigger-desc" id="triggerDesc"></div>
+    </div>
+
     <form method="post" id="wfForm">
         <input type="hidden" name="editor_mode" id="editorMode" value="simple">
         <div class="wf-grid">
             <label>流程 Key</label>
-            <input name="def_key" value="{{ def_row.def_key if def_row else '' }}" {% if not is_new %}readonly{% endif %} placeholder="例如 purchase_approval">
+            <input name="def_key" value="{{ def_row.def_key if def_row else (prefill.def_key if prefill else '') }}" {% if not is_new %}readonly{% endif %} placeholder="例如 purchase_approval">
         </div>
         <div class="wf-grid">
             <label>流程名称</label>
-            <input name="name" value="{{ def_row.name if def_row else '新流程' }}" required>
+            <input name="name" value="{{ def_row.name if def_row else (prefill.name if prefill else '新流程') }}" required>
         </div>
         <div class="wf-grid">
             <label>分类</label>
-            <input name="category" value="{{ def_row.category if def_row else '通用' }}">
+            <input name="category" value="{{ def_row.category if def_row else (prefill.category if prefill else '通用') }}">
         </div>
         <div class="wf-grid">
             <label>适用说明</label>
-            <input name="description" value="{{ def_row.description if def_row else '' }}" placeholder="一句话说明这个流程用在什么场景">
+            <input name="description" value="{{ def_row.description if def_row else (prefill.description if prefill else '') }}" placeholder="一句话说明这个流程用在什么场景">
         </div>
 
         <div class="toggle-row">
@@ -201,6 +244,19 @@ function toggleAdvanced() {
 }
 
 document.getElementById('actionKey').addEventListener('change', renderPreview);
+(function () {
+    const sel = document.getElementById('triggerEvent');
+    const desc = document.getElementById('triggerDesc');
+    function showDesc() {
+        const opt = sel.selectedOptions[0];
+        if (!opt || !sel.value) { desc.textContent = '未绑定：流程只能在工作台「发起流程」里手动选择。'; return; }
+        let text = opt.dataset.desc || '';
+        if (opt.dataset.bound) text += '（该节点当前已绑定：' + opt.dataset.bound + '，保存后会改绑到本流程）';
+        desc.textContent = text;
+    }
+    sel.addEventListener('change', showDesc);
+    showDesc();
+})();
 INITIAL_STEPS.forEach(addStep);
 if (!INITIAL_STEPS.length) addStep();
 renderPreview();

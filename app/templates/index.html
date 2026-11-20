@@ -60,12 +60,39 @@
             </div>
         </div>
         <div class="wf-tabs">
-            <button type="button" class="wf-tab active" onclick="wfTab(this,'wfPending')">待我审批（{{ wf_pending|length }}）</button>
+            <button type="button" class="wf-tab active" onclick="wfTab(this,'wfQueue')">待我发起（{{ wf_queue|length }}）</button>
+            <button type="button" class="wf-tab" onclick="wfTab(this,'wfPending')">待我审批（{{ wf_pending|length }}）</button>
             <button type="button" class="wf-tab" onclick="wfTab(this,'wfMine')">我发起的（{{ wf_mine|length }}）</button>
             <button type="button" class="wf-tab" onclick="wfTab(this,'wfOpen')">运行中 / 异常（{{ wf_open|length }}）</button>
         </div>
 
-        <div id="wfPending" class="wf-section">
+        <div id="wfQueue" class="wf-section">
+            {% if wf_queue %}
+            <table class="todo-table">
+                <thead><tr><th class="th-title">业务事项</th><th class="th-proj">对应流程</th><th class="th-status">操作</th></tr></thead>
+                <tbody>
+                {% for q in wf_queue %}
+                <tr class="todo-tr">
+                    <td class="todo-td-title">{{ q.title or q.business_key or '业务变更' }}
+                        <div style="font-size:11.5px;color:#94a3b8;">触发节点：{{ q.event_key }} · {{ q.created_at }}</div>
+                    </td>
+                    <td class="todo-td-dim td-proj">{{ q.def_name or q.def_key }}</td>
+                    <td class="todo-td-dim" style="white-space:nowrap;">
+                        <form method="post" action="{{ url_for('workflow.queue_start', queue_id=q.id) }}" style="display:inline;">
+                            <button class="btn btn-primary btn-sm" type="submit">发起审批</button>
+                        </form>
+                        <form method="post" action="{{ url_for('workflow.queue_ignore', queue_id=q.id) }}" style="display:inline;">
+                            <button class="btn btn-outline btn-sm" type="submit">忽略</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}<div class="todo-empty">业务发生需要审批的变更时，会自动出现在这里，一键发起即可</div>{% endif %}
+        </div>
+
+        <div id="wfPending" class="wf-section" style="display:none;">
             {% if wf_pending %}
             <table class="todo-table">
                 <thead><tr><th class="th-title">待办流程</th><th class="th-proj">业务单号</th><th class="th-status">状态</th></tr></thead>

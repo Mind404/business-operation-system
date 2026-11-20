@@ -284,8 +284,11 @@ def admin_home():
     st = wf.stats(db)
     outbox = wf.outbox_rows(db)
     subscriptions = wf.list_subscriptions(db)
+    triggers = wf.list_triggers(db)
+    queue = wf.queue_rows(db, limit=60)
     return render_template('workflow_admin.html', definitions=defs, instances=instances,
-                           stats=st, outbox=outbox, subscriptions=subscriptions, user=_current_user())
+                           stats=st, outbox=outbox, subscriptions=subscriptions,
+                           triggers=triggers, queue=queue, user=_current_user())
 
 
 @workflow_bp.route('/admin/definition/<def_key>', methods=['GET', 'POST'])
@@ -311,6 +314,7 @@ def admin_definition(def_key):
                 payload = json.loads(request.form.get('definition_json') or '{}')
             wf.save_definition(db, def_key, name, payload, actor=_current_user()['name'],
                                category=category, description=description)
+            _apply_trigger_from_form(db, def_key)
             flash('新版本已发布；运行中的实例仍使用旧版本', 'success')
             return redirect(url_for('workflow.admin_definition', def_key=def_key))
         except Exception as e:
@@ -320,6 +324,8 @@ def admin_definition(def_key):
                            definition_json=json.dumps(definition, ensure_ascii=False, indent=2),
                            simple=wf.parse_simple_definition(definition),
                            actions=wf.action_options(),
+                           events=wf.event_options(), event_groups=wf.event_catalog(db), modes=wf.EVENT_MODES,
+                           trigger=wf.get_trigger_for_def(db, def_key),
                            versions=wf.list_versions(db, def_key), error=error)
 
 
@@ -330,6 +336,7 @@ def admin_definition_new():
         return deny
     db = _db()
     error = None
+    prefill = {}
     starter = {
         'key': 'new_process', 'name': '新流程',
         'nodes': [
@@ -342,6 +349,23 @@ def admin_definition_new():
             {'id': 'end_return', 'type': 'end', 'name': '已退回'},
         ],
     }
+    # 从状态变更节点进入时，自动带出推荐流程（审批人可再调整）
+    event_key = (request.args.get('event') or '').strip()
+    if request.method == 'GET' and event_key:
+        ev = wf.get_event(event_key)
+        if ev:
+            bound = db.execute('SELECT def_key FROM wf_triggers WHERE plugin_id=? AND event_key=?',
+                               (ev['plugin'], event_key)).fetchone()
+            if bound and wf.get_current_version(db, bound['def_key'])[0]:
+                flash('该状态变更节点已绑定流程「%s」，可直接修改' % bound['def_key'], 'info')
+                return redirect(url_for('workflow.admin_definition', def_key=bound['def_key']))
+            try:
+                starter = wf.build_default_definition_for_event(ev['plugin'], event_key)
+                prefill = {'def_key': starter['key'], 'name': starter['name'],
+                           'category': '业务流程',
+                           'description': ev.get('description') or ev.get('label')}
+            except Exception as e:
+                error = '自动生成失败：%s' % e
     if request.method == 'POST':
         try:
             def_key = (request.form.get('def_key') or '').strip()
@@ -356,15 +380,20 @@ def admin_definition_new():
                 payload['name'] = name
             wf.save_definition(db, def_key, name, payload, actor=_current_user()['name'],
                                category=category, description=description)
+            _apply_trigger_from_form(db, def_key)
             flash('流程模板已创建', 'success')
             return redirect(url_for('workflow.admin_definition', def_key=def_key))
         except Exception as e:
             error = str(e)
             starter = payload if 'payload' in locals() else starter
     return render_template('workflow_definition.html', def_row=None, ver=None,
+                           prefill=prefill,
                            definition_json=json.dumps(starter, ensure_ascii=False, indent=2),
                            simple=wf.parse_simple_definition(starter),
                            actions=wf.action_options(),
+                           events=wf.event_options(), event_groups=wf.event_catalog(db), modes=wf.EVENT_MODES,
+                           event_key_param=event_key,
+                           trigger=wf.get_trigger_for_def(db, (prefill or {}).get('def_key') or ''),
                            versions=[], error=error, is_new=True)
 
 
@@ -498,3 +527,154 @@ def api_my_tasks():
     if not user['id']:
         return jsonify({'ok': False, 'msg': '未登录'}), 401
     return jsonify({'ok': True, 'tasks': [dict(r) for r in wf.my_tasks(_db(), user['id'], user['role'])]})
+
+
+# ============================================================
+# v13.3 状态变更节点：目录 / 绑定 / 待发起队列
+# ============================================================
+def _apply_trigger_from_form(db, def_key):
+    """保存流程时同步节点绑定：选了节点就绑定，选空则解绑。"""
+    raw = (request.form.get('trigger_event') or '').strip()
+    mode = (request.form.get('trigger_mode') or 'confirm').strip()
+    actor = _current_user()['name']
+    if not raw:
+        wf.unbind_by_def(db, def_key)
+        return
+    if ':' not in raw:
+        return
+    plugin_id, event_key = raw.split(':', 1)
+    # 容错：只写了对象段（project.approval）时补全插件前缀
+    if not wf.get_event(event_key) and wf.get_event('%s.%s' % (plugin_id, event_key)):
+        event_key = '%s.%s' % (plugin_id, event_key)
+    wf.bind_trigger(db, def_key, plugin_id, event_key, mode=mode, actor=actor)
+
+
+@workflow_bp.route('/admin/events')
+def admin_events():
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    return render_template('workflow_events.html',
+                           catalog=wf.event_catalog(db),
+                           definitions=wf.list_definitions(db),
+                           modes=wf.EVENT_MODES,
+                           bound_count=len([t for t in wf.list_triggers(db) if int(t['enabled'] or 0)]),
+                           queue=wf.queue_rows(db, limit=60),
+                           stats=wf.stats(db),
+                           user=_current_user())
+
+
+@workflow_bp.route('/admin/trigger/bind', methods=['POST'])
+def admin_trigger_bind():
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    try:
+        raw = (request.form.get('event') or '').strip()
+        plugin_id, event_key = raw.split(':', 1)
+        def_key = (request.form.get('def_key') or '').strip()
+        if not def_key:
+            raise ValueError('请选择要绑定的流程')
+        wf.bind_trigger(db, def_key, plugin_id, event_key,
+                        mode=request.form.get('mode') or 'confirm', actor=_current_user()['name'])
+        flash('已绑定：业务状态变更后按配置进入流程', 'success')
+    except Exception as e:
+        flash('绑定失败：%s' % e, 'error')
+    return redirect(url_for('workflow.admin_events'))
+
+
+@workflow_bp.route('/admin/events/<plugin_id>/<event_key>/quick', methods=['POST'])
+def admin_event_quick(plugin_id, event_key):
+    """一键生成推荐流程并绑定，业务人员可直接用。"""
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    try:
+        ev = wf.get_event(event_key)
+        if not ev or ev['plugin'] != plugin_id:
+            raise ValueError('状态变更节点不存在')
+        bound = db.execute('SELECT * FROM wf_triggers WHERE plugin_id=? AND event_key=?',
+                           (plugin_id, event_key)).fetchone()
+        if bound and wf.get_current_version(db, bound['def_key'])[0]:
+            return redirect(url_for('workflow.admin_definition', def_key=bound['def_key']))
+        payload = wf.build_default_definition_for_event(plugin_id, event_key)
+        wf.save_definition(db, payload['key'], payload['name'], payload,
+                           actor=_current_user()['name'], category='业务流程',
+                           description=ev.get('description') or ev.get('label'))
+        wf.bind_trigger(db, payload['key'], plugin_id, event_key,
+                        mode=request.form.get('mode') or 'confirm', actor=_current_user()['name'])
+        flash('已生成流程「%s」并绑定，可继续调整审批人' % payload['name'], 'success')
+        return redirect(url_for('workflow.admin_definition', def_key=payload['key']))
+    except Exception as e:
+        flash('生成失败：%s' % e, 'error')
+        return redirect(url_for('workflow.admin_events'))
+
+
+@workflow_bp.route('/admin/trigger/<int:trigger_id>/mode', methods=['POST'])
+def admin_trigger_mode(trigger_id):
+    deny = _admin_required()
+    if deny:
+        return deny
+    wf.set_trigger_mode(_db(), trigger_id, request.form.get('mode') or 'confirm')
+    flash('触发方式已更新', 'success')
+    return redirect(url_for('workflow.admin_events'))
+
+
+@workflow_bp.route('/admin/trigger/<int:trigger_id>/toggle', methods=['POST'])
+def admin_trigger_toggle(trigger_id):
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    row = db.execute('SELECT * FROM wf_triggers WHERE id=?', (trigger_id,)).fetchone()
+    if row:
+        wf.set_trigger_enabled(db, trigger_id, not int(row['enabled'] or 0))
+        flash('已%s该节点的自动接入' % ('启用' if not int(row['enabled'] or 0) else '停用'), 'success')
+    return redirect(url_for('workflow.admin_events'))
+
+
+@workflow_bp.route('/admin/trigger/<int:trigger_id>/delete', methods=['POST'])
+def admin_trigger_delete(trigger_id):
+    deny = _admin_required()
+    if deny:
+        return deny
+    wf.unbind_trigger(_db(), trigger_id)
+    flash('已解绑；该流程仍可在工作台手动发起', 'success')
+    return redirect(url_for('workflow.admin_events'))
+
+
+@workflow_bp.route('/queue/<int:queue_id>/start', methods=['POST'])
+def queue_start(queue_id):
+    user = _current_user()
+    if not user['id']:
+        return redirect(url_for('workflow.index'))
+    db = _db()
+    item = wf.get_queue_item(db, queue_id)
+    if not item:
+        flash('待发起记录不存在', 'error')
+        return redirect(url_for('workflow.index'))
+    if user['role'] != 'platform_admin' and item['initiator_id'] and item['initiator_id'] != user['id']:
+        flash('只能发起与自己相关的业务审批', 'error')
+        return redirect(url_for('workflow.index'))
+    try:
+        inst = wf.start_from_queue(db, queue_id, user['id'], user['name'])
+        flash('流程已发起，等待审批', 'success')
+        return redirect(url_for('workflow.instance', instance_id=inst['id']))
+    except Exception as e:
+        flash('发起失败：%s' % e, 'error')
+        return redirect(url_for('workflow.index'))
+
+
+@workflow_bp.route('/queue/<int:queue_id>/ignore', methods=['POST'])
+def queue_ignore(queue_id):
+    user = _current_user()
+    db = _db()
+    try:
+        wf.ignore_queue(db, queue_id, user['name'])
+        flash('已忽略该待发起项', 'success')
+    except Exception as e:
+        flash('操作失败：%s' % e, 'error')
+    return redirect(url_for('workflow.index'))

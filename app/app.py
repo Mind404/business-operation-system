@@ -163,8 +163,14 @@ def migrate_plain_passwords():
 import json
 @app.template_filter('tojson')
 def tojson_filter(value, indent=None, ensure_ascii=False):
-    """自定义JSON序列化过滤器，支持ensure_ascii参数"""
-    return json.dumps(value, indent=indent, ensure_ascii=ensure_ascii, default=str)
+    """自定义JSON序列化过滤器，支持ensure_ascii参数。
+
+    v13.3 修复：返回值标成 Markup，否则 Jinja 自动转义会把 " 变成 &#34;，
+    内联到 <script> 里就是语法错误（流程设计器的审批节点卡片会全部不渲染）。
+    """
+    from markupsafe import Markup
+    text = json.dumps(value, indent=indent, ensure_ascii=ensure_ascii, default=str)
+    return Markup(text.replace('</', '<\\/'))
 
 
 @app.template_filter('from_json')
@@ -2702,7 +2708,7 @@ def index():
     # 按插件分区块展示（不统一排序，区块内各插件自排）。
     # v13.0.0.14：未登录态不能回退成 admin，否则会把管理员的待办显示给未识别用户。
     todo_groups = []
-    wf_pending, wf_mine, wf_open, wf_stats = [], [], [], {}
+    wf_pending, wf_mine, wf_open, wf_stats, wf_queue = [], [], [], {}, []
     if current_user:
         try:
             todo_groups = plugin_system.collect_my_todos(db, current_user)
@@ -2719,8 +2725,9 @@ def index():
             wf_mine = _wf.my_instances(db, session.get('user_id'))
             wf_open = _wf.open_instances(db)
             wf_stats = _wf.stats(db)
+            wf_queue = _wf.pending_starts(db, session.get('user_id'), session.get('user_role', ''))
         except Exception:
-            wf_pending, wf_mine, wf_open, wf_stats = [], [], [], {}
+            wf_pending, wf_mine, wf_open, wf_stats, wf_queue = [], [], [], {}, []
     # v13.0.0.18：每组自带四格统计（分组标题下按本组任务计算）
     for _g in todo_groups:
         _items = _g['items']
@@ -2757,7 +2764,8 @@ def index():
                            todo_stats=todo_stats,
                            now_day=now.day, now_month=now.month, now_week=week_map[now.weekday()],
                            now_date=now.strftime('%Y-%m-%d'), wbs_on=wbs_on,
-                           wf_pending=wf_pending, wf_mine=wf_mine, wf_open=wf_open, wf_stats=wf_stats)
+                           wf_pending=wf_pending, wf_mine=wf_mine, wf_open=wf_open, wf_stats=wf_stats,
+                           wf_queue=wf_queue)
 
 # ============================================================
 # 启动

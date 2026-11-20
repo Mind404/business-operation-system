@@ -19,6 +19,22 @@ def get_db():
         g.db.execute('PRAGMA foreign_keys = ON')
     return g.db
 
+
+def _emit_wf(event_key, business_key='', title='', context=None, record_type='', record_id=''):
+    """v13.3：把业务状态变更上报流程引擎。失败只记日志，绝不影响业务提交。"""
+    try:
+        import workflow_engine as wf
+        return wf.emit_state_change(get_db(), 'wbs', event_key, business_key=business_key,
+                                    title=title, context=context or {},
+                                    record_type=record_type, record_id=str(record_id or ''))
+    except Exception as e:
+        try:
+            from flask import current_app
+            current_app.logger.warning('workflow emit failed (%s): %s', event_key, e)
+        except Exception:
+            pass
+        return None
+
 @blueprint.teardown_request
 def close_db(exception):
     db = g.pop('db', None)
@@ -498,6 +514,12 @@ def wbs_project_add():
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
         db.commit()
         log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
+        _emit_wf('wbs.project.created',
+                 business_key='WBS-P%d' % pid,
+                 title='项目「%s」创建' % request.form.get('name', ''),
+                 context={'name': request.form.get('name', ''), 'owner': owner,
+                          'approval_status': approval_status, 'project_id': pid},
+                 record_type='project', record_id=pid)
         if is_admin:
             return redirect(url_for('wbs.wbs_project_detail', pid=pid))
         else:
@@ -570,6 +592,12 @@ def wbs_project_approve(pid):
     db.execute('UPDATE wbs_projects SET approval_status=?, updated_at=datetime("now","localtime") WHERE id=?', (status, pid))
     db.commit()
     log_operation('WBS', '项目审批', f'项目#{pid} → {status}', session.get('username','admin'))
+    _p = db.execute('SELECT name, owner FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    _emit_wf('wbs.project.approval', business_key='WBS-P%d' % pid,
+             title='项目「%s」审批%s' % (_p['name'] if _p else pid, status),
+             context={'name': _p['name'] if _p else '', 'owner': _p['owner'] if _p else '',
+                      'approval_status': status, 'project_id': pid},
+             record_type='project', record_id=pid)
     flash(f'项目已{status}。', 'success')
     return redirect(url_for('wbs.wbs_projects'))
 
@@ -840,6 +868,15 @@ def wbs_task_add(pid):
         except Exception as e:
             print('=== rollup after add ===', e)
     log_operation('WBS', '新增任务', f'P{pid} {request.form.get("name","")}', session.get('username','admin'))
+    _tid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+    _proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    _emit_wf('wbs.task.created', business_key='WBS-T%d' % _tid,
+             title='任务「%s」创建' % name,
+             context={'task_name': name, 'wbs_code': code,
+                      'owner': _to_username(request.form.get('owner', '')),
+                      'project_name': _proj['name'] if _proj else '', 'project_id': pid,
+                      'status': request.form.get('status', '未开始'), 'progress': progress},
+             record_type='task', record_id=_tid)
     return redirect(url_for('wbs.wbs_project_detail', pid=pid))
 
 
@@ -1254,6 +1291,21 @@ def wbs_task_inline(tid):
     # v13.0.0.29：状态/进度联动结果一并回给前端，行内控件即时对齐
     if extra:
         resp['linked'] = dict(extra)
+    # v13.3：状态/进度变化上报流程引擎（完成单独成节点，避免一次变更触发两条流程）
+    if field in ('status', 'progress') and str(old_value) != str(value):
+        _proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (t['project_id'],)).fetchone()
+        _pname = _proj['name'] if _proj else ''
+        _ctx = {'task_name': t['name'], 'wbs_code': t['wbs_code'] or '',
+                'owner': t['owner'] or '', 'project_name': _pname,
+                'project_id': t['project_id'],
+                'status': extra.get('status', value if field == 'status' else t['status']),
+                'progress': extra.get('progress', value if field == 'progress' else t['progress']),
+                'deliverable': t['deliverable'] or '', 'old_value': old_value, 'field': field}
+        _completed = (_ctx.get('status') == '已完成') or (int(_ctx.get('progress') or 0) >= 100)
+        _emit_wf('wbs.task.completed' if _completed else 'wbs.task.progress',
+                 business_key='WBS-T%d' % tid,
+                 title=('任务「%s」完成' if _completed else '任务「%s」进度更新') % t['name'],
+                 context=_ctx, record_type='task', record_id=tid)
     _rp = db.execute('SELECT parent_id FROM wbs_tasks WHERE id=?', (tid,)).fetchone()
     if _rp and _rp['parent_id']:
         _p = db.execute('SELECT id, status, progress FROM wbs_tasks WHERE id=?',
@@ -1463,6 +1515,14 @@ def wbs_task_quickadd(pid):
     db.commit()
     log_operation('WBS', '快速新建', f'P{pid} 快速新建任务 WBS#{code}「{name}」(tid={new_id})',
                   session.get('username', ''))
+    _proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
+    _emit_wf('wbs.task.created', business_key='WBS-T%d' % new_id,
+             title='任务「%s」创建' % name,
+             context={'task_name': name, 'wbs_code': code,
+                      'owner': _to_username(request.form.get('owner', '')),
+                      'project_name': _proj['name'] if _proj else '', 'project_id': pid,
+                      'status': '未开始', 'progress': 0},
+             record_type='task', record_id=new_id)
     # v13.0.0.19：返回新任务 id，前端新建成功后直接跳转并高亮该行
     return jsonify({'ok': True, 'tid': new_id, 'pending': (approval == '待审批')})
 

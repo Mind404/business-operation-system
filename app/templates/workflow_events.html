@@ -1,0 +1,181 @@
+{% extends 'base.html' %}
+{% block title %}业务状态变更节点{% endblock %}
+{% block page_title %}业务状态变更节点{% endblock %}
+{% block header_actions %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_home') }}">← 返回流程管理</a>
+{% endblock %}
+{% block content %}
+<style>
+.ev-wrap { max-width:1180px; }
+.ev-intro { background:#f0f9ff; border:1px solid #dbeafe; border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+.ev-intro h3 { margin:0 0 6px; font-size:15px; color:#0f4c81; }
+.ev-steps { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12.5px; color:#475569; }
+.ev-step { background:#fff; border:1px solid #cfe3f3; border-radius:8px; padding:7px 10px; }
+.ev-arrow { color:#2563eb; font-weight:600; }
+.ev-sum { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+.ev-kpi { flex:1; min-width:150px; background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:12px 14px; }
+.ev-kpi .n { font-size:22px; font-weight:700; color:#0f172a; line-height:1.2; }
+.ev-kpi .t { font-size:12px; color:#64748b; margin-top:2px; }
+.ev-plugin { background:#fff; border:1px solid #e6ebf2; border-radius:10px; margin-bottom:16px; overflow:hidden; }
+.ev-plugin-head { display:flex; align-items:center; gap:10px; padding:12px 16px; background:#f8fafc; border-bottom:1px solid #eef2f7; }
+.ev-plugin-name { font-size:14px; font-weight:600; color:#0f172a; }
+.ev-plugin-id { font-size:12px; color:#94a3b8; }
+.ev-row { display:grid; grid-template-columns:300px 26px 1fr; gap:10px; padding:14px 16px; border-bottom:1px solid #f1f5f9; align-items:center; }
+.ev-row:last-child { border-bottom:none; }
+.ev-node { display:flex; align-items:flex-start; gap:10px; }
+.ev-icon { width:30px; height:30px; border-radius:8px; background:#eef2ff; color:#4f46e5; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
+.ev-label { font-size:13.5px; font-weight:600; color:#1e293b; }
+.ev-key { font-size:11.5px; color:#94a3b8; font-family:Consolas,Monaco,monospace; margin-top:2px; }
+.ev-desc { font-size:12px; color:#64748b; margin-top:3px; line-height:1.5; }
+.ev-link-arrow { color:#cbd5e1; font-size:16px; text-align:center; }
+.ev-right { display:flex; flex-direction:column; gap:8px; }
+.ev-bound { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ev-flow-name { font-size:13px; color:#0f172a; font-weight:600; }
+.ev-badge { font-size:11.5px; padding:2px 8px; border-radius:999px; border:1px solid #dbe4ee; background:#fff; color:#475569; }
+.ev-badge.auto { border-color:#bbf7d0; background:#f0fdf4; color:#15803d; }
+.ev-badge.confirm { border-color:#fde68a; background:#fffbeb; color:#b45309; }
+.ev-badge.off { border-color:#fecaca; background:#fef2f2; color:#b91c1c; }
+.ev-none { font-size:13px; color:#94a3b8; }
+.ev-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.ev-actions select { padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:12.5px; max-width:230px; }
+.mini { border:1px solid #dbe4ee; background:#fff; border-radius:6px; padding:5px 9px; font-size:12px; cursor:pointer; color:#334155; }
+.mini:hover { background:#f1f5f9; }
+.mini.primary { background:#0f4c81; border-color:#0f4c81; color:#fff; }
+.mini.primary:hover { background:#0c3d69; }
+.mini.danger { color:#b91c1c; border-color:#fecaca; }
+.ev-empty { padding:26px 16px; text-align:center; color:#94a3b8; font-size:13px; }
+.ev-queue { background:#fff; border:1px solid #e6ebf2; border-radius:10px; overflow:hidden; }
+.ev-queue table { width:100%; border-collapse:collapse; font-size:13px; }
+.ev-queue th, .ev-queue td { text-align:left; padding:9px 12px; border-bottom:1px solid #f1f5f9; }
+.ev-queue th { background:#f8fafc; color:#475569; font-weight:600; font-size:12.5px; }
+.ev-tip { font-size:12px; color:#94a3b8; margin-top:8px; }
+.ev-quick { flex-direction:column; align-items:stretch; gap:8px; }
+.ev-form-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ev-lbl { font-size:12px; color:#64748b; min-width:52px; }
+.ev-note { font-size:11.5px; color:#94a3b8; }
+</style>
+<div class="ev-wrap">
+    <div class="ev-intro">
+        <h3>让每个业务动作自动找到该走的流程</h3>
+        <div class="ev-steps">
+            <span class="ev-step">① 插件上报「状态变更」节点</span><span class="ev-arrow">→</span>
+            <span class="ev-step">② 在这里选择节点并绑定流程</span><span class="ev-arrow">→</span>
+            <span class="ev-step">③ 业务人员在工作台一键发起 / 系统自动发起</span>
+        </div>
+    </div>
+
+    <div class="ev-sum">
+        <div class="ev-kpi"><div class="n">{{ stats.events or 0 }}</div><div class="t">已接入的状态变更节点</div></div>
+        <div class="ev-kpi"><div class="n">{{ bound_count or 0 }}</div><div class="t">已绑定流程的节点</div></div>
+        <div class="ev-kpi"><div class="n">{{ stats.pending_starts or 0 }}</div><div class="t">待人工确认发起的业务变更</div></div>
+        <div class="ev-kpi"><div class="n">{{ stats.running or 0 }}</div><div class="t">运行中的流程</div></div>
+    </div>
+
+    {% for g in catalog %}
+    <div class="ev-plugin">
+        <div class="ev-plugin-head">
+            <span class="ev-plugin-name">{{ g.plugin_name }}</span>
+            <span class="ev-plugin-id">插件 ID：{{ g.plugin_id }}</span>
+        </div>
+        {% for e in g.events %}
+        <div class="ev-row">
+            <div class="ev-node">
+                <div class="ev-icon">{{ e.icon }}</div>
+                <div>
+                    <div class="ev-label">{{ e.label }}</div>
+                    <div class="ev-key">{{ e.key }}</div>
+                    {% if e.description %}<div class="ev-desc">{{ e.description }}</div>{% endif %}
+                </div>
+            </div>
+            <div class="ev-link-arrow">→</div>
+            <div class="ev-right">
+                {% if e.trigger %}
+                <div class="ev-bound">
+                    <span class="ev-flow-name">{{ e.trigger.def_name or e.trigger.def_key }}</span>
+                    {% if not e.trigger.enabled %}<span class="ev-badge off">已停用</span>{% endif %}
+                    <span class="ev-badge">流程 Key：{{ e.trigger.def_key }}</span>
+                </div>
+                <div class="ev-actions">
+                    <a class="mini" href="{{ url_for('workflow.admin_definition', def_key=e.trigger.def_key) }}">编辑流程</a>
+                    <form method="post" action="{{ url_for('workflow.admin_trigger_mode', trigger_id=e.trigger.id) }}" style="display:inline;">
+                        <select name="mode" onchange="this.form.submit()">
+                            {% for k, v in modes.items() %}<option value="{{ k }}" {% if e.trigger.mode == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+                        </select>
+                    </form>
+                    <form method="post" action="{{ url_for('workflow.admin_trigger_toggle', trigger_id=e.trigger.id) }}" style="display:inline;">
+                        <button class="mini" type="submit">{{ '停用' if e.trigger.enabled else '启用' }}</button>
+                    </form>
+                    <form method="post" action="{{ url_for('workflow.admin_trigger_delete', trigger_id=e.trigger.id) }}" style="display:inline;" onsubmit="return confirm('解绑后该业务变更不再自动发起流程，确定？');">
+                        <button class="mini danger" type="submit">解绑</button>
+                    </form>
+                </div>
+                {% else %}
+                <div class="ev-none">尚未绑定流程 —— 绑定后，业务发生该变更时会自动等你确认或直接发起</div>
+                <div class="ev-actions ev-quick">
+                    <form method="post" action="{{ url_for('workflow.admin_event_quick', plugin_id=g.plugin_id, event_key=e.key) }}" class="ev-form-row">
+                        <span class="ev-lbl">触发方式</span>
+                        <select name="mode" class="ev-mode">
+                            {% for k, v in modes.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+                        </select>
+                        <button class="mini primary" type="submit">一键生成推荐流程</button>
+                        <span class="ev-note">自动生成负责人审批流程，可再调整</span>
+                    </form>
+                    <form method="post" action="{{ url_for('workflow.admin_trigger_bind') }}" class="ev-form-row" data-mode-src="1">
+                        <input type="hidden" name="event" value="{{ g.plugin_id }}:{{ e.key }}">
+                        <input type="hidden" name="mode" value="confirm" class="ev-mode-hidden">
+                        <span class="ev-lbl">或绑定已有</span>
+                        <select name="def_key" required>
+                            <option value="">选择已有流程…</option>
+                            {% for d in definitions %}<option value="{{ d.def_key }}">{{ d.name }}（v{{ d.current_version }}）</option>{% endfor %}
+                        </select>
+                        <button class="mini" type="submit">绑定</button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="ev-plugin"><div class="ev-empty">还没有插件上报状态变更节点</div></div>
+    {% endfor %}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:6px 0 10px;">
+        <h3 style="margin:0;font-size:15px;">最近等待确认的业务变更</h3>
+        <span class="ev-tip">「人工确认后发起」模式下，业务人员可在工作台一键发起</span>
+    </div>
+    <div class="ev-queue">
+        <table>
+            <thead><tr><th>业务事项</th><th>触发节点</th><th>对应流程</th><th>发起人</th><th>状态</th><th>时间</th></tr></thead>
+            <tbody>
+            {% for q in queue %}
+            <tr>
+                <td>{{ q.title or q.business_key or '—' }}</td>
+                <td style="color:#64748b;">{{ q.event_key }}</td>
+                <td>{{ q.def_name or q.def_key }}</td>
+                <td>{{ q.initiator_name or '—' }}</td>
+                <td>{{ {'pending':'待发起','started':'已发起','ignored':'已忽略'}.get(q.status, q.status) }}</td>
+                <td style="color:#94a3b8;">{{ q.created_at }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:22px;">暂无记录</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+(function () {
+    document.querySelectorAll('.ev-plugin').forEach(function (box) {
+        box.querySelectorAll('.ev-row').forEach(function (row) {
+            var mode = row.querySelector('.ev-mode');
+            var hidden = row.querySelector('.ev-mode-hidden');
+            if (!mode || !hidden) return;
+            function sync() { hidden.value = mode.value; }
+            mode.addEventListener('change', sync);
+            sync();
+        });
+    });
+})();
+</script>
+{% endblock %}
