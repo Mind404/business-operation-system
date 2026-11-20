@@ -453,8 +453,8 @@ def registered_events():
 
 
 def event_options():
-    """扁平列表，供设计器下拉使用。"""
-    return [dict(_EVENT_META[k]) for k in sorted(_EVENT_META.keys())]
+    """扁平列表，供设计器下拉使用（保持插件注册顺序，贴合业务先后）。"""
+    return [dict(_EVENT_META[k]) for k in _EVENT_META]
 
 
 def _plugin_display_name(plugin_id, fallback=''):
@@ -480,7 +480,7 @@ def event_catalog(db=None):
                 triggers[(row['plugin_id'], row['event_key'])] = dict(row)
         except Exception:
             triggers = {}
-    for key in sorted(_EVENT_META.keys()):
+    for key in _EVENT_META:
         meta = _EVENT_META[key]
         pid = meta['plugin']
         g = groups.setdefault(pid, {
@@ -698,13 +698,104 @@ def queue_rows(db, limit=200):
     ).fetchall()
 
 
-def build_default_definition_for_event(plugin_id, event_key, def_key=None, name=None):
+_ROLE_LABELS = {
+    'platform_admin': '平台管理员（超管）',
+    'admin': '管理员',
+    'user': '普通用户',
+}
+
+
+def _clean_key(text):
+    return re.sub(r'_+', '_', re.sub(r'[^a-z0-9_\-]+', '_', str(text or '').lower())).strip('_-')
+
+
+def generate_def_key(db, name='', event_key='', custom=''):
+    """自动生成流程 Key（v13.4）：管理员不需要理解 Key 是什么。
+
+    优先用状态变更节点的键（如 wbs.task.completed → wbs_task_completed），
+    没有绑定节点时用 flow_日期；重名自动加序号，保证唯一。
+    """
+    existing = set()
+    try:
+        existing = {r['def_key'] for r in db.execute('SELECT def_key FROM wf_definitions').fetchall()}
+    except Exception:
+        existing = set()
+    base = _clean_key(custom)
+    if custom and (not base or not re.match(r'^[a-z][a-z0-9_\-]{1,60}$', base)):
+        raise ValueError('自定义流程 Key 只能使用小写英文字母、数字、下划线或短横线，且以字母开头；不想填就取消勾选由系统生成')
+    if base:
+        if not re.match(r'^[a-z][a-z0-9_\-]{1,60}$', base):
+            raise ValueError('流程 Key 只能使用小写字母、数字、下划线、短横线，且以字母开头')
+    else:
+        base = _clean_key(event_key)
+        if not base:
+            base = 'flow_' + datetime.now().strftime('%Y%m%d')
+        if not re.match(r'^[a-z]', base):
+            base = 'flow_' + base
+    base = base[:58]
+    if base not in existing:
+        return base
+    i = 2
+    while True:
+        candidate = '%s_%d' % (base, i)
+        if candidate not in existing:
+            return candidate
+        i += 1
+
+
+def actor_options(db, kind='user', q=''):
+    """审批人选择数据源（v13.4）：直接读平台用户管理，支持按姓名/账号/部门搜索。"""
+    kind = (kind or 'user').strip()
+    q = str(q or '').strip()
+    if kind == 'role':
+        rows = []
+        try:
+            rows = db.execute('SELECT role, COUNT(*) AS c FROM users WHERE is_active=1 '
+                              'AND COALESCE(deleted,0)=0 GROUP BY role').fetchall()
+        except Exception:
+            rows = []
+        counts = {r['role']: int(r['c'] or 0) for r in rows}
+        # 角色 admin 在审批人解析里会同时命中 admin 与 platform_admin，人数要合并显示
+        counts['admin'] = counts.get('admin', 0) + counts.get('platform_admin', 0)
+        items = []
+        for role in sorted(set(list(_ROLE_LABELS.keys()) + list(counts.keys()))):
+            label = _ROLE_LABELS.get(role, role)
+            if q and q.lower() not in (role + label).lower():
+                continue
+            items.append({'value': role, 'label': label,
+                          'sub': '%d 人' % counts.get(role, 0), 'kind': 'role'})
+        return items
+    sql = ("SELECT username, display_name, role, department FROM users "
+           "WHERE is_active=1 AND COALESCE(deleted,0)=0")
+    try:
+        rows = db.execute(sql + ' ORDER BY id').fetchall()
+    except Exception:
+        rows = db.execute("SELECT username, display_name, role FROM users "
+                          "WHERE is_active=1 ORDER BY id").fetchall()
+    items = []
+    for r in rows:
+        u = dict(r)
+        name = u.get('display_name') or u.get('username') or ''
+        dept = u.get('department') or ''
+        hay = ' '.join([str(name), str(u.get('username') or ''), str(dept)])
+        if q and q.lower() not in hay.lower():
+            continue
+        items.append({
+            'value': u.get('username') or '',
+            'label': name,
+            'sub': ' · '.join([x for x in [u.get('username'), dept,
+                                           _ROLE_LABELS.get(u.get('role'), u.get('role'))] if x]),
+            'kind': 'user',
+        })
+    return items[:50]
+
+
+def build_default_definition_for_event(plugin_id, event_key, def_key=None, name=None, db=None):
     """一键生成该状态变更节点的默认审批流程（业务人员可直接用，也可再改）。"""
     event = get_event(event_key)
     if not event or event['plugin'] != plugin_id:
         raise ValueError('状态变更节点不存在')
-    safe = re.sub(r'[^a-z0-9_\-]', '_', event_key.lower())
-    def_key = def_key or safe
+    def_key = def_key or generate_def_key(db, event_key=event_key)
     name = name or (event['label'] + '审批')
     steps = event.get('default_steps') or [
         {'name': '负责人审批', 'assignee_type': 'initiator', 'assignee_value': '', 'mode': 'any'},
@@ -753,6 +844,9 @@ def build_simple_definition(def_key, name, steps, action=None, category='通用'
         assignee = {'type': rule_type}
         if rule_type in ('user', 'role', 'record_field'):
             assignee['value'] = rule_value
+        if rule_type == 'record_field':
+            # v13.4：审批人解析读的是 field，这里同步写入，否则总是回落到 owner
+            assignee['field'] = rule_value
         mode = step.get('mode') or 'any'
         if mode not in ('single', 'any', 'countersign'):
             mode = 'any'
@@ -803,7 +897,7 @@ def parse_simple_definition(definition):
             approvals.append({
                 'name': node.get('name') or '审批',
                 'assignee_type': rule.get('type') or 'role',
-                'assignee_value': rule.get('value') or '',
+                'assignee_value': rule.get('value') or rule.get('field') or '',
                 'mode': node.get('mode') or 'any'
             })
         elif node.get('type') == 'action':

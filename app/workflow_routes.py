@@ -360,7 +360,7 @@ def admin_definition_new():
                 flash('该状态变更节点已绑定流程「%s」，可直接修改' % bound['def_key'], 'info')
                 return redirect(url_for('workflow.admin_definition', def_key=bound['def_key']))
             try:
-                starter = wf.build_default_definition_for_event(ev['plugin'], event_key)
+                starter = wf.build_default_definition_for_event(ev['plugin'], event_key, db=db)
                 prefill = {'def_key': starter['key'], 'name': starter['name'],
                            'category': '业务流程',
                            'description': ev.get('description') or ev.get('label')}
@@ -368,8 +368,12 @@ def admin_definition_new():
                 error = '自动生成失败：%s' % e
     if request.method == 'POST':
         try:
-            def_key = (request.form.get('def_key') or '').strip()
             name = (request.form.get('name') or '').strip()
+            def_key = (request.form.get('def_key') or '').strip()
+            auto_key = request.form.get('auto_key') == '1'
+            if auto_key or not def_key:
+                def_key = wf.generate_def_key(db, name=name,
+                                              event_key=(request.form.get('trigger_event') or '').split(':')[-1])
             category = (request.form.get('category') or '通用').strip()
             description = (request.form.get('description') or '').strip()
             if request.form.get('editor_mode') == 'simple':
@@ -549,6 +553,39 @@ def _apply_trigger_from_form(db, def_key):
     wf.bind_trigger(db, def_key, plugin_id, event_key, mode=mode, actor=actor)
 
 
+@workflow_bp.route('/admin/events/guide')
+def admin_events_guide():
+    """节点说明子页（v13.4）：给流程搭建者看的业务解释，不出现技术术语。"""
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    catalog = wf.event_catalog(db)
+    bound_count = sum(1 for g in catalog for e in g['events'] if e.get('trigger'))
+    return render_template('workflow_events_guide.html',
+                           catalog=catalog,
+                           modes=wf.EVENT_MODES,
+                           stats=wf.stats(db),
+                           bound_count=bound_count,
+                           user=_current_user())
+
+
+@workflow_bp.route('/admin/api/actors')
+def admin_actors():
+    """审批人搜索数据源：来自平台「用户管理」，支持姓名/账号/部门模糊搜索。"""
+    user = _current_user()
+    if not user['id']:
+        return jsonify({'ok': False, 'msg': '未登录'}), 401
+    if user['role'] != 'platform_admin':
+        return jsonify({'ok': False, 'msg': '仅管理员可用'}), 403
+    try:
+        items = wf.actor_options(_db(), kind=request.args.get('type') or 'user',
+                                 q=request.args.get('q') or '')
+        return jsonify({'ok': True, 'items': items})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': str(e)}), 500
+
+
 @workflow_bp.route('/admin/events')
 def admin_events():
     deny = _admin_required()
@@ -600,7 +637,7 @@ def admin_event_quick(plugin_id, event_key):
                            (plugin_id, event_key)).fetchone()
         if bound and wf.get_current_version(db, bound['def_key'])[0]:
             return redirect(url_for('workflow.admin_definition', def_key=bound['def_key']))
-        payload = wf.build_default_definition_for_event(plugin_id, event_key)
+        payload = wf.build_default_definition_for_event(plugin_id, event_key, db=db)
         wf.save_definition(db, payload['key'], payload['name'], payload,
                            actor=_current_user()['name'], category='业务流程',
                            description=ev.get('description') or ev.get('label'))

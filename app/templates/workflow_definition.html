@@ -9,7 +9,7 @@
 .wf-form { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:20px; max-width:1180px; }
 .wf-grid { display:grid; grid-template-columns:150px 1fr; gap:12px; margin-bottom:14px; align-items:start; }
 .wf-grid label { font-size:13px; color:#475569; padding-top:8px; }
-.wf-grid input, .wf-grid select { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
+.wf-grid input:not([type=checkbox]), .wf-grid select { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
 .wf-help { font-size:12.5px; color:#64748b; line-height:1.7; margin-bottom:14px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; padding:10px 12px; }
 .wf-error { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:14px; }
 .wf-versions { margin-top:18px; }
@@ -42,6 +42,17 @@
 .wf-trigger-grid label { display:block; font-size:12px; color:#64748b; margin-bottom:4px; }
 .wf-trigger-grid select { width:100%; padding:8px 9px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; background:#fff; }
 .wf-trigger-desc { margin-top:10px; font-size:12.5px; color:#475569; min-height:18px; }
+.key-auto { display:inline-block; font-size:12.5px; color:#0f4c81; background:#eff6ff; border:1px dashed #93c5fd; border-radius:6px; padding:7px 10px; font-family:Consolas,Monaco,monospace; }
+.key-custom { margin-left:10px; font-size:12.5px; color:#475569; }
+.wf-hint { font-size:12px; color:#94a3b8; margin-top:5px; }
+.combo { position:relative; }
+.combo-panel { display:none; position:absolute; z-index:30; left:0; right:0; top:100%; margin-top:4px; max-height:230px; overflow:auto; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 8px 24px rgba(15,23,42,.12); }
+.combo-item { padding:8px 10px; font-size:13px; cursor:pointer; border-bottom:1px solid #f1f5f9; }
+.combo-item:hover, .combo-item.active { background:#eff6ff; }
+.combo-item .sub { display:block; font-size:11.5px; color:#94a3b8; margin-top:1px; }
+.combo-empty { padding:9px 10px; font-size:12px; color:#94a3b8; }
+.combo-note { font-size:11.5px; color:#0f766e; margin-top:4px; min-height:15px; }
+.step-value:disabled { background:#f8fafc; color:#94a3b8; }
 </style>
 {% if error %}<div class="wf-error">{{ error }}</div>{% endif %}
 <div class="wf-form">
@@ -49,7 +60,9 @@
         <strong>简易模式：</strong>按顺序添加审批节点，选择审批人和审批方式；保存后系统自动生成流程，业务人员不需要编写 JSON。<br>
         审批结果固定为：同意进入下一节点；驳回结束；退回发起人。需要复杂条件分支、并行网关时，可切到高级模式。
     </div>
-    <!-- v13.3 触发方式：这个流程什么时候自动产生 -->
+    <form method="post" id="wfForm">
+        <input type="hidden" name="editor_mode" id="editorMode" value="simple">
+    <!-- v13.3 触发方式：这个流程什么时候自动产生；v13.4 移入表单，保证保存时能提交 -->
     <div class="wf-trigger-box">
         <div class="wf-trigger-head">
             <span class="wf-trigger-title">⚡ 触发这个流程</span>
@@ -65,6 +78,7 @@
                         {% for e in g.events %}
                         <option value="{{ e.plugin }}:{{ e.key }}"
                             data-desc="{{ e.description }}"
+                            data-label="{{ e.label }}"
                             data-bound="{{ (e.trigger.def_name if e.trigger else '') or '' }}"
                             {% if (trigger and trigger.event_key == e.key) or event_key_param == e.key %}selected{% endif %}>{{ e.label }}（{{ e.key }}）</option>
                         {% endfor %}
@@ -84,11 +98,24 @@
         <div class="wf-trigger-desc" id="triggerDesc"></div>
     </div>
 
-    <form method="post" id="wfForm">
-        <input type="hidden" name="editor_mode" id="editorMode" value="simple">
         <div class="wf-grid">
             <label>流程 Key</label>
-            <input name="def_key" value="{{ def_row.def_key if def_row else (prefill.def_key if prefill else '') }}" {% if not is_new %}readonly{% endif %} placeholder="例如 purchase_approval">
+            <div>
+                {% if is_new %}
+                <div id="keyAutoBox" style="padding-top:4px;">
+                    <span class="key-auto" id="keyPreview">保存时自动生成</span>
+                    <label class="key-custom"><input type="checkbox" id="customKeyToggle" onchange="toggleCustomKey()"> 我要自定义</label>
+                </div>
+                <input name="def_key" id="defKeyInput" value="" placeholder="小写字母/数字/下划线" style="display:none;margin-top:6px;">
+                <input type="hidden" name="auto_key" id="autoKey" value="1">
+                <div class="wf-hint">Key 是系统内部编号，业务人员不用理解，默认自动生成，无需填写。</div>
+                {% else %}
+                <input value="{{ def_row.def_key }}" readonly>
+                <input type="hidden" name="def_key" value="{{ def_row.def_key }}">
+                <input type="hidden" name="auto_key" value="0">
+                <div class="wf-hint">已有流程的 Key 不可修改（修改会导致历史实例与新版本脱节）。</div>
+                {% endif %}
+            </div>
         </div>
         <div class="wf-grid">
             <label>流程名称</label>
@@ -189,13 +216,99 @@ function addStep(step) {
         </div>
         <div class="step-body">
             <div><label>节点名称</label><input name="step_name" class="step-name" value="${esc(step.name)}" placeholder="例如：项目经理审批"></div>
-            <div><label>审批人</label><select name="step_assignee_type" class="step-type" onchange="renderPreview()">${optionHtml(TYPE_OPTIONS, step.assignee_type)}</select></div>
-            <div><label>审批人值</label><input name="step_assignee_value" class="step-value" value="${esc(step.assignee_value)}" placeholder="角色 / 账号 / 字段名"></div>
+            <div><label>审批人</label><select name="step_assignee_type" class="step-type">${optionHtml(TYPE_OPTIONS, step.assignee_type)}</select></div>
+            <div>
+                <label>审批人值</label>
+                <div class="combo">
+                    <input name="step_assignee_value" class="step-value" value="${esc(step.assignee_value)}" placeholder="输入姓名/账号搜索" autocomplete="off">
+                    <div class="combo-panel"></div>
+                </div>
+                <div class="combo-note"></div>
+            </div>
             <div><label>审批方式</label><select name="step_mode" class="step-mode">${optionHtml(MODE_OPTIONS, step.mode || 'any')}</select></div>
         </div>`;
     document.getElementById('steps').appendChild(box);
     box.querySelectorAll('input,select').forEach(el => el.addEventListener('input', renderPreview));
+    initCard(box);
     renderPreview();
+}
+
+const TYPE_HINTS = {
+    initiator: {ph: '无需填写，自动取发起人', readonly: true},
+    user: {ph: '输入姓名 / 账号搜索', readonly: false},
+    role: {ph: '输入或选择角色', readonly: false},
+    record_field: {ph: '业务字段名，例如 owner（负责人）', readonly: false},
+    project_participants: {ph: '无需填写，自动取项目参与人', readonly: true}
+};
+
+function initCard(card) {
+    const typeSel = card.querySelector('.step-type');
+    const input = card.querySelector('.step-value');
+    const panel = card.querySelector('.combo-panel');
+    const note = card.querySelector('.combo-note');
+    let timer = null, items = [];
+
+    function hide() { panel.style.display = 'none'; }
+    function applyType() {
+        const type = typeSel.value;
+        const hint = TYPE_HINTS[type] || TYPE_HINTS.role;
+        input.placeholder = hint.ph;
+        input.readOnly = !!hint.readonly;
+        if (hint.readonly) input.value = '';
+        note.textContent = hint.readonly ? hint.ph : (input.value ? '当前值：' + input.value : '可从「用户管理」按姓名/账号/部门搜索，也可直接填账号');
+        if (hint.readonly) hide();
+    }
+    function renderPanel(list, autoOpen) {
+        items = list || [];
+        if (!items.length) {
+            panel.innerHTML = '<div class="combo-empty">没有匹配结果，可直接手填</div>';
+        } else {
+            panel.innerHTML = items.map((it, i) =>
+                `<div class="combo-item" data-i="${i}"><b>${esc(it.label)}</b><span class="sub">${esc(it.sub || '')}</span></div>`).join('');
+            panel.querySelectorAll('.combo-item').forEach(el => {
+                el.addEventListener('mousedown', ev => {
+                    ev.preventDefault();
+                    const it = items[Number(el.dataset.i)];
+                    input.value = it.value;
+                    note.textContent = '已选：' + it.label + '（' + it.value + '）';
+                    hide();
+                    renderPreview();
+                });
+            });
+            const hit = items.find(it => String(it.value) === String(input.value));
+            if (hit) note.textContent = '已选：' + hit.label + '（' + hit.value + '）';
+        }
+        panel.style.display = autoOpen === false ? 'none' : 'block';
+    }
+    function fetchActors(q, autoOpen) {
+        const type = typeSel.value;
+        if (type !== 'user' && type !== 'role') { hide(); return; }
+        fetch('/workflow/admin/api/actors?type=' + type + '&q=' + encodeURIComponent(q || ''), {credentials: 'same-origin'})
+            .then(r => r.json())
+            .then(d => { if (d && d.ok) renderPanel(d.items || [], autoOpen); })
+            .catch(() => {});
+    }
+
+    typeSel.addEventListener('change', () => {
+        if (card.dataset.prevType && card.dataset.prevType !== typeSel.value) {
+            input.value = '';
+            note.textContent = '请选择新的审批人';
+        }
+        card.dataset.prevType = typeSel.value;
+        applyType();
+        fetchActors('');
+        renderPreview();
+    });
+    input.addEventListener('focus', () => { applyType(); fetchActors(input.value); });
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fetchActors(input.value), 250);
+    });
+    input.addEventListener('blur', () => setTimeout(hide, 150));
+    input.addEventListener('keydown', ev => { if (ev.key === 'Escape') hide(); });
+    applyType();
+    card.dataset.prevType = typeSel.value;
+    if (input.value && (typeSel.value === 'user' || typeSel.value === 'role')) fetchActors(input.value, false);
 }
 
 function removeStep(btn) {
@@ -244,9 +357,30 @@ function toggleAdvanced() {
 }
 
 document.getElementById('actionKey').addEventListener('change', renderPreview);
+
+function previewKey() {
+    const sel = document.getElementById('triggerEvent');
+    const box = document.getElementById('keyPreview');
+    if (!box) return;
+    if (!sel.value) { box.textContent = '保存时自动生成'; return; }
+    const raw = sel.value.split(':').pop();
+    const key = raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 58) || 'flow';
+    box.textContent = '保存时自动生成：' + (/^[a-z]/.test(key) ? key : 'flow_' + key);
+}
+
+function toggleCustomKey() {
+    const on = document.getElementById('customKeyToggle').checked;
+    document.getElementById('defKeyInput').style.display = on ? 'block' : 'none';
+    document.getElementById('autoKey').value = on ? '0' : '1';
+    document.getElementById('keyAutoBox').style.display = on ? 'none' : 'block';
+    if (!on) previewKey();
+}
+
 (function () {
     const sel = document.getElementById('triggerEvent');
     const desc = document.getElementById('triggerDesc');
+    const nameInput = document.querySelector('input[name="name"]');
+    const descInput = document.querySelector('input[name="description"]');
     function showDesc() {
         const opt = sel.selectedOptions[0];
         if (!opt || !sel.value) { desc.textContent = '未绑定：流程只能在工作台「发起流程」里手动选择。'; return; }
@@ -254,9 +388,22 @@ document.getElementById('actionKey').addEventListener('change', renderPreview);
         if (opt.dataset.bound) text += '（该节点当前已绑定：' + opt.dataset.bound + '，保存后会改绑到本流程）';
         desc.textContent = text;
     }
-    sel.addEventListener('change', showDesc);
+    sel.addEventListener('change', function () {
+        showDesc();
+        previewKey();
+        const opt = sel.selectedOptions[0];
+        if (opt && sel.value && nameInput) {
+            const current = nameInput.value.trim();
+            if (!current || current === '新流程') nameInput.value = (opt.dataset.label || '') + '审批流程';
+        }
+        if (opt && sel.value && descInput && !descInput.value.trim()) {
+            descInput.value = opt.dataset.desc || '';
+        }
+    });
     showDesc();
+    previewKey();
 })();
+
 INITIAL_STEPS.forEach(addStep);
 if (!INITIAL_STEPS.length) addStep();
 renderPreview();

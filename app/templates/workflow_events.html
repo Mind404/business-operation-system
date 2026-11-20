@@ -20,7 +20,7 @@
 .ev-plugin-head { display:flex; align-items:center; gap:10px; padding:12px 16px; background:#f8fafc; border-bottom:1px solid #eef2f7; }
 .ev-plugin-name { font-size:14px; font-weight:600; color:#0f172a; }
 .ev-plugin-id { font-size:12px; color:#94a3b8; }
-.ev-row { display:grid; grid-template-columns:300px 26px 1fr; gap:10px; padding:14px 16px; border-bottom:1px solid #f1f5f9; align-items:center; }
+.ev-row { display:grid; grid-template-columns:360px 20px 1fr; gap:10px; padding:14px 16px; border-bottom:1px solid #f1f5f9; align-items:center; }
 .ev-row:last-child { border-bottom:none; }
 .ev-node { display:flex; align-items:flex-start; gap:10px; }
 .ev-icon { width:30px; height:30px; border-radius:8px; background:#eef2ff; color:#4f46e5; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; }
@@ -62,6 +62,10 @@
             <span class="ev-step">② 在这里选择节点并绑定流程</span><span class="ev-arrow">→</span>
             <span class="ev-step">③ 业务人员在工作台一键发起 / 系统自动发起</span>
         </div>
+        <div style="margin-top:10px;">
+            <a class="mini" href="{{ url_for('workflow.admin_events_guide') }}">📖 节点说明（给搭建者看的业务解释）</a>
+            <a class="mini" href="{{ url_for('workflow.admin_definition_new') }}">＋ 新建流程模板</a>
+        </div>
     </div>
 
     <div class="ev-sum">
@@ -85,6 +89,12 @@
                     <div class="ev-label">{{ e.label }}</div>
                     <div class="ev-key">{{ e.key }}</div>
                     {% if e.description %}<div class="ev-desc">{{ e.description }}</div>{% endif %}
+                    {% if e.context_fields %}
+                    <div class="ev-desc">携带数据：{% for f in e.context_fields %}{{ f.label }}（{{ f.key }}）{% if not loop.last %}、{% endif %}{% endfor %}</div>
+                    {% endif %}
+                    {% if e.default_steps %}
+                    <div class="ev-desc">推荐审批链：{% for s in e.default_steps %}{{ s.name }}{% if not loop.last %} → {% endif %}{% endfor %}</div>
+                    {% endif %}
                 </div>
             </div>
             <div class="ev-link-arrow">→</div>

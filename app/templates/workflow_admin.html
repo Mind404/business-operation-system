@@ -5,6 +5,7 @@
 <a class="btn btn-outline btn-sm" href="{{ url_for('index') }}">返回工作台</a>
 <a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_audit_csv') }}">导出审计 CSV</a>
 <a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_events') }}">⚡ 业务状态变更节点</a>
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_events_guide') }}">📖 节点说明</a>
 <a class="btn btn-primary btn-sm" href="{{ url_for('workflow.admin_definition_new') }}">＋ 新建流程模板</a>
 {% endblock %}
 {% block content %}
