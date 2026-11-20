@@ -115,6 +115,8 @@ MIGRATIONS = [
     (8, 'v12.4.5: plugin_tables 表名登记（统一建表入口 + 撞名自动分配）', None),
     # v9: v12.5.17 用户管理 —— users 加 deleted 列（删除用户=软删标记，列表隐藏/禁登录，历史归属保留）
     (9, 'v12.5.17: users.deleted 软删标记', None),
+    # v10: v13.6.2 统一审批出口 —— 删除空置的 tasks / approval_requests 遗留表
+    (10, 'v13.6.2: 删除 tasks / approval_requests 遗留表', None),
 ]
 
 
@@ -233,6 +235,10 @@ def run_migrations():
                 created_at TEXT DEFAULT (datetime('now','localtime')),
                 UNIQUE (plugin_id, logical_name),
                 UNIQUE (actual_name))''')
+        elif ver == 10:
+            # v13.6.2：审批统一走流程引擎，删除空置遗留表；新库 schema.sql 也不再创建
+            db.execute('DROP TABLE IF EXISTS approval_requests')
+            db.execute('DROP TABLE IF EXISTS tasks')
         elif ver == 9:
             # v12.5.17 用户管理：users 加 deleted 软删标记（删除用户=隐藏列表+禁登录，保留历史归属）
             ucols = [r[1] for r in db.execute('PRAGMA table_info(users)').fetchall()]

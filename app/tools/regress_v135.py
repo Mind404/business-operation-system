@@ -105,7 +105,7 @@ def main():
 
     # ---------- 虚拟数据：清空后重建，保证断言可复现 ----------
     for t in ('version_plan_demands', 'version_plan_versions', 'version_plan_releases',
-              'version_plan_checks', 'version_plan_signoffs', 'version_plan_items',
+              'version_plan_checks', 'version_plan_items',
               'version_plan_trains', 'version_plan_logs', 'version_plan_notices'):
         vp.execute('DELETE FROM ' + t)
     vp.execute('DELETE FROM version_plan_products')
@@ -219,7 +219,7 @@ def main():
     r = admin.get('/version_plan/versions/1.2.0?product=P1')
     body = r.get_data(as_text=True)
     check('详情页展示流程托管提示', r.status_code == 200 and '流程引擎统一管理' in body)
-    check('详情页托管时不再渲染签核卡片', '不再在业务页重复签核' in body)
+    check('详情页不再渲染签核表单', '发布审批统一在「流程中心」完成' in body and 'name="verdict"' not in body)
     r = admin.get('/version_plan/versions/1.1.0?product=P1')
     check('冻结版本详情提示审批托管', '流程引擎' in r.get_data(as_text=True))
 
@@ -389,7 +389,7 @@ def main():
     ins = insts(main, 'WBS-P%d' % pid)
     check('项目创建自动发起流程', bool(ins) and ins[0]['status'] == 'running')
     r = admin.post('/wbs/%d/approve' % pid, data={'action': 'approve'})
-    check('托管后本地审批入口被拒绝', r.status_code in (302, 403) and
+    check('本地审批入口已删除', r.status_code == 404 and
           main.execute('SELECT approval_status FROM wbs_projects WHERE id=?', (pid,)).fetchone()[0] == '待审批')
     rounds = approve_all(main, ins[0]['id'])
     check('项目审批链完成', rounds >= 2, rounds)
@@ -408,7 +408,7 @@ def main():
     ins = insts(main, 'WBS-T%d' % tid)
     check('任务创建自动发起流程', bool(ins) and ins[0]['status'] == 'running')
     r = admin.post('/wbs/project/%d/tasks/approve' % pid, data={'action': 'approve'})
-    check('托管后批量审批被拒绝', r.status_code == 403)
+    check('批量审批入口已删除', r.status_code == 404)
     approve_all(main, ins[0]['id'])
     check('任务审批写回「已通过」',
           main.execute('SELECT approval_status FROM wbs_tasks WHERE id=?', (tid,)).fetchone()[0] == '已通过')

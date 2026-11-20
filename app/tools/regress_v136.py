@@ -88,9 +88,10 @@ def main():
         maindb.execute("INSERT INTO wbs_tasks(project_id,wbs_code,name,owner,status,approval_status,"
                        "plan_end,progress) VALUES(?,?,?,?,?,?,?,?)",
                        (pid, code, name, owner, status, '已通过', due, 10))
-    # 旧 tasks 表数据不得再进工作台
-    maindb.execute("INSERT INTO tasks(title,assignee,status,priority,due_date,created_at) "
-                   "VALUES('旧任务不应显示','wbtester','待处理','高','2026-11-21','2026-11-20')")
+    # 遗留 tasks 表应已在迁移中删除
+    old_tables = {r[0] for r in maindb.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check('遗留 tasks/approval_requests 表已删除',
+          'tasks' not in old_tables and 'approval_requests' not in old_tables)
     maindb.commit()
 
     # ---------- 版本规划：产品负责人用账号/姓名，版本待发布 ----------
@@ -180,7 +181,6 @@ def main():
     check('页面有插件通知模块', '插件通知' in html)
     check('页面展示关联用户账号', 'wbtester' in html and '待办测试员' in html)
     check('WBS 任务正常展示', '账号负责人任务' in html and '姓名负责人任务' in html)
-    check('旧 tasks 表数据不再展示', '旧任务不应显示' not in html)
     check('版本规划待办正常展示', '版本 1.1.0' in html)
 
     # ---------- 3. 通知：分组、幂等、已读、越权 ----------

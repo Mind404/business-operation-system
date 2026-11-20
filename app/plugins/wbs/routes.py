@@ -553,11 +553,9 @@ def wbs_project_add():
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         is_admin = session.get('user_role') in ('admin', 'platform_admin')
         approval_status = '已通过' if is_admin else '待审批'
-        approval_managed = (not is_admin) and _wf_managed('wbs.project.created')
-        approver = '' if (is_admin or approval_managed) else (request.form.get('approver') or '').strip()
-        # v12.5.26 漏洞修复：普通用户提交审批必须选择审批人（托管给流程引擎后不再要求）
-        if not is_admin and not approval_managed and not approver:
-            flash('请选择审批管理员', 'error')
+        # v13.6.2：审批统一走流程引擎，不再在业务表单里指定审批人
+        if not is_admin and not _wf_managed('wbs.project.created'):
+            flash('项目审批流程未配置或已停用，请联系管理员在「流程中心」启用后再提交。', 'error')
             return redirect(url_for('wbs.wbs_projects'))
         # v12.5.26 漏洞修复：日期格式强校验（YYYY-MM-DD 且为真实日期）
         for f in ('start_date', 'end_date'):
@@ -574,7 +572,7 @@ def wbs_project_add():
             VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (request.form.get('name',''), request.form.get('description',''), owner, participants,
              request.form.get('start_date',''), request.form.get('end_date',''),
-             request.form.get('status','进行中'), approver, approval_status, now, now))
+             request.form.get('status','进行中'), '', approval_status, now, now))
         pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
         db.commit()
         log_operation('WBS', '新建项目', request.form.get('name',''), session.get('username','admin'))
@@ -585,17 +583,13 @@ def wbs_project_add():
                               title='项目「%s」创建' % request.form.get('name', ''),
                               context={'name': request.form.get('name', ''), 'owner': owner,
                                        'approval_status': approval_status, 'project_id': pid},
-                              record_type='project', record_id=pid, start_now=approval_managed)
-            if approval_managed and not wf_res:
+                              record_type='project', record_id=pid, start_now=True)
+            if not wf_res:
                 flash('项目已保存，但流程发起失败；请联系管理员在流程中心补发起。', 'warning')
         if is_admin:
             return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-        elif approval_managed:
-            flash('项目已提交，审批已在流程中心发起，通过后自动写回项目状态。', 'success')
-            return redirect(url_for('wbs.wbs_projects'))
-        else:
-            flash('项目已提交，等待管理员审批通过后才能导入任务。', 'success')
-            return redirect(url_for('wbs.wbs_projects'))
+        flash('项目已提交，审批已在流程中心发起，通过后自动写回项目状态。', 'success')
+        return redirect(url_for('wbs.wbs_projects'))
     return render_template('wbs_project_form.html', p=None, admins=admins, users=users,
                            can_change_members=True,
                            wf_project_managed=_wf_managed('wbs.project.created'),
@@ -653,31 +647,6 @@ def wbs_project_edit(pid):
                            can_change_members=session.get('user_role') in ('admin', 'platform_admin'))
 
 
-@blueprint.route('/wbs/<int:pid>/approve', methods=['POST'])
-def wbs_project_approve(pid):
-    if session.get('user_role') not in ('admin', 'platform_admin'):
-        flash('只有管理员可以审批项目。', 'error')
-        return redirect(url_for('wbs.wbs_projects'))
-    # v13.5：审批已由流程引擎托管时，禁止在业务页再点一次「通过」
-    if _wf_managed('wbs.project.created'):
-        flash('该项目审批已由流程引擎接管，请在「流程中心」处理，通过后会自动写回项目状态。', 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-    db = get_db()
-    action = request.form.get('action','')
-    status = '已通过' if action == 'approve' else '已驳回'
-    db.execute('UPDATE wbs_projects SET approval_status=?, updated_at=datetime("now","localtime") WHERE id=?', (status, pid))
-    db.commit()
-    log_operation('WBS', '项目审批', f'项目#{pid} → {status}', session.get('username','admin'))
-    _p = db.execute('SELECT name, owner FROM wbs_projects WHERE id=?', (pid,)).fetchone()
-    _emit_wf('wbs.project.approval', business_key='WBS-P%d' % pid,
-             title='项目「%s」审批%s' % (_p['name'] if _p else pid, status),
-             context={'name': _p['name'] if _p else '', 'owner': _p['owner'] if _p else '',
-                      'approval_status': status, 'project_id': pid},
-             record_type='project', record_id=pid)
-    flash(f'项目已{status}。', 'success')
-    return redirect(url_for('wbs.wbs_projects'))
-
-
 @blueprint.route('/wbs/<int:pid>/resubmit', methods=['POST'])
 def wbs_project_resubmit(pid):
     """普通用户：项目被驳回后重新提交审批"""
@@ -692,6 +661,8 @@ def wbs_project_resubmit(pid):
         return jsonify({'ok': False, 'msg': '只有项目成员可以重新提交'}), 403
     if p['approval_status'] != '已驳回':
         return jsonify({'ok': False, 'msg': '只有被驳回的项目可以重新提交'}), 400
+    if not _wf_managed('wbs.project.created'):
+        return jsonify({'ok': False, 'msg': '审批流程未配置，无法在业务页重新提交，请联系管理员在流程中心启用'}), 409
     db.execute('''UPDATE wbs_projects SET approval_status='待审批', updated_at=datetime("now","localtime") WHERE id=?''', (pid,))
     db.commit()
     log_operation('WBS', '重新提交', f'项目#{pid} 重新提交审批', session.get('username','admin'))
@@ -1608,24 +1579,6 @@ def wbs_task_quickadd(pid):
     return jsonify({'ok': True, 'tid': new_id, 'pending': (approval == '待审批')})
 
 
-@blueprint.route('/wbs/project/<int:pid>/tasks/approve', methods=['POST'])
-def wbs_project_tasks_approve(pid):
-    """管理员批量审批整个项目下所有待审批任务"""
-    if session.get('user_role') not in ('admin', 'platform_admin'):
-        return jsonify({'ok': False, 'msg': '无权限'}), 403
-    # v13.5：任务审批已托管给流程引擎时，不允许业务页批量放行
-    if _wf_managed('wbs.task.created'):
-        return jsonify({'ok': False,
-                        'msg': '任务审批已由流程引擎接管，请在流程中心逐条审批'}), 403
-    db = get_db()
-    action = request.form.get('action','')
-    status = '已通过' if action == 'approve' else '已驳回'
-    cur = db.execute('UPDATE wbs_tasks SET approval_status=? WHERE project_id=? AND approval_status=?',
-                     (status, pid, '待审批'))
-    db.commit()
-    return jsonify({'ok': True, 'count': cur.rowcount})
-
-
 @blueprint.route('/wbs/project/<int:pid>/tasks/resubmit', methods=['POST'])
 def wbs_project_tasks_resubmit(pid):
     """普通用户：任务被驳回后，一键重新提交本项目下所有已驳回任务，进入待审批"""
@@ -1638,7 +1591,9 @@ def wbs_project_tasks_resubmit(pid):
                      (pid,))
     db.commit()
     # v13.5：托管审批时，逐条重新发起流程，否则任务会永远停在待审批
-    if rows and _wf_managed('wbs.task.created'):
+    if rows and not _wf_managed('wbs.task.created'):
+        return jsonify({'ok': False, 'msg': '任务审批流程未配置，无法在业务页重新提交'}), 409
+    if rows:
         proj = db.execute('SELECT name FROM wbs_projects WHERE id=?', (pid,)).fetchone()
         for r in rows:
             _emit_wf('wbs.task.created', business_key='WBS-T%d' % r['id'],

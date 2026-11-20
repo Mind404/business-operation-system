@@ -22,26 +22,6 @@ CREATE TABLE IF NOT EXISTS operation_logs (
     operator TEXT DEFAULT '系统',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_no TEXT UNIQUE,
-    title TEXT NOT NULL,
-    description TEXT,
-    module TEXT,
-    source_type TEXT DEFAULT '手动创建',
-    source_id INTEGER,
-    assignee TEXT,
-    creator TEXT,
-    priority TEXT DEFAULT '中',
-    status TEXT DEFAULT '待处理',
-    due_date TEXT,
-    expected_result TEXT,
-    actual_result TEXT,
-    progress INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    updated_at TEXT DEFAULT (datetime('now','localtime')),
-    completed_at TEXT
-);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -63,23 +43,6 @@ CREATE TABLE IF NOT EXISTS user_plugins (
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY, note TEXT, applied_at TEXT
 );
-
--- 统一审批表（方案A：其他插件第一阶段统一走此表，WBS 保持现有审批）
-CREATE TABLE IF NOT EXISTS approval_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    plugin_id TEXT NOT NULL,
-    record_type TEXT NOT NULL,
-    record_id INTEGER NOT NULL,
-    requester_id INTEGER NOT NULL,
-    action TEXT NOT NULL,
-    payload TEXT,
-    status TEXT DEFAULT '待审批',
-    reviewer_id INTEGER,
-    review_comment TEXT,
-    created_at TEXT DEFAULT (datetime('now','localtime')),
-    reviewed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_approval_status ON approval_requests(status);
 
 -- WBS 插件表（含审批字段：approval_status/approver）
 CREATE TABLE IF NOT EXISTS wbs_projects (

@@ -23,8 +23,6 @@ from .routes import (PID, _can_edit, _deny, _ensure_product, _log, _now,
 LOCK = threading.RLock()
 
 TRAIN_STATUS = ['计划', '停发', '已转版本', '已发布']
-SIGN_ROLES = ['产品负责人', '测试负责人', '发布经理']
-CUSTOM_ROLE = '客户代表'
 CHECK_ITEMS = [
     '范围完成 100%（装车需求全部交付）',
     '阻断/严重缺陷 = 0',
@@ -555,36 +553,18 @@ def ensure_checks(db, no, prod):
     db.commit()
 
 
-def ensure_signoffs(db, no, prod, vtype):
-    roles = SIGN_ROLES + ([CUSTOM_ROLE] if vtype == '客户定制' else [])
-    for role in roles:
-        if not db.execute(f'SELECT 1 FROM {_t("version_plan_signoffs")} WHERE version_no=? AND product_code=? '
-                          'AND role=?', (no, prod or '', role)).fetchone():
-            db.execute(f'INSERT INTO {_t("version_plan_signoffs")} (version_no, product_code, role, verdict) '
-                       'VALUES (?,?,?,?)', (no, prod or '', role, ''))
-    db.commit()
-    return roles
-
-
 def release_gate(db, no, prod, vtype):
-    """发布门禁：7 项清单全通过 + 应签角色全部同意，缺一不可（按 产品+版本号 双键）。"""
+    """发布门禁：仅 7 项业务确认清单；发布审批统一由流程引擎承接。"""
     ensure_checks(db, no, prod)
-    roles = ensure_signoffs(db, no, prod, vtype)
     checks = [dict(r) for r in db.execute(
         f'SELECT * FROM {_t("version_plan_checks")} WHERE version_no=? AND product_code=? ORDER BY item_no',
         (no, prod or '')).fetchall()]
-    signs = {r['role']: dict(r) for r in db.execute(
-        f'SELECT * FROM {_t("version_plan_signoffs")} WHERE version_no=? AND product_code=?',
-        (no, prod or '')).fetchall()}
     reasons = []
     bad = [c for c in checks if (c['result'] or '') != '通过']
     if bad:
         reasons.append(f'确认清单 {len(checks) - len(bad)}/{len(checks)} 通过，缺：' +
                        '、'.join(f'#{c["item_no"]}' for c in bad))
-    miss = [r for r in roles if (signs.get(r, {}).get('verdict') or '') != '同意']
-    if miss:
-        reasons.append('未签核：' + '、'.join(miss))
-    return {'ok': not reasons, 'reasons': reasons, 'checks': checks, 'signs': signs, 'roles': roles}
+    return {'ok': not reasons, 'reasons': reasons, 'checks': checks, 'signs': {}, 'roles': []}
 
 
 @blueprint.route('/version_plan/versions/<no>/check', methods=['POST'])
@@ -609,44 +589,6 @@ def version_check(no):
     _ulog('版本', no, '确认清单', f'#{item_no} → {result}')
     flash(f'{no} 确认项 #{item_no} 已保存为「{result}」', 'success')
     return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
-
-
-@blueprint.route('/version_plan/versions/<no>/sign', methods=['POST'])
-def version_sign(no):
-    """四方签核：产品/测试/发布经理（定制版加客户代表），可同意或驳回。"""
-    if not _can_edit():
-        return _deny()
-    db = get_db_safe()
-    prod = (request.form.get('product') or '').strip()
-    v = _vrow(db, no, prod)
-    if not v:
-        flash('版本不存在', 'error')
-        return redirect(url_for('version_plan.versions'))
-    # v13.5：发布审批已托管时，签核只在流程引擎做，防止同一版本被签两次
-    try:
-        from .routes import _wf_managed
-        if _wf_managed('version_plan.version.release'):
-            flash('该版本的发布审批已由流程引擎接管，请在「流程中心」审批；业务页签核已停用。', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
-    except Exception:
-        pass
-    roles = ensure_signoffs(db, no, v['product_code'], v['vtype'])
-    role = (request.form.get('role') or '').strip()
-    if role not in roles:
-        flash('签核角色不在本版本应签范围内', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
-    verdict = (request.form.get('verdict') or '').strip()
-    if verdict not in ('同意', '驳回'):
-        flash('请选择同意或驳回', 'error')
-        return redirect(url_for('version_plan.version_detail', no=no))
-    db.execute(f'UPDATE {_t("version_plan_signoffs")} SET verdict=?, comment=?, signed_at=? '
-               'WHERE version_no=? AND product_code=? AND role=?',
-               (verdict, (request.form.get('comment') or '').strip(), _now(), no, v['product_code'] or '', role))
-    db.commit()
-    _ulog('版本', no, '签核', f'{role}：{verdict}')
-    _log('版本签核', f'{no} {role} {verdict}')
-    flash(f'{no} {role} 已{verdict}', 'success' if verdict == '同意' else 'warning')
-    return redirect(url_for('version_plan.version_detail', no=no))
 
 
 # ------------------------------------------------------------- 客户回告记录

@@ -194,43 +194,6 @@ def start():
     return render_template('workflow_start.html', definitions=defs, def_key=def_key, error=error)
 
 
-@workflow_bp.route('/start/wbs/project/<int:pid>', methods=['POST'])
-def start_wbs_project(pid):
-    user = _current_user()
-    db = _db()
-    p = db.execute('SELECT * FROM wbs_projects WHERE id=?', (pid,)).fetchone()
-    if not p:
-        flash('WBS 项目不存在', 'error')
-        return redirect(url_for('wbs.wbs_projects'))
-    try:
-        open_inst = db.execute(
-            "SELECT id FROM wf_instances WHERE business_key=? AND status IN ('running','waiting','error') "
-            "ORDER BY created_at DESC LIMIT 1", ('WBS-PROJECT-%s' % pid,)).fetchone()
-        if open_inst:
-            flash('该项目已有进行中的平台审批流', 'success')
-            return redirect(url_for('workflow.instance', instance_id=open_inst['id']))
-        old_status = p['approval_status']
-        db.execute("UPDATE wbs_projects SET approval_status='待审批', updated_at=datetime('now','localtime') WHERE id=?", (pid,))
-        db.commit()
-        inst = wf.start_instance(
-            db, 'wbs_project_approval', plugin_id='wbs', record_type='project', record_id=str(pid),
-            business_key='WBS-PROJECT-%s' % pid, title=p['name'] or ('WBS 项目 #%s' % pid),
-            context={'owner': p['owner'] or '', 'participants': p['participants'] or '',
-                     'project_name': p['name'] or '', 'current_status': p['approval_status'] or ''},
-            initiator_id=user['id'], initiator_name=user['name'])
-        flash('已发起平台审批流', 'success')
-        return redirect(url_for('workflow.instance', instance_id=inst['id']))
-    except Exception as e:
-        try:
-            db.execute("UPDATE wbs_projects SET approval_status=?, updated_at=datetime('now','localtime') WHERE id=?",
-                       (old_status, pid))
-            db.commit()
-        except Exception:
-            pass
-        flash('发起失败：%s' % e, 'error')
-        return redirect(url_for('wbs.wbs_project_detail', pid=pid))
-
-
 @workflow_bp.route('/start/wbs/task/<int:tid>', methods=['POST'])
 def start_wbs_task(tid):
     user = _current_user()

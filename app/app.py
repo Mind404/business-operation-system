@@ -2176,8 +2176,7 @@ def profile():
     # v10.5.0：订阅机制下线，个人中心改为展示账号信息 + 常用功能（WBS）
     user_info = db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
     todo_count = 0
-    # v13.0.0.13：原查询用的 assignee_id 在 tasks 表里并不存在，异常被静默吞掉，
-    # 这里始终显示 0。改为按 username 走跨插件待办契约，口径与工作台一致。
+    # 按 username 走跨插件待办契约，口径与工作台一致。
     try:
         todo_count = sum(len(g['items']) for g in
                          plugin_system.collect_my_todos(db, session.get('username', '')))
@@ -2314,17 +2313,6 @@ def can_write(module_prefix):
 def is_admin():
     """当前用户是否为管理员"""
     return get_current_role() == 'admin'
-
-
-def submit_status_change(plugin_id, record_type, record_id, new_status, payload_extra=None):
-    """状态类变更统一入口（v10.3.6 暂下线审批：所有角色直接生效）
-
-    原审批流程：普通用户写入 approval_requests 待管理员审批；
-    用户反馈统一审批中心未关联使用，暂恢复直接变更模式。
-    审批相关代码（plugin_system.submit_approval / approval_center / approval_review）
-    均保留，日后要恢复审批只需改回本函数即可。
-    """
-    return 'direct', None
 
 
 @app.context_processor

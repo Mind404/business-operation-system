@@ -18,8 +18,7 @@ PLUGINS = [
     {'id': 'profile',      'name': '个人中心',         'icon': '👤', 'group': '核心', 'core': 1,
      'desc': '我的信息、我的待办、修改密码', 'endpoint': 'profile', 'nav_path': '/profile'},
     {'id': 'workbench',    'name': '我的工作台',       'icon': '📊', 'group': '核心', 'core': 1,
-     'desc': '系统首页：按插件聚合我的待办、审批与通知', 'endpoint': 'index', 'nav_path': '/',
-     'tables': ['tasks']},
+     'desc': '系统首页：按插件聚合我的待办、审批与通知', 'endpoint': 'index', 'nav_path': '/'},
 
     # --- 唯一业务插件：WBS（所有登录用户可用） ---
     {'id': 'wbs',          'name': 'WBS计划管理',      'icon': '🗓️', 'group': '业务', 'core': 0,
@@ -622,32 +621,6 @@ def log_operation(module, action, detail, operator='系统'):
         pass
 
 
-def submit_approval(plugin_id, record_type, record_id, requester_id, action, payload=None):
-    """提交审批申请（方案A统一审批表；WBS 暂保持自身审批流程）"""
-    db = get_db()
-    cur = db.execute(
-        'INSERT INTO approval_requests (plugin_id, record_type, record_id, requester_id, action, payload) '
-        'VALUES (?,?,?,?,?,?)',
-        (plugin_id, record_type, record_id, requester_id, action,
-         json.dumps(payload, ensure_ascii=False) if payload else None))
-    db.commit()
-    return cur.lastrowid
-
-
-def review_approval(req_id, reviewer_id, approve, comment=''):
-    """审批统一入口：approve=True 通过 / False 驳回"""
-    db = get_db()
-    row = db.execute('SELECT * FROM approval_requests WHERE id=?', (req_id,)).fetchone()
-    if not row or row['status'] != '待审批':
-        return False, '审批申请不存在或已处理'
-    status = '已通过' if approve else '已驳回'
-    db.execute('UPDATE approval_requests SET status=?, reviewer_id=?, review_comment=?, reviewed_at=? WHERE id=?',
-               (status, reviewer_id, comment, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), req_id))
-    db.commit()
-    log_operation(row['plugin_id'], '审批', f"#{req_id} {row['record_type']} → {status}{('：'+comment) if comment else ''}", '')
-    return True, status
-
-
 def toggle_plugin(user_id, plugin_id):
     """订阅/取消订阅切换。核心插件不可取消。"""
     db = get_db()
@@ -1021,7 +994,7 @@ _LEGACY_TABLE_PREFIXES = ('wbs_', 'reqcollect_', 'test_', 'ai_', 'production_', 
 # 平台系统表（非插件业务表）
 _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'user_plugins', 'operation_logs', 'ai_providers',
-                           'ai_chat_logs', 'approval_requests',
+                           'ai_chat_logs',
                            # v12.7.10.10 平台自身新表（非插件建表，无需登记 plugin_tables）
                            'user_sessions', 'ui_prefs',
                            # v13.1-v13.6 流程内核表（平台自身建表，非插件业务表）
@@ -1029,8 +1002,8 @@ _PLATFORM_SYSTEM_TABLES = {'schema_version', 'plugin_registry', 'plugin_tables',
                            'wf_tasks', 'wf_events', 'wf_subscriptions', 'wf_outbox',
                            'wf_triggers', 'wf_trigger_queue', 'wf_event_log', 'wf_notifications'}
 # 平台早期无前缀遗留业务表（白名单豁免；v12.4.8 已删除 42 张 8 模块时代业务表，
-# 仅剩 users/tasks 两张核心在用：登录与工作台待办）
-_PLATFORM_LEGACY_TABLES = {'users', 'tasks'}
+# 仅剩 users 核心在用：登录与账号身份）
+_PLATFORM_LEGACY_TABLES = {'users'}
 
 
 def _allocate_table_name(db, desired_name):

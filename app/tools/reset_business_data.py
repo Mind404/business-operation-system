@@ -15,7 +15,7 @@ MAIN_KEEP = {
     'user_plugins',
 }
 MAIN_CLEAR = {
-    'operation_logs', 'user_sessions', 'tasks', 'approval_requests',
+    'operation_logs', 'user_sessions',
     'wbs_projects', 'wbs_tasks', 'ai_chat_logs',
 }
 WF_CLEAR = {

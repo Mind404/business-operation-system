@@ -35,7 +35,6 @@ L_ITEMS = 'version_plan_items'
 L_LOADCHG = 'version_plan_load_changes'
 L_ASSESS = 'version_plan_assessments'
 L_CHECKS = 'version_plan_checks'
-L_SIGNOFFS = 'version_plan_signoffs'
 L_NOTICES = 'version_plan_notices'
 L_CUSTPROD = 'version_plan_customer_products'
 
@@ -203,14 +202,6 @@ DDL = [
         evidence TEXT DEFAULT '',
         checked_by TEXT DEFAULT '',
         checked_at TEXT DEFAULT '')''' ),
-    (L_SIGNOFFS, L_SIGNOFFS, '''CREATE TABLE IF NOT EXISTS version_plan_signoffs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        version_no TEXT NOT NULL,
-        product_code TEXT DEFAULT '',
-        role TEXT NOT NULL,
-        verdict TEXT DEFAULT '',
-        comment TEXT DEFAULT '',
-        signed_at TEXT DEFAULT '')''' ),
     (L_NOTICES, L_NOTICES, '''CREATE TABLE IF NOT EXISTS version_plan_notices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         customer_id INTEGER DEFAULT 0,
@@ -426,7 +417,7 @@ def _delete_product_data(db, code):
     _del(L_LOADCHG, 'to_train', trains)
     _del(L_ASSESS, 'demand_code', demands)
 
-    for table in (L_CHECKS, L_SIGNOFFS, L_RELEASES):
+    for table in (L_CHECKS, L_RELEASES):
         if versions:
             ph = ','.join('?' for _ in versions)
             db.execute(
@@ -455,7 +446,7 @@ def _delete_product_data(db, code):
 
 def _clear_business_data(db):
     """清空业务过程数据，保留产品档案、模块字典与操作留痕。"""
-    for table in (L_ITEMS, L_LOADCHG, L_ASSESS, L_CHECKS, L_SIGNOFFS, L_RELEASES,
+    for table in (L_ITEMS, L_LOADCHG, L_ASSESS, L_CHECKS, L_RELEASES,
                   L_NOTICES, L_CUSTPROD, L_DEMANDS, L_VERSIONS, L_TRAINS, L_CUSTOMERS):
         db.execute(f'DELETE FROM {_t(table)}')
 
@@ -1617,9 +1608,8 @@ def version_detail(no):
                       (no,)).fetchall()
     frozen = v['status'] == '已冻结'
     can_edit = _can_edit() and v['status'] in ('规划中', '已冻结')
-    from .trains import CHECK_ITEMS, ensure_checks, ensure_signoffs, release_gate
+    from .trains import CHECK_ITEMS, ensure_checks, release_gate
     ensure_checks(db, no, v['product_code'] or '')
-    roles = ensure_signoffs(db, no, v['product_code'] or '', v['vtype'])
     gate = release_gate(db, no, v['product_code'] or '', v['vtype'])
     # v13.5：发布审批托管后，门禁只看 7 项业务确认清单；签核由流程引擎审批节点替代
     wf_release_managed = bool(_wf_managed('version_plan.version.release'))
@@ -1633,8 +1623,8 @@ def version_detail(no):
                               '、'.join('#%s' % c['item_no'] for c in bad)] if bad else []))
     wf_release_inst = _wf_running(no, v['product_code'] or '')
     return render_template('vp_version_detail.html', v=v, ds=ds, pool=pool, customers=customers,
-                           gate=gate, checks=gate['checks'], signs=gate['signs'],
-                           sign_roles=roles, check_items=CHECK_ITEMS,
+                           gate=gate, checks=gate['checks'], signs={},
+                           check_items=CHECK_ITEMS,
                            release=release, logs=logs, frozen=frozen, can_edit=can_edit,
                            prod_map=_product_map(db), prod_name=_product_name(db, v['product_code'] or ''),
                            can_manage=_can_edit(), can_admin=_can_admin(), is_platform=_can_admin(),
@@ -2411,8 +2401,6 @@ OPENAPI_TABLES = {
                'score 加权分；verdict：规划池/挂起/不做'),
     L_CHECKS: ('发布确认清单（7 项）', 'id', 'checked_at',
                '一行=某版本某清单项；version_no+product_code 双键；item_no 1-7；result：pending/通过/不通过；evidence 证据'),
-    L_SIGNOFFS: ('发布签核', 'id', 'signed_at',
-                 '一行=某版本某角色的签核；version_no+product_code 双键；role：产品负责人/测试负责人/发布经理/客户代表；verdict：同意/驳回'),
     L_NOTICES: ('客户回告记录', 'id', 'sent_at',
                 '一行=一次客户回告；customer_name 客户；version_no 回告版本；content 回告正文；sent_at 发送时间'),
     L_CUSTPROD: ('客户-产品版本占用', 'id', 'updated_at',

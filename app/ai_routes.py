@@ -229,7 +229,7 @@ _SAFE_TABLE = re.compile(r'^[A-Za-z0-9_]+$')
 # v12.7.10.10：平台系统表一律不进 AI 上下文（账号密码哈希、登录令牌、审计日志等不得外发）
 _EXCLUDE_TABLES = ('schema_version', 'ai_chat_logs', 'ai_providers', 'ai_conversations',
                    'ai_messages', 'users', 'operation_logs', 'plugin_registry', 'user_plugins',
-                   'user_sessions', 'ui_prefs', 'tasks', 'approval_requests')
+                   'user_sessions', 'ui_prefs')
 
 
 _SEL_STOP = {'合同', '台账', '需求', '任务', '项目', '金额', '客户', '负责人', '状态', '阻塞', '部门',

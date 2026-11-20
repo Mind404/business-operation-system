@@ -237,44 +237,8 @@
 </div>
 
 <div class="vp-card">
-  <h3>🖋️ 发布签核（{{ sign_roles | length }} 方）
-    {% if not wf_release_managed %}
-    <span class="vp-tag {{ 't-done' if signs.values() | selectattr('verdict','equalto','同意') | list | length == sign_roles | length else 't-wait' }}">
-      {{ signs.values() | selectattr('verdict','equalto','同意') | list | length }}/{{ sign_roles | length }}
-    </span>
-    {% endif %}
-  </h3>
-  {% if wf_release_managed %}
-  <p class="vp-muted" style="margin:0">发布签核已由流程引擎的审批节点承接，不再在业务页重复签核。请在「流程中心」完成发布审批；通过后系统自动把版本置为「已发布」并生成 Release Note。</p>
-  {% else %}
-  <p class="vp-muted" style="margin-bottom:10px">产品负责人 · 测试负责人 · 发布经理{% if v['vtype'] == '客户定制' %} · 客户代表（定制版必签）{% endif %}</p>
-  <div class="vp-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
-    {% for role in sign_roles %}
-    {% set sg = signs.get(role, {}) %}
-    <div class="vp-prod-card">
-      <div class="vp-prod-top">
-        <div class="vp-prod-name" style="font-size:14px">{{ role }}</div>
-        <span class="vp-tag {{ 't-done' if sg.get('verdict') == '同意' else ('t-red' if sg.get('verdict') == '驳回' else 't-wait') }}">
-          {{ sg.get('verdict') or '待签' }}
-        </span>
-      </div>
-      {% if sg.get('comment') %}<div class="vp-muted" style="margin:6px 0">意见：{{ sg['comment'] }}</div>{% endif %}
-      {% if sg.get('signed_at') %}<div class="vp-muted" style="font-size:12px">签于 {{ sg['signed_at'] }}</div>{% endif %}
-      {% if can_manage and v['status'] != '已发布' %}
-      <form method="post" action="{{ url_for('version_plan.version_sign', no=v['version_no']) }}" style="margin-top:8px">
-        <input type="hidden" name="product" value="{{ v['product_code'] or '' }}">
-        <input type="hidden" name="role" value="{{ role }}">
-        <div class="vp-inline" style="gap:6px">
-          <input class="vp-input" name="comment" placeholder="签核意见" style="flex:1" value="">
-          <button class="vp-btn vp-btn-sm vp-btn-green" name="verdict" value="同意" type="submit">同意</button>
-          <button class="vp-btn vp-btn-sm vp-btn-danger" name="verdict" value="驳回" type="submit">驳回</button>
-        </div>
-      </form>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
+  <h3>🖋️ 发布审批</h3>
+  <p class="vp-muted" style="margin:0">发布审批统一在「流程中心」完成，业务页不再重复签核；审批通过后系统自动把版本置为「已发布」并生成 Release Note。发布前仍需完成 7 项确认清单。</p>
 </div>
 
 <div class="vp-card">

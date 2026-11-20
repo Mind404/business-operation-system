@@ -97,24 +97,10 @@
     </div>
 
     {% if not p and current_role not in ('admin','platform_admin') %}
-      {% if wf_project_managed %}
     <div style="margin-bottom:20px;padding:14px;background:#eef7ff;border:1px solid #bfdcff;border-radius:6px;">
         <div style="font-size:13px;color:#1d4ed8;font-weight:600;margin-bottom:4px;">🔐 审批由流程引擎统一管理</div>
-        <div style="font-size:13px;color:#475569;">提交后流程会自动进入你所在部门对应的审批链，无需在这里指定审批人；审批通过后项目状态自动变为「已通过」。</div>
+        <div style="font-size:13px;color:#475569;">提交后流程会自动进入对应的审批链，无需指定审批人；审批通过后项目状态自动变为「已通过」。</div>
     </div>
-      {% else %}
-    <div style="margin-bottom:20px;padding:14px;background:#fff8e6;border:1px solid #ffe0a0;border-radius:6px;">
-        <label style="display:block;font-size:13px;color:#856404;margin-bottom:8px;font-weight:500;">
-            ⚠️ 普通用户创建项目需管理员审批。审批通过后才能导入WBS任务。请选择审批人：
-        </label>
-        <select name="approver" required style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;">
-            <option value="">— 请选择审批管理员 —</option>
-            {% for a in admins %}
-            <option value="{{ a.username }}">{{ a.display_name or a.username }}（{{ a.username }}）</option>
-            {% endfor %}
-        </select>
-    </div>
-      {% endif %}
     {% endif %}
 
     <!-- 按钮：统一规格，同一行右对齐 -->

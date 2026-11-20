@@ -64,13 +64,8 @@
             <td style="padding:10px;">{{ r.status }}</td>
             <td style="padding:10px;">
                 <a href="{{ url_for('wbs.wbs_project_detail', pid=r.id) }}" style="color:#2563eb;text-decoration:none;margin-right:10px;">进入 →</a>
-                {% if current_role in ('admin','platform_admin') and r.approval_status == '待审批' and not wf_project_managed %}
-                <form method="post" action="{{ url_for('wbs.wbs_project_approve', pid=r.id) }}" style="display:inline;">
-                    <button name="action" value="approve" class="wbs-btn wbs-btn-sm wbs-btn-success">通过</button>
-                    <button name="action" value="reject" class="wbs-btn wbs-btn-sm wbs-btn-danger-solid" style="margin-left:6px;">驳回</button>
-                </form>
-                {% elif r.approval_status == '待审批' and wf_project_managed %}
-                <span style="font-size:12px;color:#b45309;" title="审批已由流程引擎托管，业务页不再重复审批">流程审批中</span>
+                {% if r.approval_status == '待审批' %}
+                <span style="font-size:12px;color:#b45309;" title="审批统一在流程中心处理，业务页不再重复审批">流程审批中</span>
                 {% elif current_role not in ('admin','platform_admin') and r.approval_status == '已驳回' %}
                 <form method="post" action="{{ url_for('wbs.wbs_project_resubmit', pid=r.id) }}" style="display:inline;">
                     <button class="wbs-btn wbs-btn-sm wbs-btn-primary">重新提交审批</button>

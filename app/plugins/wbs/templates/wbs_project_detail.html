@@ -56,25 +56,11 @@
         {% endif %}
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_template') }}">下载模板</a>
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_export', pid=p.id) }}">导出Excel</a>
-        {% if current_role == 'platform_admin' %}
-        <form method="post" action="{{ url_for('workflow.start_wbs_project', pid=p.id) }}" style="display:inline;margin:0;"
-              onsubmit="return confirm('发起平台审批流？审批通过后会回写本项目的审批状态。');">
-            <button type="submit" class="wbs-tb-btn" style="background:#eef4ff;border-color:#b8d4fe;color:#1d4ed8;">平台审批流</button>
-        </form>
-        {% endif %}
         <span style="font-size:12px;color:#888;white-space:nowrap;"
               title="系统所有WBS附件占用的磁盘空间（单文件上限50MB，单任务最多10个附件）">📎 {{ attach_count }} · {{ attach_mb }}MB</span>
         {% if current_role in ('admin','platform_admin') %}
         <span style="font-size:12px;color:#6b7280;white-space:nowrap;cursor:help;border-bottom:1px dashed #cbd5e1;"
               title="模板含状态/进度列；已存在的WBS编号会同步更新，新编号自动新增并自动排序归类。计划开始/结束支持 2026-11-05、2026/11/05、2026.11.05、2026年11月5日 等格式；格式无法识别时整表不导入并提示行号。">ⓘ</span>
-        {% endif %}
-        {% if current_role in ('admin','platform_admin') and pending_count > 0 and not wf_task_managed %}
-        <button type="button" onclick="batchApprove('approve')" style="height:30px;padding:0 12px;background:#28a745;border:1px solid #28a745;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;">
-            ✓ 通过
-        </button>
-        <button type="button" onclick="batchApprove('reject')" style="height:30px;padding:0 12px;background:#dc3545;border:1px solid #dc3545;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;">
-            ✗ 驳回
-        </button>
         {% endif %}
     </div>
     <span class="wbs-tb-sep"></span>
@@ -669,19 +655,6 @@ function doImportNow() {
 function importTipClose() {
     const mask = document.getElementById('importTipMask');
     if (mask) mask.style.display = 'none';
-}
-
-function batchApprove(action) {
-    const tip = action === 'approve' ? '确认通过本项目所有待审批任务？' : '确认驳回本项目所有待审批任务？';
-    if (!confirm(tip)) return;
-    fetch(`/wbs/project/${PID}/tasks/approve`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `action=${action}`
-    }).then(r => r.json()).then(d => {
-        if (d.ok) location.reload();
-        else alert(d.msg || '操作失败');
-    });
 }
 
 function resubmitTasks() {
