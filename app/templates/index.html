@@ -231,60 +231,6 @@
         {% endif %}
     </div>
 
-    <!-- 常用功能 -->
-    <div class="dash-panel">
-        <div class="panel-head">
-            <h3 class="panel-title">⚡ 常用功能</h3>
-        </div>
-        <div class="quick-grid">
-            {% if wbs_on %}
-            <a href="{{ url_for('wbs.wbs_projects') }}" class="quick-item q-blue">
-                <span class="qi-icon">🗓️</span>
-                <span class="qi-text">WBS计划</span>
-            </a>
-            <a href="{{ url_for('wbs.wbs_project_add') }}" class="quick-item q-green">
-                <span class="qi-icon">➕</span>
-                <span class="qi-text">新建项目</span>
-            </a>
-            {% endif %}
-            <a href="{{ url_for('profile') }}" class="quick-item q-orange">
-                <span class="qi-icon">🔑</span>
-                <span class="qi-text">修改密码</span>
-            </a>
-            {% if current_role == 'platform_admin' %}
-            <a href="{{ url_for('admin_users') }}" class="quick-item q-purple">
-                <span class="qi-icon">👥</span>
-                <span class="qi-text">用户管理</span>
-            </a>
-            {% endif %}
-        </div>
-    </div>
-
-    <!-- 最近动态（精简版，仅平台管理员可见 + 完整导出，v12.5.39） -->
-    {% if current_role == 'platform_admin' %}
-    <div class="dash-panel">
-        <div class="panel-head">
-            <h3 class="panel-title">📝 最近动态</h3>
-            <a class="log-export-btn" href="{{ url_for('logs_export') }}" title="导出全部操作日志（Excel）">⬇ 导出全量</a>
-            <button class="log-export-btn log-clear-btn" onclick="clearAllLogs()" title="清空全部动态日志（建议先导出备份）">🗑 清空</button>
-        </div>
-        <div class="activity-compact">
-            {% for log in recent_logs[:6] %}
-            <div class="activity-row">
-                <span class="activity-dot"></span>
-                <div class="activity-row-main">
-                    <span class="activity-who">{{ log.operator }}</span>
-                    <span class="activity-mod">{{ log.module }}</span>
-                    <span class="activity-what">{{ log.action }}：{{ log.detail }}</span>
-                </div>
-                <span class="activity-time">{{ log.created_at[5:16] if log.created_at else '' }}</span>
-            </div>
-            {% else %}
-            <div class="empty-box"><div class="empty-text-lg">暂无操作记录</div></div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}
 
@@ -476,38 +422,6 @@
 .empty-icon-lg { font-size: 36px; margin-bottom: 8px; }
 .empty-text-lg { color: #6b7280; font-size: 13px; margin-bottom: 12px; }
 
-/* 常用功能网格 */
-.quick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.quick-item {
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 14px 8px; border-radius: 10px; text-decoration: none;
-    border: 1px solid #e5e7eb; transition: all 0.15s;
-}
-.quick-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-.qi-icon { font-size: 22px; }
-.qi-text { font-size: 12px; font-weight: 600; color: #374151; }
-.q-blue { background: #eff6ff; border-color: #bfdbfe; }
-.q-green { background: #f0fdf4; border-color: #bbf7d0; }
-.q-orange { background: #fffbeb; border-color: #fde68a; }
-.q-purple { background: #faf5ff; border-color: #e9d5ff; }
-.q-red { background: #fef2f2; border-color: #fecaca; }
-.q-cyan { background: #ecfeff; border-color: #a5f3fc; }
-.q-pink { background: #fdf2f8; border-color: #fbcfe8; }
-
-/* 最近动态紧凑 */
-.activity-compact { display: flex; flex-direction: column; }
-.activity-row {
-    display: flex; align-items: center; gap: 10px; padding: 9px 0;
-    border-bottom: 1px solid #f9fafb;
-}
-.activity-row:last-child { border-bottom: none; }
-.activity-dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
-.activity-row-main { flex: 1; min-width: 0; font-size: 12px; color: #374151; }
-.activity-who { font-weight: 600; color: #111827; }
-.activity-mod { font-size: 10px; background: #f3f4f6; color: #6b7280; padding: 1px 5px; border-radius: 3px; margin: 0 4px; }
-.activity-what { color: #4b5563; }
-.activity-time { font-size: 11px; color: #9ca3af; flex-shrink: 0; }
-
 @media (max-width: 900px) {
     /* 窄屏：筛选项改两列，隐藏项目列，重排列宽 */
     .todo-filters { grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -521,7 +435,6 @@
 
     .kpi-row { grid-template-columns: repeat(2, 1fr); }
     .dash-two-col { grid-template-columns: 1fr; }
-    .quick-grid { grid-template-columns: repeat(2, 1fr); }
     .hero-bar { flex-direction: column; gap: 12px; text-align: center; }
 }
 </style>
@@ -577,15 +490,5 @@ function todoFilter(btn, f) {
     list.classList.add('open');
 }
 
-function clearAllLogs() {
-    if (!confirm('确定清空全部动态日志吗？\n此操作不可恢复，建议先点「导出全量」备份。')) return;
-    fetch('/admin/logs/clear', { method: 'POST' })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-            if (d.ok) { alert(d.msg); location.reload(); }
-            else { alert(d.msg || '清空失败'); }
-        })
-        .catch(function () { alert('清空失败，请重试'); });
-}
 </script>
 {% endblock %}

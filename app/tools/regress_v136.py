@@ -96,6 +96,17 @@ def main():
     # ---------- 版本规划：产品负责人用账号/姓名，版本待发布 ----------
     vpdb = sqlite3.connect(str(plug_dir / 'version_plan.db'))
     vpdb.row_factory = sqlite3.Row
+    # v13.6.1 起生产库默认空数据，回归自建最小产品/版本，避免依赖演示数据
+    if not vpdb.execute("SELECT 1 FROM version_plan_products LIMIT 1").fetchone():
+        vpdb.executemany("INSERT INTO version_plan_products(code,name,owner,status,created_at) "
+                         "VALUES(?,?,?,'启用','2026-11-20')",
+                         [('P1', '车载网关 GW-500', 'wbtester'),
+                          ('P2', 'T-BOX 通信模组', '待办测试员'),
+                          ('P3', '座舱域控 CDC', 'other')])
+    if not vpdb.execute("SELECT 1 FROM version_plan_versions LIMIT 1").fetchone():
+        for code in ('P1', 'P2'):
+            vpdb.execute("INSERT INTO version_plan_versions(version_no,vtype,product_code,status,created_at) "
+                         "VALUES('1.1.0','迭代',?,'测试中','2026-11-20')", (code,))
     vpdb.execute("UPDATE version_plan_products SET owner='wbtester' WHERE code='P1'")
     vpdb.execute("UPDATE version_plan_products SET owner='待办测试员' WHERE code='P2'")
     vpdb.execute("UPDATE version_plan_versions SET status='测试中', release_date='2026-11-25' "

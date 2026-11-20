@@ -2695,8 +2695,6 @@ def index():
         'role': session.get('user_role', ''),
     })
     current_user = identity.get('username') or ''
-    # v12.5.39：最近动态仅平台管理员可见（非 platform_admin 不取数）
-    recent_logs = db.execute('SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 10').fetchall() if session.get('user_role') == 'platform_admin' else []
     todo_groups = []
     notice_groups = []
     unread_notice = 0
@@ -2708,10 +2706,8 @@ def index():
             todo_groups = []
         try:
             import workflow_engine as _wf
-            # 流程待办本身也是一个插件模块，排在最前，保持统一审批入口。
-            wf_modules = _wf.workbench_modules(db, identity)
-            if wf_modules:
-                todo_groups = wf_modules + todo_groups
+            # v13.6.1：流程待办统一在上方「流程与审批」面板展示，
+            # 不再重复塞进插件待办，避免同一批审批出现两个入口。
             notice_groups = _wf.collect_notification_groups(db, identity.get('id'))
             unread_notice = _wf.unread_notification_count(db, identity.get('id'))
             wf_pending = _wf.my_tasks(db, identity.get('id'), session.get('user_role', ''))
@@ -2739,7 +2735,6 @@ def index():
     except Exception:
         wbs_on = True
     return render_template('index.html',
-                           recent_logs=recent_logs,
                            todo_groups=todo_groups,
                            notice_groups=notice_groups, unread_notice=unread_notice,
                            current_user_meta=identity,
