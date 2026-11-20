@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+{% block title %}流程管理{% endblock %}
+{% block page_title %}流程管理{% endblock %}
+{% block header_actions %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.my_tasks') }}">我的审批</a>
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_audit_csv') }}">导出审计 CSV</a>
+<a class="btn btn-primary btn-sm" href="{{ url_for('workflow.admin_definition_new') }}">＋ 新建流程模板</a>
+{% endblock %}
+{% block content %}
+<style>
+.wf-admin-stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+.wf-admin-stat { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:14px 16px; }
+.wf-admin-stat b { display:block; font-size:22px; color:#0f172a; }
+.wf-admin-stat span { font-size:12px; color:#64748b; }
+.wf-admin-block { background:#fff; border:1px solid #e6ebf2; border-radius:10px; margin-bottom:18px; overflow:hidden; }
+.wf-admin-block-head { padding:15px 18px; border-bottom:1px solid #edf1f6; display:flex; justify-content:space-between; align-items:center; }
+.wf-admin-block-head h3 { margin:0; font-size:15px; color:#0f172a; }
+.wf-admin-block-head span { font-size:12px; color:#64748b; }
+.wf-status { font-size:12px; font-weight:600; }
+.wf-status-running { color:#1d4ed8; } .wf-status-completed { color:#047857; }
+.wf-status-rejected { color:#b91c1c; } .wf-status-error { color:#c2410c; }
+.wf-status-cancelled { color:#64748b; }
+</style>
+<div class="wf-admin-stats">
+    <div class="wf-admin-stat"><b>{{ stats.definitions }}</b><span>流程模板</span></div>
+    <div class="wf-admin-stat"><b>{{ stats.running }}</b><span>运行中实例</span></div>
+    <div class="wf-admin-stat"><b>{{ stats.pending_tasks }}</b><span>待审批任务</span></div>
+    <div class="wf-admin-stat"><b>{{ stats.error }}</b><span>异常实例</span></div>
+    <div class="wf-admin-stat"><b>{{ stats.dead_outbox }}</b><span>死信事件</span></div>
+</div>
+
+<div class="wf-admin-block">
+    <div class="wf-admin-block-head"><h3>流程模板</h3><span>每次保存生成新版本；运行中实例钉住旧版本</span></div>
+    <table class="data-table">
+        <thead><tr><th>Key</th><th>名称</th><th>分类</th><th>当前版本</th><th>实例数</th><th>更新时间</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for d in definitions %}
+        <tr>
+            <td><code>{{ d.def_key }}</code></td>
+            <td><strong>{{ d.name }}</strong><div style="font-size:12px;color:#94a3b8;">{{ d.description }}</div></td>
+            <td>{{ d.category }}</td>
+            <td>v{{ d.current_version }}</td>
+            <td>{{ d.instance_count }}</td>
+            <td>{{ d.updated_at }}</td>
+            <td><a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_definition', def_key=d.def_key) }}">编辑 / 看版本</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="wf-admin-block">
+    <div class="wf-admin-block-head"><h3>最近流程实例</h3><span>最多显示 80 条</span></div>
+    <table class="data-table">
+        <thead><tr><th>标题 / 单号</th><th>模板</th><th>状态</th><th>当前节点</th><th>发起人</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for i in instances %}
+        <tr>
+            <td><strong>{{ i.title or i.business_key or i.id[:8] }}</strong><div style="font-size:12px;color:#94a3b8;">{{ i.id[:12] }} · {{ i.business_key or '—' }}</div></td>
+            <td>{{ i.def_key }} <span style="color:#94a3b8;">v{{ i.def_version }}</span></td>
+            <td><span class="wf-status wf-status-{{ i.status }}">{{ {'running':'审批中','waiting':'等待中','completed':'已完成','rejected':'已驳回','returned':'已退回','cancelled':'已取消','error':'异常'}.get(i.status, i.status) }}</span></td>
+            <td>{{ i.current_node or '—' }}</td>
+            <td>{{ i.initiator_name or '—' }}</td>
+            <td>{{ i.created_at }}</td>
+            <td><a class="btn btn-outline btn-sm" href="{{ url_for('workflow.instance', instance_id=i.id) }}">查看</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="wf-admin-block">
+    <div class="wf-admin-block-head"><h3>事件订阅</h3><span>流程完成时按 event_type 投递到插件动作，由发件箱异步执行</span></div>
+    <div style="padding:14px 18px;border-bottom:1px solid #edf1f6;">
+        <form method="post" action="{{ url_for('workflow.admin_subscription_add') }}" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <input name="plugin_id" placeholder="插件 ID，如 wbs" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;width:160px;">
+            <input name="event_type" placeholder="事件，如 workflow.completed" value="workflow.completed" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;width:220px;">
+            <input name="action" placeholder="动作名，如 wbs.on_workflow_completed" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;width:260px;">
+            <button class="btn btn-primary btn-sm" type="submit">添加订阅</button>
+            <span style="font-size:12px;color:#64748b;">插件需实现 workflow_action(ctx) 或同名动作函数。</span>
+        </form>
+    </div>
+    {% if subscriptions %}
+    <table class="data-table">
+        <thead><tr><th>插件</th><th>事件</th><th>动作</th><th>启用</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for s in subscriptions %}
+        <tr><td>{{ s.plugin_id }}</td><td><code>{{ s.event_type }}</code></td><td><code>{{ s.action }}</code></td><td>{{ '是' if s.enabled else '否' }}</td>
+            <td><form method="post" action="{{ url_for('workflow.admin_subscription_delete', sub_id=s.id) }}" onsubmit="return confirm('删除该订阅？');"><button class="btn btn-outline btn-sm" type="submit">删除</button></form></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="padding:22px;text-align:center;color:#94a3b8;font-size:13px;">暂无订阅。默认流程动作已内置，订阅用于把完成事件再广播给其他插件。</div>
+    {% endif %}
+</div>
+
+<div class="wf-admin-block">
+    <div class="wf-admin-block-head"><h3>事件发件箱</h3><span>跨插件动作投递记录；失败自动重试，5 次后进入死信</span></div>
+    {% if outbox %}
+    <table class="data-table">
+        <thead><tr><th>实例</th><th>目标插件</th><th>动作</th><th>状态</th><th>重试</th><th>错误</th><th>更新时间</th></tr></thead>
+        <tbody>
+        {% for o in outbox %}
+        <tr>
+            <td><a href="{{ url_for('workflow.instance', instance_id=o.instance_id) }}">{{ o.instance_id[:12] }}</a></td>
+            <td>{{ o.target_plugin }}</td>
+            <td><code>{{ o.action }}</code></td>
+            <td>{{ o.status }}</td>
+            <td>{{ o.retry_count }}</td>
+            <td style="max-width:280px;word-break:break-all;">{{ o.last_error or '—' }}</td>
+            <td>{{ o.updated_at }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="padding:28px;text-align:center;color:#94a3b8;font-size:13px;">暂无发件箱事件。审批完成时若插件订阅了 workflow.completed 事件，会在这里生成投递记录。</div>
+    {% endif %}
+</div>
+{% endblock %}

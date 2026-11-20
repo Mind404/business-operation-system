@@ -185,6 +185,10 @@ app.register_blueprint(ext_bp)
 from ai_routes import ai_bp
 app.register_blueprint(ai_bp)
 
+# v13.1 平台级流程与流转中心（SpiffWorkflow 执行内核）
+from workflow_routes import workflow_bp
+app.register_blueprint(workflow_bp)
+
 # v10.4.0 插件包化：自动加载 plugins/ 下的独立插件包
 from plugins import load_plugins
 load_plugins(app)
@@ -2407,6 +2411,12 @@ def init_db():
             INSERT INTO users (username, password, display_name, role, is_active)
             VALUES ('product','product123','产品经理','user',1);
         """)
+    # v13.1 流程内核表也纳入统一建表入口（幂等），避免恢复老库后必须等首次访问流程页才补表
+    try:
+        import workflow_engine
+        workflow_engine.init_tables(db)
+    except Exception as e:
+        print(f'[流程内核] 建表跳过：{e}')
     db.commit()
 
 def _ensure_schema_tables(db_path=None):
@@ -2433,6 +2443,14 @@ def _ensure_schema_tables(db_path=None):
         run_migrations()
     except Exception as e:
         print(f'[表结构补建] 增量迁移跳过：{e}')
+    try:
+        import workflow_engine
+        _wfc = sqlite3.connect(path, timeout=30)
+        workflow_engine.init_tables(_wfc)
+        _wfc.commit()
+        _wfc.close()
+    except Exception as e:
+        print(f'[表结构补建] 流程表跳过：{e}')
     return ok
 
 
@@ -2689,6 +2707,15 @@ def index():
             todo_groups = plugin_system.collect_my_todos(db, current_user)
         except Exception:
             todo_groups = []
+        # v13.1 平台流程待办并入统一工作台（优先于插件分组展示）
+        try:
+            import workflow_engine as _wf
+            _wf_items = _wf.collect_my_todos(db, current_user)
+            if _wf_items:
+                todo_groups.insert(0, {'plugin_id': 'workflow', 'plugin_name': '流程与审批',
+                                       'icon': '🔄', 'items': _wf_items})
+        except Exception:
+            pass
     # v13.0.0.18：每组自带四格统计（分组标题下按本组任务计算）
     for _g in todo_groups:
         _items = _g['items']
@@ -3259,6 +3286,16 @@ if __name__ == '__main__':
     # 插件建表 + 增量迁移（必须在 init_db() 之后：全新库先有 users 表与种子，再执行 v6 角色升级等迁移）
     with app.app_context():
         plugin_system.init_plugin_tables()
+        # v13.1 流程内核建表与默认模板（幂等；SpiffWorkflow 未安装时跳过模板）
+        try:
+            import workflow_engine
+            _wf_db = sqlite3.connect(app.config['DATABASE'])
+            workflow_engine.init_tables(_wf_db)
+            workflow_engine.seed_defaults(_wf_db)
+            _wf_db.close()
+            print('[流程内核] 表结构与默认模板已就绪')
+        except Exception as e:
+            print(f'[流程内核] 初始化跳过：{e}')
         # v13.0.0.1 启动自愈：外部插件库缺失/空库→从 data/_seed 恢复，并主动建表
         # （原实现要等用户首次打开插件页才建表，一旦库缺失，管理页会满屏"尚未建表"告警）
         try:

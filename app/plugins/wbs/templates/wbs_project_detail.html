@@ -56,6 +56,12 @@
         {% endif %}
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_template') }}">下载模板</a>
         <a class="wbs-tb-btn" href="{{ url_for('wbs.wbs_export', pid=p.id) }}">导出Excel</a>
+        {% if current_role == 'platform_admin' %}
+        <form method="post" action="{{ url_for('workflow.start_wbs_project', pid=p.id) }}" style="display:inline;margin:0;"
+              onsubmit="return confirm('发起平台审批流？审批通过后会回写本项目的审批状态。');">
+            <button type="submit" class="wbs-tb-btn" style="background:#eef4ff;border-color:#b8d4fe;color:#1d4ed8;">平台审批流</button>
+        </form>
+        {% endif %}
         <span style="font-size:12px;color:#888;white-space:nowrap;"
               title="系统所有WBS附件占用的磁盘空间（单文件上限50MB，单任务最多10个附件）">📎 {{ attach_count }} · {{ attach_mb }}MB</span>
         {% if current_role in ('admin','platform_admin') %}

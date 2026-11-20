@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block title %}流程中心{% endblock %}
+{% block page_title %}流程中心{% endblock %}
+{% block header_actions %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.start') }}">＋ 发起流程</a>
+{% if user.role == 'platform_admin' %}
+<a class="btn btn-primary btn-sm" href="{{ url_for('workflow.admin_home') }}">流程管理</a>
+{% endif %}
+{% endblock %}
+{% block content %}
+<style>
+.wf-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+.wf-stat { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:16px 18px; }
+.wf-stat b { display:block; font-size:24px; color:#0f172a; line-height:1.2; }
+.wf-stat span { font-size:12px; color:#64748b; }
+.wf-panel { background:#fff; border:1px solid #e6ebf2; border-radius:10px; overflow:hidden; }
+.wf-panel-head { display:flex; align-items:center; justify-content:space-between; padding:16px 18px; border-bottom:1px solid #edf1f6; }
+.wf-panel-head h3 { margin:0; font-size:15px; color:#0f172a; }
+.wf-empty { padding:52px 20px; text-align:center; color:#94a3b8; }
+.wf-empty b { display:block; color:#334155; font-size:16px; margin-bottom:8px; }
+.wf-due-overdue { color:#dc2626; font-weight:600; }
+.wf-due-soon { color:#ea580c; font-weight:600; }
+.wf-due-near { color:#ca8a04; }
+.wf-status { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eff6ff; color:#2563eb; }
+</style>
+<div class="wf-stats">
+    <div class="wf-stat"><b>{{ stats.pending_tasks }}</b><span>全平台待审批任务</span></div>
+    <div class="wf-stat"><b>{{ tasks|length }}</b><span>我的待办</span></div>
+    <div class="wf-stat"><b>{{ stats.running }}</b><span>运行中流程</span></div>
+    <div class="wf-stat"><b>{{ stats.error }}</b><span>异常待处理</span></div>
+</div>
+<div class="wf-panel">
+    <div class="wf-panel-head">
+        <h3>我的待审批</h3>
+        <span style="font-size:12px;color:#64748b;">按到期时间排序，逾期优先</span>
+    </div>
+    {% if tasks %}
+    <table class="data-table">
+        <thead><tr><th>流程 / 标题</th><th>当前节点</th><th>业务单号</th><th>发起人</th><th>到期</th><th>操作</th></tr></thead>
+        <tbody>
+        {% for t in tasks %}
+        <tr>
+            <td><strong>{{ t.instance_title or t.def_key }}</strong><div style="font-size:12px;color:#94a3b8;">{{ t.def_key }}</div></td>
+            <td>{{ t.name }}</td>
+            <td>{{ t.business_key or '—' }}</td>
+            <td>{{ t.initiator_name or '—' }}</td>
+            <td>
+                {% if t.due_at %}
+                    {% set d = t.due_at[:10] %}
+                    <span class="{% if d < now_date %}wf-due-overdue{% endif %}">{{ d }}</span>
+                {% else %}—{% endif %}
+            </td>
+            <td><a class="btn btn-primary btn-sm" href="{{ url_for('workflow.instance', instance_id=t.instance_id) }}">去处理</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="wf-empty"><b>当前没有待你审批的流程</b>工作台和流程中心会同步展示跨插件待办；有新审批时会出现在这里。</div>
+    {% endif %}
+</div>
+{% endblock %}

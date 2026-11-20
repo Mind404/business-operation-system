@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block title %}{{ '新建流程模板' if is_new else '编辑流程模板' }}{% endblock %}
+{% block page_title %}{{ '新建流程模板' if is_new else '编辑流程模板' }}{% endblock %}
+{% block header_actions %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_home') }}">← 返回流程管理</a>
+{% endblock %}
+{% block content %}
+<style>
+.wf-form { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:20px; max-width:1180px; }
+.wf-form-row { display:grid; grid-template-columns:160px 1fr; gap:12px; margin-bottom:14px; align-items:start; }
+.wf-form-row label { font-size:13px; color:#475569; padding-top:8px; }
+.wf-form-row input, .wf-form-row select { width:100%; padding:9px 10px; border:1px solid #cbd5e1; border-radius:7px; font-size:13px; box-sizing:border-box; }
+.wf-form-row textarea { width:100%; min-height:460px; padding:12px; border:1px solid #cbd5e1; border-radius:8px; font-family:Consolas,Monaco,monospace; font-size:13px; line-height:1.55; box-sizing:border-box; }
+.wf-help { font-size:12px; color:#64748b; line-height:1.7; margin-bottom:14px; }
+.wf-error { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:14px; }
+.wf-versions { margin-top:18px; }
+.wf-versions table { width:100%; border-collapse:collapse; font-size:13px; }
+.wf-versions th, .wf-versions td { text-align:left; padding:8px 10px; border-bottom:1px solid #edf1f6; }
+</style>
+{% if error %}<div class="wf-error">{{ error }}</div>{% endif %}
+<div class="wf-form">
+    <div class="wf-help">
+        平台根据这份 JSON 自动生成 BPMN。节点类型：<code>start</code>、<code>approval</code>（审批）、<code>action</code>（插件动作）、<code>exclusive</code>（条件分支）、<code>parallel</code>（并行）、<code>end</code>。
+        审批节点的 <code>assignee</code> 支持 <code>initiator / user / role / record_field / project_participants</code>；<code>mode</code> 支持 <code>single / any / countersign</code>。
+        保存即发布新版本，已有实例继续使用旧版本。
+    </div>
+    <form method="post">
+        <div class="wf-form-row">
+            <label>模板 Key</label>
+            <input name="def_key" value="{{ def_row.def_key if def_row else '' }}" {% if not is_new %}readonly{% endif %} placeholder="例如 purchase_approval">
+        </div>
+        <div class="wf-form-row">
+            <label>名称</label>
+            <input name="name" value="{{ def_row.name if def_row else '新流程' }}" required>
+        </div>
+        <div class="wf-form-row">
+            <label>分类</label>
+            <input name="category" value="{{ def_row.category if def_row else '通用' }}">
+        </div>
+        <div class="wf-form-row">
+            <label>说明</label>
+            <input name="description" value="{{ def_row.description if def_row else '' }}" placeholder="一句话说明适用场景">
+        </div>
+        <div class="wf-form-row">
+            <label>流程定义 JSON</label>
+            <textarea name="definition_json" spellcheck="false">{{ definition_json }}</textarea>
+        </div>
+        <div style="padding-left:172px;">
+            <button class="btn btn-primary" type="submit">{{ '创建模板' if is_new else '保存并发布新版本' }}</button>
+            <a class="btn btn-outline" href="{{ url_for('workflow.admin_home') }}">取消</a>
+        </div>
+    </form>
+</div>
+{% if versions %}
+<div class="wf-form wf-versions" style="margin-top:16px;">
+    <h3 style="margin:0 0 10px;font-size:15px;">版本记录</h3>
+    <table>
+        <thead><tr><th>版本</th><th>名称</th><th>校验和</th><th>发布人</th><th>发布时间</th></tr></thead>
+        <tbody>
+        {% for v in versions %}
+        <tr><td>v{{ v.version }}</td><td>{{ v.name }}</td><td><code>{{ (v.checksum or '')[:12] }}</code></td><td>{{ v.published_by }}</td><td>{{ v.published_at }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

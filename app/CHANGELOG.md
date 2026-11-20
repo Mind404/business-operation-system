@@ -1,3 +1,14 @@
+## v13.1.0.0 流程与流转中心（2026-11-20）
+
+- 新增独立分支 `feature/workflow-engine-v1`，在平台主库引入 `wf_*` 流程表，不侵入插件业务库。
+- 以 SpiffWorkflow 3.2.0 为 BPMN 执行内核，平台负责审批任务、待办、动作回调、事件哈希链和发件箱。
+- 支持单节点/或签/会签审批，审批人规则支持发起人、指定用户、角色、业务字段、项目参与人。
+- 新增 `/workflow` 流程中心：我的待审批、实例详情、模板管理、版本发布、审计 CSV、失败重试/取消。
+- 新增跨插件动作注册 `register_action()`；内置 `demo.record_decision`、`wbs.project.set_approval`、`wbs.task.set_approval`。
+- WBS 项目详情页新增「平台审批流」入口（平台管理员），审批通过后回写项目审批状态。
+- 新增 JSON API：`POST /workflow/api/instances`、`GET /workflow/api/instances/<id>`、`GET /workflow/api/tasks/mine`。
+- 新增依赖 `SpiffWorkflow==3.2.0`、`lxml==6.1.3`。
+
 ## v13.0.0.35 全流程全内容回归与缺陷修复（2026-11-19）
 - 回归范围：平台登录/权限、用户全生命周期、WBS 项目与任务全生命周期、任务/项目审批链、导入导出、回收站、云表格乐观锁与并发、版本规划车次/装车/停发/转版本、备份恢复、输入安全、路径穿越、性能与浏览器渲染。
 - 修复 1（WBS 项目编辑）：项目名称必填；开始/结束日期必须为 `YYYY-MM-DD` 且结束不得早于开始。此前倒挂日期可直接落库，导致到期预警、统计与排期判断失真。

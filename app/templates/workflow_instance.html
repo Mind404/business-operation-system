@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+{% block title %}流程详情 · {{ inst.title }}{% endblock %}
+{% block page_title %}流程详情{% endblock %}
+{% block header_actions %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.my_tasks') }}">← 返回流程中心</a>
+{% if is_admin %}
+<a class="btn btn-outline btn-sm" href="{{ url_for('workflow.admin_home') }}">流程管理</a>
+{% endif %}
+{% endblock %}
+{% block content %}
+<style>
+.wf-hero { background:#fff; border:1px solid #e6ebf2; border-radius:10px; padding:20px 22px; margin-bottom:16px; }
+.wf-hero-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.wf-title { margin:0 0 6px; font-size:20px; color:#0f172a; }
+.wf-sub { font-size:13px; color:#64748b; }
+.wf-chip { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+.wf-chip-running { background:#eff6ff; color:#1d4ed8; }
+.wf-chip-completed { background:#ecfdf5; color:#047857; }
+.wf-chip-rejected { background:#fef2f2; color:#b91c1c; }
+.wf-chip-returned { background:#fffbeb; color:#b45309; }
+.wf-chip-error { background:#fff7ed; color:#c2410c; }
+.wf-chip-cancelled { background:#f1f5f9; color:#475569; }
+.wf-meta { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:18px; }
+.wf-meta div { background:#f8fafc; border:1px solid #edf1f6; border-radius:8px; padding:10px 12px; }
+.wf-meta label { display:block; font-size:11px; color:#94a3b8; margin-bottom:4px; }
+.wf-meta span { font-size:13px; color:#1e293b; }
+.wf-block { background:#fff; border:1px solid #e6ebf2; border-radius:10px; margin-bottom:16px; overflow:hidden; }
+.wf-block-head { padding:14px 18px; border-bottom:1px solid #edf1f6; display:flex; justify-content:space-between; align-items:center; }
+.wf-block-head h3 { margin:0; font-size:15px; color:#0f172a; }
+.wf-action { border:1px solid #dbeafe; background:#f8fbff; border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+.wf-action h3 { margin:0 0 10px; font-size:15px; color:#1e3a8a; }
+.wf-action-grid { display:grid; grid-template-columns:1fr 220px; gap:14px; }
+.wf-action textarea { width:100%; min-height:72px; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; resize:vertical; box-sizing:border-box; }
+.wf-btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.wf-log { padding:4px 18px 16px; }
+.wf-log-item { display:flex; gap:12px; padding:10px 0; border-bottom:1px dashed #e2e8f0; font-size:13px; }
+.wf-log-item:last-child { border-bottom:0; }
+.wf-log-time { color:#94a3b8; width:150px; flex:0 0 150px; font-variant-numeric:tabular-nums; }
+.wf-log-body { color:#334155; }
+.wf-log-body b { color:#0f172a; font-weight:600; }
+.wf-code { margin:0; padding:14px 18px; background:#f8fafc; font-size:12px; color:#334155; white-space:pre-wrap; word-break:break-all; }
+</style>
+
+<div class="wf-hero">
+    <div class="wf-hero-top">
+        <div>
+            <h2 class="wf-title">{{ inst.title or inst.business_key or inst.def_key }}</h2>
+            <div class="wf-sub">{{ inst.def_key }} · v{{ inst.def_version }} · 业务单号 {{ inst.business_key or '—' }}</div>
+        </div>
+        <span class="wf-chip wf-chip-{{ inst.status }}">{{ {'running':'审批中','waiting':'等待中','completed':'已完成','rejected':'已驳回','returned':'已退回','cancelled':'已取消','error':'异常'}.get(inst.status, inst.status) }}</span>
+    </div>
+    <div class="wf-meta">
+        <div><label>发起人</label><span>{{ inst.initiator_name or '—' }}</span></div>
+        <div><label>当前节点</label><span>{{ inst.current_node or '已结束' }}</span></div>
+        <div><label>发起时间</label><span>{{ inst.created_at or '—' }}</span></div>
+        <div><label>结束时间</label><span>{{ inst.ended_at or '—' }}</span></div>
+    </div>
+</div>
+
+{% if my_pending %}
+<div class="wf-action">
+    <h3>待你处理 · {{ my_pending[0].name }}</h3>
+    <div class="wf-action-grid">
+        <div>
+            <textarea id="wfComment" placeholder="审批意见（可选）"></textarea>
+            <div class="wf-btns">
+                {% for t in my_pending %}
+                <form method="post" action="{{ url_for('workflow.task_action', task_id=t.id) }}" style="display:inline;">
+                    <input type="hidden" name="decision" value="approve">
+                    <input type="hidden" name="comment" class="wf-comment-mirror">
+                    <button class="btn btn-success btn-sm" type="submit">同意</button>
+                </form>
+                <form method="post" action="{{ url_for('workflow.task_action', task_id=t.id) }}" style="display:inline;">
+                    <input type="hidden" name="decision" value="return">
+                    <input type="hidden" name="comment" class="wf-comment-mirror">
+                    <button class="btn btn-warning btn-sm" type="submit">退回</button>
+                </form>
+                <form method="post" action="{{ url_for('workflow.task_action', task_id=t.id) }}" style="display:inline;">
+                    <input type="hidden" name="decision" value="reject">
+                    <input type="hidden" name="comment" class="wf-comment-mirror">
+                    <button class="btn btn-danger btn-sm" type="submit" onclick="return confirm('确认驳回？驳回后流程结束。');">驳回</button>
+                </form>
+                {% endfor %}
+            </div>
+        </div>
+        <div style="font-size:12px;color:#64748b;line-height:1.7;">
+            会签节点需全部审批人同意才推进；或签节点一人处理即推进。审批通过后，平台会回调业务插件动作，失败可在管理端重试。
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="wf-block">
+    <div class="wf-block-head"><h3>审批任务</h3><span style="font-size:12px;color:#64748b;">共 {{ tasks|length }} 个</span></div>
+    <table class="data-table">
+        <thead><tr><th>节点</th><th>审批人</th><th>模式</th><th>状态</th><th>意见</th><th>到期</th><th>完成时间</th></tr></thead>
+        <tbody>
+        {% for t in tasks %}
+        <tr>
+            <td>{{ t.name }}</td>
+            <td>{{ t.assignee_name or '—' }}{% if t.candidate_role %}<span style="color:#94a3b8;">（角色 {{ t.candidate_role }}）</span>{% endif %}</td>
+            <td>{{ {'single':'单人','any':'或签','countersign':'会签'}.get(t.mode, t.mode) }}</td>
+            <td>
+                {% if t.status == 'pending' %}<span style="color:#2563eb;font-weight:600;">待审批</span>
+                {% elif t.status == 'approved' %}<span style="color:#059669;">已同意</span>
+                {% elif t.status == 'rejected' %}<span style="color:#dc2626;">已驳回</span>
+                {% elif t.status == 'returned' %}<span style="color:#d97706;">已退回</span>
+                {% elif t.status == 'cancelled' %}<span style="color:#94a3b8;">已取消</span>
+                {% else %}{{ t.status }}{% endif %}
+            </td>
+            <td>{{ t.comment or '—' }}</td>
+            <td>{{ (t.due_at or '')[:10] or '—' }}</td>
+            <td>{{ t.completed_at or '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="wf-block">
+    <div class="wf-block-head"><h3>流程轨迹</h3><span style="font-size:12px;color:#64748b;">哈希链存证，可导出 CSV</span></div>
+    <div class="wf-log">
+        {% for e in events %}
+        <div class="wf-log-item">
+            <div class="wf-log-time">{{ e.created_at }}</div>
+            <div class="wf-log-body">
+                <b>{{ {'instance_started':'流程发起','task_decided':'审批处理','action_executed':'业务动作','instance_completed':'流程完成','instance_error':'执行异常','instance_retry':'失败重试','instance_cancelled':'流程取消'}.get(e.event_type, e.event_type) }}</b>
+                {% if e.actor_name %} · {{ e.actor_name }}{% endif %}
+                <div style="color:#64748b;margin-top:3px;">{{ e.detail_json }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="wf-block">
+    <div class="wf-block-head"><h3>业务上下文</h3><span style="font-size:12px;color:#64748b;">插件记录 {{ inst.plugin_id }} / {{ inst.record_type }} #{{ inst.record_id }}</span></div>
+    <pre class="wf-code">{{ context | tojson(indent=2) }}</pre>
+</div>
+
+{% if is_admin %}
+<div class="wf-block">
+    <div class="wf-block-head"><h3>管理员操作</h3></div>
+    <div style="padding:14px 18px;display:flex;gap:10px;flex-wrap:wrap;">
+        {% if inst.status == 'error' %}
+        <form method="post" action="{{ url_for('workflow.admin_retry', instance_id=inst.id) }}">
+            <button class="btn btn-primary btn-sm" type="submit">重试失败动作</button>
+        </form>
+        {% endif %}
+        {% if inst.status in ('running','waiting','error') %}
+        <form method="post" action="{{ url_for('workflow.admin_cancel', instance_id=inst.id) }}" onsubmit="return confirm('确认取消该流程？未处理任务将全部取消。');">
+            <button class="btn btn-danger btn-sm" type="submit">取消流程</button>
+        </form>
+        {% endif %}
+        <span style="font-size:12px;color:#64748b;align-self:center;">{% if inst.last_error %}最近错误：{{ inst.last_error }}{% else %}无异常{% endif %}</span>
+    </div>
+</div>
+{% endif %}
+
+<script>
+(function(){
+    document.querySelectorAll('form[action*="/task/"]').forEach(function(f){
+        f.addEventListener('submit', function(){
+            var ta = document.getElementById('wfComment');
+            var m = f.querySelector('.wf-comment-mirror');
+            if (ta && m) m.value = ta.value;
+        });
+    });
+})();
+</script>
+{% endblock %}

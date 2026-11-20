@@ -73,6 +73,20 @@
                     {% endfor %}
                 </div>
 
+                {# 流程与流转中心：平台级统一待办与审批入口 #}
+                <div class="nav-group">
+                    <div class="nav-group-title">流程与审批</div>
+                    <a href="{{ url_for('workflow.my_tasks') }}" data-nav-key="workflow-center" class="nav-item {% if request.path.startswith('/workflow') and not request.path.startswith('/workflow/admin') %}active{% endif %}">
+                        <span class="nav-icon">🔄</span> 流程中心
+                        {% if workflow_pending_count %}<span style="margin-left:auto;background:#2563eb;color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;">{{ workflow_pending_count }}</span>{% endif %}
+                    </a>
+                    {% if current_role == 'platform_admin' %}
+                    <a href="{{ url_for('workflow.admin_home') }}" data-nav-key="workflow-admin" class="nav-item {% if request.path.startswith('/workflow/admin') %}active{% endif %}">
+                        <span class="nav-icon">⚙</span> 流程管理
+                    </a>
+                    {% endif %}
+                </div>
+
                 {# 业务插件：WBS（所有登录用户常驻显示） #}
                 {% if nav_biz %}
                 <div class="nav-group">
