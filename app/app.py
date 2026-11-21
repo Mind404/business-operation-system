@@ -463,8 +463,10 @@ def _handle_404(e):
 @app.before_request
 def require_login():
     """所有页面需要登录，除了登录页和静态资源（含插件静态资源）"""
+    if request.path.rstrip('/') == '/workflow/api/plugin-events':
+        return None
     ep = request.endpoint or ''
-    if ep in ('login', 'static', 'healthz') or ep.endswith('.static'):
+    if ep in ('login', 'static', 'healthz', 'workflow.plugin_events') or ep.endswith('.static'):
         return None
     if 'user_id' not in session:
         return redirect(url_for('login', next=request.path))
@@ -3276,6 +3278,7 @@ if __name__ == '__main__':
         try:
             import workflow_engine
             _wf_db = sqlite3.connect(app.config['DATABASE'])
+            _wf_db.row_factory = sqlite3.Row
             workflow_engine.init_tables(_wf_db)
             workflow_engine.seed_defaults(_wf_db)
             _wf_db.close()

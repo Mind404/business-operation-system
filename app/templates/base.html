@@ -100,8 +100,8 @@
                         <span class="nav-icon">{{ p.icon }}</span> {{ p.name }}
                     </a>
                     {% endfor %}
-                    <a href="{{ url_for('workflow.admin_home') }}" data-nav-key="workflow-admin" class="nav-item {% if request.path.startswith('/workflow/admin') %}active{% endif %}">
-                        <span class="nav-icon">⚙</span> 流程管理
+                    <a href="{{ url_for('workflow.admin_rules') }}" data-nav-key="workflow-center" class="nav-item {% if request.path.startswith('/workflow/admin') %}active{% endif %}">
+                        <span class="nav-icon">⚙</span> 审批中心
                     </a>
                 </div>
                 <div style="padding:6px 12px 10px;">

@@ -71,6 +71,7 @@ def init_wbs_tables():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT, description TEXT, owner TEXT, participants TEXT,
         start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中',
+        project_type TEXT DEFAULT '研发项目',
         created_at TEXT, updated_at TEXT)''')
     db.execute('''CREATE TABLE IF NOT EXISTS wbs_tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,6 +118,8 @@ MIGRATIONS = [
     (9, 'v12.5.17: users.deleted 软删标记', None),
     # v10: v13.6.2 统一审批出口 —— 删除空置的 tasks / approval_requests 遗留表
     (10, 'v13.6.2: 删除 tasks / approval_requests 遗留表', None),
+    # v11: v13.7 审批规则中心 —— WBS 项目类型 + wf_triggers 适用范围
+    (11, 'v13.7: WBS 项目类型 + 审批规则适用范围', None),
 ]
 
 
@@ -134,7 +137,38 @@ def run_migrations():
         if ver <= current:
             continue
         # 每个迁移的具体 ALTER TABLE 在这里写（幂等：重复跑不报错）
-        if ver == 2:
+        if ver == 11:
+            # v13.7：WBS 项目类型 + 审批规则适用范围（状态变更点 × 范围 = 一条规则）
+            pcols = [r[1] for r in db.execute('PRAGMA table_info(wbs_projects)').fetchall()]
+            if 'project_type' not in pcols:
+                try:
+                    db.execute("ALTER TABLE wbs_projects ADD COLUMN project_type TEXT DEFAULT '研发项目'")
+                except sqlite3.OperationalError:
+                    pass
+            # 老库 wf_triggers 只有“一个状态点一个流程”，重建为带 scope 的多规则表
+            tcols = [r[1] for r in db.execute('PRAGMA table_info(wf_triggers)').fetchall()]
+            if tcols and 'scope_type' not in tcols:
+                db.execute('ALTER TABLE wf_triggers RENAME TO wf_triggers_v10')
+                db.execute('''CREATE TABLE wf_triggers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    def_key TEXT NOT NULL UNIQUE,
+                    plugin_id TEXT NOT NULL,
+                    event_key TEXT NOT NULL,
+                    mode TEXT DEFAULT 'confirm',
+                    enabled INTEGER DEFAULT 1,
+                    scope_type TEXT NOT NULL DEFAULT 'all',
+                    scope_value TEXT NOT NULL DEFAULT '',
+                    created_by TEXT DEFAULT '系统',
+                    created_at TEXT DEFAULT (datetime('now','localtime')),
+                    updated_at TEXT DEFAULT (datetime('now','localtime')),
+                    UNIQUE(plugin_id, event_key, scope_type, scope_value))''')
+                db.execute('''INSERT INTO wf_triggers
+                    (id,def_key,plugin_id,event_key,mode,enabled,scope_type,scope_value,created_by,created_at,updated_at)
+                    SELECT id,def_key,plugin_id,event_key,mode,enabled,'all','',created_by,created_at,updated_at
+                    FROM wf_triggers_v10''')
+                db.execute('DROP TABLE wf_triggers_v10')
+                db.execute('CREATE INDEX IF NOT EXISTS idx_wf_triggers_event ON wf_triggers(plugin_id, event_key, enabled, scope_type)')
+        elif ver == 2:
             for col, ddl in [('priority', "TEXT DEFAULT 'P2中'"),
                              ('attachment_path', 'TEXT'),
                              ('notes', 'TEXT')]:

@@ -37,5 +37,12 @@ def load_plugins(app):
     for name, mod in discover_plugins():
         app.register_blueprint(mod.blueprint)
         loaded.append(mod.manifest)
+        # v13.8：把 manifest 里声明、但代码没注册的状态节点补进审批引擎事件目录。
+        # 只补空位，不覆盖插件代码里的真实 label/context_fields/default_steps。
+        try:
+            import workflow_engine as _wf
+            _wf.register_manifest_events(str((mod.manifest or {}).get('id') or name), mod.manifest)
+        except Exception:
+            pass
         print(f'[插件加载] 已注册: {mod.manifest.get("name", name)} ({name})')
     return loaded

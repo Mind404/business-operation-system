@@ -41,6 +41,7 @@ try:
              record_type='project',
              context_fields=[{'key': 'name', 'label': '项目名称'},
                              {'key': 'owner', 'label': '项目负责人'},
+                             {'key': 'project_type', 'label': '项目类型'},
                              {'key': 'approval_status', 'label': '审批状态'}],
              write_back={'key': 'wbs.project.set_approval', 'label': '写回 WBS 项目审批状态', 'plugin': 'wbs'},
              on_reject={'key': 'wbs.project.set_approval', 'label': '驳回后写回项目审批状态', 'plugin': 'wbs'},

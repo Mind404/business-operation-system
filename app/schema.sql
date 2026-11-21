@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 CREATE TABLE IF NOT EXISTS wbs_projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT, description TEXT, owner TEXT,
-    start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中',
+    start_date TEXT, end_date TEXT, status TEXT DEFAULT '进行中', project_type TEXT DEFAULT '研发项目',
     created_at TEXT, updated_at TEXT, participants TEXT, approver TEXT DEFAULT '', approval_status TEXT DEFAULT '已通过'
 );
 CREATE TABLE IF NOT EXISTS wbs_tasks (

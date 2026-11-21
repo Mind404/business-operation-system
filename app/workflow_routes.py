@@ -8,7 +8,7 @@ from datetime import datetime
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 
-from plugin_system import get_db
+from plugin_system import get_db, get_plugin_db
 import workflow_engine as wf
 
 workflow_bp = Blueprint('workflow', __name__, url_prefix='/workflow')
@@ -21,6 +21,105 @@ def _current_user():
         'role': session.get('user_role', ''),
         'username': session.get('username', ''),
     }
+
+
+def _user_labels(db):
+    try:
+        rows = db.execute("SELECT username, display_name FROM users WHERE COALESCE(deleted,0)=0").fetchall()
+    except Exception:
+        rows = []
+    return {str(r['username']): (r['display_name'] or r['username']) for r in rows}
+
+
+def _decorate_catalog(db, catalog):
+    """给每条规则补上“人能看懂”的审批链，规则中心不再只显示流程名。"""
+    users = _user_labels(db)
+    role_labels = {'admin': '平台管理员', 'platform_admin': '平台管理员', 'user': '普通用户'}
+    for group in catalog:
+        for ev in group.get('events') or []:
+            for rule in ev.get('rules') or []:
+                steps = []
+                try:
+                    row, ver = wf.get_current_version(db, rule['def_key'])
+                    definition = json.loads(ver['graph_json']) if ver else {}
+                    parsed = wf.parse_simple_definition(definition) or {}
+                    for st in parsed.get('steps') or []:
+                        typ = st.get('assignee_type') or ''
+                        val = str(st.get('assignee_value') or '')
+                        if typ == 'user':
+                            approver = users.get(val, val)
+                        elif typ == 'role':
+                            approver = role_labels.get(val, val)
+                        elif typ == 'record_field':
+                            field_label = next((f.get('label') for f in (ev.get('context_fields') or [])
+                                                if f.get('key') == val), val)
+                            approver = field_label or '业务负责人'
+                        elif typ == 'initiator':
+                            approver = '发起人'
+                        else:
+                            approver = val or '待定'
+                        backup = ''
+                        if st.get('backup_assignee_type') == 'user' and st.get('backup_assignee_value'):
+                            bv = str(st['backup_assignee_value'])
+                            backup = users.get(bv, bv)
+                        steps.append({'name': st.get('name') or '审批',
+                                      'approver': approver,
+                                      'backup': backup})
+                except Exception:
+                    steps = []
+                rule['chain'] = steps
+            # 节点级预览：如果是“全部”规则，取第一条可展示的链
+            ev['preview_chain'] = (ev.get('rules') or [{}])[0].get('chain') if ev.get('rules') else []
+    return catalog
+
+
+def _render_admin_center(default_tab='rules'):
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    tab = (request.args.get('tab') or default_tab or 'rules').strip()
+    if tab not in ('rules', 'runtime', 'advanced'):
+        tab = 'rules'
+    catalog = _decorate_catalog(db, wf.event_catalog(db))
+    total_events = sum(len(g['events']) for g in catalog)
+    configured_events = sum(1 for g in catalog for e in g['events'] if e.get('rules'))
+    direct_count = db.execute(
+        "SELECT COUNT(*) c FROM wf_event_log WHERE matched=0 AND mode='unmatched'").fetchone()['c']
+    direct_rows = db.execute(
+        "SELECT * FROM wf_event_log WHERE matched=0 AND mode='unmatched' "
+        "ORDER BY id DESC LIMIT 30").fetchall()
+    defs = wf.list_definitions(db)
+    instances = wf.list_instances(db, limit=80)
+    st = wf.stats(db)
+    outbox = wf.outbox_rows(db)
+    subscriptions = wf.list_subscriptions(db)
+    plugin_rows = []
+    try:
+        from plugin_system import _manifest_map
+        for pid, man in (_manifest_map() or {}).items():
+            events = ((man or {}).get('workflow') or {}).get('events') or []
+            if not events:
+                continue
+            plugin_rows.append({
+                'id': pid,
+                'name': (man or {}).get('name') or pid,
+                'token': wf.plugin_event_token(pid),
+                'event_count': len(events),
+                'source': (man or {}).get('source') or 'builtin',
+            })
+    except Exception:
+        plugin_rows = []
+    return render_template('workflow_rules.html',
+                           catalog=catalog, total_events=total_events,
+                           configured_events=configured_events,
+                           unconfigured_events=total_events - configured_events,
+                           direct_count=direct_count, direct_rows=direct_rows,
+                           scopes=wf.SCOPE_TYPES, modes=wf.EVENT_MODES,
+                           definitions=defs, instances=instances, stats=st,
+                           outbox=outbox, subscriptions=subscriptions,
+                           plugin_rows=plugin_rows, tab=tab,
+                           scope_options=_scope_options(), user=_current_user())
 
 
 def _login_required():
@@ -97,6 +196,9 @@ def _inject_workflow_nav():
 
 @workflow_bp.before_request
 def _workflow_before():
+    # v13.8：外部插件事件接口走令牌校验，不要求登录会话
+    if request.path.rstrip('/') == '/workflow/api/plugin-events':
+        return None
     auth = _login_required()
     if auth:
         return auth
@@ -238,20 +340,8 @@ def start_wbs_task(tid):
 
 @workflow_bp.route('/admin')
 def admin_home():
-    deny = _admin_required()
-    if deny:
-        return deny
-    db = _db()
-    defs = wf.list_definitions(db)
-    instances = wf.list_instances(db, limit=80)
-    st = wf.stats(db)
-    outbox = wf.outbox_rows(db)
-    subscriptions = wf.list_subscriptions(db)
-    triggers = wf.list_triggers(db)
-    queue = wf.queue_rows(db, limit=60)
-    return render_template('workflow_admin.html', definitions=defs, instances=instances,
-                           stats=st, outbox=outbox, subscriptions=subscriptions,
-                           triggers=triggers, queue=queue, user=_current_user())
+    # v13.8：并入“审批中心”，旧地址保留并默认打开运行记录页签
+    return _render_admin_center('runtime')
 
 
 @workflow_bp.route('/admin/definition/<def_key>', methods=['GET', 'POST'])
@@ -513,7 +603,12 @@ def _apply_trigger_from_form(db, def_key):
     # 容错：只写了对象段（project.approval）时补全插件前缀
     if not wf.get_event(event_key) and wf.get_event('%s.%s' % (plugin_id, event_key)):
         event_key = '%s.%s' % (plugin_id, event_key)
-    wf.bind_trigger(db, def_key, plugin_id, event_key, mode=mode, actor=actor)
+    # v13.7：已有规则改流程时保留原适用范围，避免误把“指定项目类型”扩成“全部”
+    current = wf.get_trigger_for_def(db, def_key) or {}
+    scope_type = (request.form.get('trigger_scope_type') or current.get('scope_type') or 'all').strip()
+    scope_value = (request.form.get('trigger_scope_value') or current.get('scope_value') or '').strip()
+    wf.bind_trigger(db, def_key, plugin_id, event_key, mode=mode, actor=actor,
+                    scope_type=scope_type, scope_value=scope_value)
 
 
 @workflow_bp.route('/admin/events/guide')
@@ -531,6 +626,91 @@ def admin_events_guide():
                            stats=wf.stats(db),
                            bound_count=bound_count,
                            user=_current_user())
+
+
+@workflow_bp.route('/api/plugin-events', methods=['POST'])
+def plugin_events():
+    """外部插件上报状态变更（服务间调用，不走登录会话）。
+
+    请求头 X-Plugin-Token；请求体：
+    {plugin_id, event_key, business_key, title, context, record_type, record_id}
+    """
+    data = request.get_json(silent=True) or {}
+    plugin_id = str(data.get('plugin_id') or '').strip()
+    event_key = str(data.get('event_key') or '').strip()
+    token = request.headers.get('X-Plugin-Token') or data.get('token') or ''
+    if not plugin_id or not event_key:
+        return jsonify({'ok': False, 'msg': 'plugin_id 和 event_key 必填'}), 400
+    if not wf.verify_plugin_event_token(plugin_id, token):
+        return jsonify({'ok': False, 'msg': '插件令牌无效'}), 403
+    ev = wf.get_event(event_key)
+    if not ev or ev.get('plugin') != plugin_id:
+        return jsonify({'ok': False, 'msg': '事件未注册或不属于该插件；请先在 manifest.workflow.events 声明'}), 400
+    context = data.get('context') or {}
+    if not isinstance(context, dict):
+        return jsonify({'ok': False, 'msg': 'context 必须是对象'}), 400
+    try:
+        result = wf.emit_state_change(
+            _db(), plugin_id, event_key,
+            business_key=str(data.get('business_key') or ''),
+            title=str(data.get('title') or ev.get('label') or event_key),
+            context=context,
+            record_type=str(data.get('record_type') or ev.get('record_type') or ''),
+            record_id=str(data.get('record_id') or ''),
+            initiator_name=str(data.get('initiator_name') or '外部插件'),
+        )
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': '事件处理失败：%s' % e}), 500
+    return jsonify({'ok': True, **result})
+
+
+@workflow_bp.route('/api/rule-preview')
+def rule_preview():
+    """普通用户看：这次提交会按哪条规则、送谁审批。不改任何数据。"""
+    if not session.get('user_id'):
+        return jsonify({'ok': False, 'msg': '未登录'}), 401
+    plugin_id = (request.args.get('plugin') or '').strip()
+    event_key = (request.args.get('event') or '').strip()
+    context = {}
+    for k in ('project_type', 'product_code', 'product'):
+        v = request.args.get(k)
+        if v:
+            context[k] = v
+    if not plugin_id or not event_key:
+        return jsonify({'ok': False, 'msg': '参数不完整'}), 400
+    db = _db()
+    info = wf.event_managed(db, plugin_id, event_key, context)
+    if not info:
+        return jsonify({'ok': True, 'configured': False,
+                        'scope': '', 'steps': []})
+    trg = info.get('trigger') or {}
+    row, ver = wf.get_current_version(db, trg.get('def_key'))
+    definition = json.loads(ver['graph_json']) if ver else {}
+    labels = {a['value']: a['label'] for a in wf.actor_options(db, kind='user')}
+    role_labels = {a['value']: a['label'] for a in wf.actor_options(db, kind='role')}
+    steps = []
+    for st in wf.parse_simple_definition(definition).get('steps') or []:
+        typ = st.get('assignee_type') or ''
+        val = st.get('assignee_value') or ''
+        if typ == 'user':
+            approver = labels.get(val, val)
+        elif typ == 'role':
+            approver = role_labels.get(val, val)
+        elif typ == 'record_field':
+            approver = {'owner': '项目负责人', 'participants': '项目参与人'}.get(val, val)
+        elif typ == 'initiator':
+            approver = '发起人'
+        else:
+            approver = val or '待定'
+        backup = ''
+        if st.get('backup_assignee_type') == 'user' and st.get('backup_assignee_value'):
+            backup = labels.get(st.get('backup_assignee_value'), st.get('backup_assignee_value'))
+        steps.append({'name': st.get('name') or '审批', 'approver': approver, 'backup': backup})
+    scope_type = trg.get('scope_type') or 'all'
+    scope_value = trg.get('scope_value') or ''
+    return jsonify({'ok': True, 'configured': True,
+                    'scope': wf.SCOPE_TYPES.get(scope_type, scope_type) + (('：' + scope_value) if scope_value else ''),
+                    'mode': trg.get('mode') or 'auto', 'steps': steps})
 
 
 @workflow_bp.route('/admin/api/actors')
@@ -551,6 +731,7 @@ def admin_actors():
 
 @workflow_bp.route('/admin/events')
 def admin_events():
+    # 旧版“状态变更节点”页保留为高级入口；日常配置走 /admin/rules 审批规则中心
     deny = _admin_required()
     if deny:
         return deny
@@ -563,6 +744,118 @@ def admin_events():
                            queue=wf.queue_rows(db, limit=60),
                            stats=wf.stats(db),
                            user=_current_user())
+
+
+def _scope_options():
+    """可选范围值：产品来自版本规划插件，项目类型来自 WBS。"""
+    products = []
+    try:
+        pdb = get_plugin_db('version_plan')
+        try:
+            rows = pdb.execute('SELECT code, name FROM version_plan_products ORDER BY code').fetchall()
+            products = [{'value': r['code'], 'label': '%s（%s）' % (r['name'] or r['code'], r['code'])} for r in rows]
+        finally:
+            pdb.close()
+    except Exception:
+        products = []
+    return {'products': products, 'project_types': ['研发项目', '交付项目', '内部项目', '其他项目']}
+
+
+@workflow_bp.route('/admin/rules')
+def admin_rules():
+    return _render_admin_center('rules')
+
+
+@workflow_bp.route('/admin/rules/<plugin_id>/<event_key>', methods=['GET', 'POST'])
+def admin_rule_edit(plugin_id, event_key):
+    deny = _admin_required()
+    if deny:
+        return deny
+    db = _db()
+    ev = wf.get_event(event_key)
+    if not ev or ev.get('plugin') != plugin_id:
+        flash('状态变更点不存在', 'error')
+        return redirect(url_for('workflow.admin_rules'))
+    trigger_id = request.args.get('rule', type=int) or 0
+    trigger = db.execute('SELECT * FROM wf_triggers WHERE id=?', (trigger_id,)).fetchone() if trigger_id else None
+    def_key = trigger['def_key'] if trigger else ''
+    trigger_name = ''
+    existing = None
+    if def_key:
+        row, ver = wf.get_current_version(db, def_key)
+        if row:
+            trigger_name = row['name'] or def_key
+        if ver:
+            existing = wf.parse_simple_definition(json.loads(ver['graph_json']))
+    error = None
+    if request.method == 'POST':
+        try:
+            name = (request.form.get('rule_name') or '').strip()
+            scope_type = (request.form.get('scope_type') or 'all').strip()
+            scope_value = (request.form.get('scope_value') or '').strip()
+            mode = (request.form.get('mode') or 'auto').strip()
+            names = request.form.getlist('step_name')
+            values = request.form.getlist('step_assignee_value')
+            backups = request.form.getlist('step_backup_value')
+            steps = []
+            for i, raw_name in enumerate(names):
+                value = values[i].strip() if i < len(values) else ''
+                if not (raw_name.strip() or value):
+                    continue
+                if not value:
+                    raise ValueError('第 %d 步请选择主审批人' % (i + 1))
+                steps.append({'name': raw_name.strip() or '审批', 'assignee_type': 'user',
+                              'assignee_value': value, 'mode': 'any',
+                              'backup_assignee_type': 'user' if (i < len(backups) and backups[i].strip()) else '',
+                              'backup_assignee_value': backups[i].strip() if i < len(backups) else ''})
+            if not steps:
+                raise ValueError('至少添加一个审批节点')
+            if not name:
+                raise ValueError('规则名称不能为空')
+            action_key = (request.form.get('action_key') or '').strip()
+            action = None
+            if action_key:
+                meta = next((a for a in wf.action_options() if a['key'] == action_key), None)
+                if not meta:
+                    raise ValueError('写回动作不存在，请刷新重试')
+                action = {'key': action_key, 'label': meta['label'], 'plugin': meta['plugin']}
+            if trigger:
+                new_key = def_key
+                old_trigger_id = trigger['id']
+            else:
+                new_key = wf.generate_def_key(db, name=name, event_key=event_key)
+                old_trigger_id = None
+            payload = wf.build_simple_definition(new_key, name, steps, action,
+                                                 '业务流程', ev.get('description') or ev.get('label'))
+            wf.save_definition(db, new_key, name, payload, actor=_current_user()['name'],
+                               category='业务流程', description=ev.get('description') or ev.get('label'))
+            if old_trigger_id:
+                db.execute('DELETE FROM wf_triggers WHERE id=?', (old_trigger_id,))
+                db.commit()
+            wf.bind_trigger(db, new_key, plugin_id, event_key, mode=mode,
+                            actor=_current_user()['name'], scope_type=scope_type, scope_value=scope_value,
+                            replace=False)
+            flash('审批规则已保存：%s' % ('仅影响之后新提交的业务' if trigger else '已对新提交业务生效'), 'success')
+            return redirect(url_for('workflow.admin_rules'))
+        except Exception as e:
+            error = str(e)
+            existing = {'steps': [{'name': n, 'assignee_type': 'user',
+                                   'assignee_value': values[i] if i < len(values) else '',
+                                   'backup_assignee_type': 'user' if i < len(backups) and backups[i] else '',
+                                   'backup_assignee_value': backups[i] if i < len(backups) else '',
+                                   'mode': 'any'} for i, n in enumerate(names)], 'action': None}
+    # GET prefill
+    if not existing:
+        existing = {'steps': [{'name': '负责人审批', 'assignee_type': 'user', 'assignee_value': '',
+                               'backup_assignee_type': '', 'backup_assignee_value': '', 'mode': 'any'}],
+                    'action': {'key': (ev.get('write_back') or {}).get('key') or '',
+                               'label': (ev.get('write_back') or {}).get('label') or ''}}
+    return render_template('workflow_rule_edit.html', ev=ev, plugin_id=plugin_id,
+                           event_key=event_key, trigger=trigger, def_key=def_key,
+                           trigger_name=trigger_name,
+                           existing=existing, error=error, scopes=wf.SCOPE_TYPES,
+                           modes=wf.EVENT_MODES, scope_options=_scope_options(),
+                           action_options=wf.action_options(), user=_current_user())
 
 
 @workflow_bp.route('/admin/trigger/bind', methods=['POST'])

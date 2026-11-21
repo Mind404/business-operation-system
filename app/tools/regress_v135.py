@@ -350,11 +350,11 @@ def main():
     # ---------- 9. 停用流程回退插件本地逻辑 ----------
     wf.set_trigger_enabled(main, wf.get_trigger_for_def(main, 'vp_freeze_flow')['id'], 0)
     main.commit()
-    # 普通用户在流程停用时必须被拒绝，不能回退成直接冻结
+    # v13.7 口径：流程停用等于没有生效规则，普通用户直接执行并留直通流水
     r = user.post('/version_plan/versions/2.0.0/status',
                   data={'product': 'P2', 'to': '已冻结'}, follow_redirects=True)
-    check('流程停用时普通用户不能绕过冻结审批',
-          vp.execute("SELECT status FROM version_plan_versions WHERE version_no='2.0.0'").fetchone()[0] == '规划中')
+    check('流程停用时普通用户直通执行并留痕',
+          vp.execute("SELECT status FROM version_plan_versions WHERE version_no='2.0.0'").fetchone()[0] == '已冻结')
     r = admin.post('/version_plan/versions/2.0.0/status',
                    data={'product': 'P2', 'to': '已冻结'}, follow_redirects=True)
     check('流程停用后冻结回退本地直接生效',

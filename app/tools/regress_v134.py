@@ -168,7 +168,7 @@ def main():
     check('节点目录页显示推荐审批链', '推荐审批链' in ev)
     check('节点目录页显示携带数据', '携带数据' in ev)
     home = client.get('/workflow/admin').get_data(as_text=True)
-    check('流程管理页头有说明入口', '节点说明' in home)
+    check('审批中心合并页可打开', '运行记录' in home and '高级设置' in home)
 
     print('\n==== v13.4 回归结果：%d PASS / %d FAIL ====' % (len(passes), len(failures)))
     if failures:

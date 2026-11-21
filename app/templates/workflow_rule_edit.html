@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}配置审批规则 - {{ ev.label }}{% endblock %}
+{% block content %}
+<style>
+.rule-edit{max-width:1080px;margin:0 auto;}
+.re-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}
+.re-top .btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 14px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:13px;text-decoration:none;cursor:pointer;}
+.re-layout{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(300px,.8fr);gap:18px;align-items:start;}
+.re-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:22px 24px;margin-bottom:16px;}
+.re-card h2{margin:0 0 4px;font-size:17px;color:#0f172a;}
+.re-card p.sub{margin:0 0 18px;color:#64748b;font-size:13px;line-height:1.6;}
+.re-step{display:flex;align-items:center;gap:9px;margin:0 0 14px;}
+.re-step .num{width:24px;height:24px;border-radius:50%;background:#dbeafe;color:#1d4ed8;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+.re-step h3{margin:0;font-size:14px;color:#0f172a;}
+.re-step span{font-size:12px;color:#64748b;}
+.re-field{margin-bottom:14px;}
+.re-field label{display:block;font-size:13px;color:#334155;font-weight:500;margin-bottom:6px;}
+.re-field input[type=text],.re-field select{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;background:#fff;}
+.re-note{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:10px 12px;font-size:12px;color:#64748b;line-height:1.7;}
+.re-alert{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:14px;}
+.scope-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.scope-card{position:relative;border:1px solid #cbd5e1;border-radius:9px;padding:11px 12px;cursor:pointer;background:#fff;}
+.scope-card input{position:absolute;opacity:0;pointer-events:none;}
+.scope-card b{display:block;font-size:13px;color:#0f172a;margin-bottom:3px;}
+.scope-card small{display:block;font-size:11px;color:#64748b;line-height:1.5;}
+.scope-card.selected{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.08);}
+.scope-value{margin-top:9px;}
+.step-head{font-size:12px;color:#64748b;margin:6px 0 6px;}
+.step-row{display:grid;grid-template-columns:1fr 1.1fr 1.1fr 34px;gap:7px;align-items:center;margin-bottom:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px;}
+.step-row input{width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #cbd5e1;border-radius:5px;font-size:13px;background:#fff;}
+.step-row .actor-box{position:relative;}
+.step-row .actor-label{display:block;font-size:11px;color:#64748b;margin:3px 0 0 2px;min-height:14px;}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 14px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:13px;text-decoration:none;cursor:pointer;}
+.btn-primary{background:#2563eb;border-color:#2563eb;color:#fff;}
+.btn:hover{background:#f1f5f9;}
+.btn-primary:hover{background:#1d4ed8;}
+.btn-danger{color:#b91c1c;border-color:#fecaca;}
+.preview-card{position:sticky;top:16px;background:#fff;border:1px solid #dbeafe;border-radius:12px;padding:18px 18px 16px;box-shadow:0 6px 20px rgba(15,43,70,.06);}
+.preview-card h3{margin:0 0 4px;font-size:14px;color:#0f2b46;}
+.preview-card .hint{margin:0 0 12px;font-size:11px;color:#64748b;line-height:1.5;}
+.preview-summary{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:11px 12px;font-size:12px;color:#334155;line-height:1.75;margin-bottom:12px;}
+.preview-chain{display:flex;flex-direction:column;gap:0;}
+.preview-node{display:flex;align-items:flex-start;gap:9px;padding:8px 0;}
+.preview-dot{width:25px;height:25px;border-radius:50%;background:#eff6ff;color:#1d4ed8;display:flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 auto;}
+.preview-node b{display:block;font-size:12px;color:#0f172a;}
+.preview-node small{display:block;font-size:11px;color:#64748b;line-height:1.5;}
+.preview-line{border-left:1px dashed #bfdbfe;margin-left:12px;height:7px;}
+.preview-node.end .preview-dot{background:#ecfdf5;color:#047857;}
+.preview-tip{margin-top:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 10px;font-size:11px;color:#92400e;line-height:1.6;}
+.muted{color:#94a3b8;}
+@media (max-width:900px){.re-layout{grid-template-columns:1fr;}.preview-card{position:static;}.scope-cards{grid-template-columns:1fr;}}
+</style>
+<div class="rule-edit">
+    <div class="re-top">
+        <a class="btn" href="{{ url_for('workflow.admin_rules') }}">← 返回审批中心</a>
+        <span class="muted" style="font-size:12px;">{{ plugin_id }} · {{ event_key }}</span>
+    </div>
+    {% if error %}<div class="re-alert">{{ error }}</div>{% endif %}
+    <div class="re-layout">
+        <div>
+            <form method="post" id="ruleForm">
+                <div class="re-card">
+                    <div class="re-step"><span class="num">1</span><h3>哪个业务要审批</h3><span>{{ ev.label }}</span></div>
+                    <p class="sub">{{ ev.description }}<br>规则保存后只对之后的新提交生效，不追溯已经在审批中的业务。</p>
+                    <div class="re-field">
+                        <label>规则名称（只给管理员看）</label>
+                        <input type="text" name="rule_name" value="{{ trigger_name if trigger else ev.label ~ '审批' }}" placeholder="如：项目立项审批">
+                    </div>
+                    <div class="re-field" style="margin-bottom:0;">
+                        <label>什么时候发起</label>
+                        <select name="mode">
+                            {% set cur_mode = trigger.mode if trigger else 'auto' %}
+                            {% for k,v in modes.items() %}
+                            <option value="{{ k }}" {% if cur_mode==k %}selected{% endif %}>{{ v }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="muted" style="font-size:12px;margin-top:4px;">推荐“自动发起”：业务提交后直接进入审批；人工确认会在工作台留一条待发起。</div>
+                    </div>
+                </div>
+
+                <div class="re-card">
+                    <div class="re-step"><span class="num">2</span><h3>哪些业务需要审批</h3><span>范围越具体，优先级越高</span></div>
+                    <div class="scope-cards">
+                        {% set cur_scope = trigger.scope_type if trigger else 'all' %}
+                        {% for k,v in scopes.items() %}
+                        <label class="scope-card {% if cur_scope==k %}selected{% endif %}" data-scope-card="{{ k }}">
+                            <input type="radio" name="scope_type" value="{{ k }}" {% if cur_scope==k %}checked{% endif %} onchange="switchScope()">
+                            <b>{{ v }}</b>
+                            <small>
+                                {% if k=='all' %}所有产品、所有项目类型都走这条规则
+                                {% elif k=='product' %}只对指定产品生效
+                                {% elif k=='project_type' %}只对指定项目类型生效
+                                {% else %}按业务范围限定{% endif %}
+                            </small>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <div class="re-field scope-value" id="scopeValueWrap" style="margin-top:12px;margin-bottom:0;">
+                        <label>具体范围</label>
+                        {% set cur_val = trigger.scope_value if trigger else '' %}
+                        <select name="scope_value" id="scopeValue">
+                            <option value="">— 请选择 —</option>
+                            {% for p in scope_options.products %}
+                            <option value="{{ p.value }}" data-scope="product" {% if cur_scope=='product' and cur_val==p.value %}selected{% endif %}>{{ p.label }}</option>
+                            {% endfor %}
+                            {% for t in scope_options.project_types %}
+                            <option value="{{ t }}" data-scope="project_type" {% if cur_scope=='project_type' and cur_val==t %}selected{% endif %}>{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="re-card">
+                    <div class="re-step"><span class="num">3</span><h3>排审批人</h3><span>按顺序逐个审批，每步可设备份人</span></div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                        <span class="step-head">审批步骤</span>
+                        <button class="btn" type="button" onclick="addStep()">+ 添加一步</button>
+                    </div>
+                    <div class="step-head" style="display:grid;grid-template-columns:1fr 1.1fr 1.1fr 34px;gap:7px;"><span>步骤名称</span><span>主审批人（姓名/账号）</span><span>备份人（可选）</span><span></span></div>
+                    <div id="steps">
+                        {% for st in existing.steps %}
+                        <div class="step-row">
+                            <input type="text" name="step_name" value="{{ st.name }}" placeholder="如：部门负责人审批">
+                            <div class="actor-box">
+                                <input type="text" name="step_assignee_value" class="actor-input" list="actorList" value="{{ st.assignee_value }}" placeholder="输入姓名/账号搜索">
+                                <span class="actor-label" data-actor-label></span>
+                            </div>
+                            <div class="actor-box">
+                                <input type="text" name="step_backup_value" class="actor-input" list="actorList" value="{{ st.backup_assignee_value }}" placeholder="可选">
+                                <span class="actor-label" data-actor-label></span>
+                            </div>
+                            <button class="btn" type="button" onclick="this.parentNode.remove();updatePreview();" title="删除这一步">×</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <datalist id="actorList"></datalist>
+                    <input type="hidden" name="action_key" value="{{ (ev.write_back or {}).get('key') or '' }}">
+                    <div class="re-note" style="margin-top:10px;">
+                        审批人来自平台“用户管理”，只显示在职、未删除账号。主审批人失效（离职/停用）时自动转备份人；备份人也没有时转平台管理员。
+                    </div>
+                    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+                        <button class="btn btn-primary" type="submit">保存规则</button>
+                        <a class="btn" href="{{ url_for('workflow.admin_rules') }}">取消</a>
+                        {% if trigger %}
+                        <button class="btn btn-danger" type="submit" formaction="{{ url_for('workflow.admin_trigger_delete', trigger_id=trigger.id) }}" formmethod="post" onclick="return confirm('确定删除这条规则？删除后该范围按未配置直通处理。');" style="margin-left:auto;">删除这条规则</button>
+                        {% endif %}
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <aside class="preview-card">
+            <h3>审批链预览</h3>
+            <p class="hint">不用等保存，边改边看最终会送给谁。</p>
+            <div class="preview-summary" id="summaryText"></div>
+            <div class="preview-chain" id="previewChain"></div>
+            <div class="preview-tip">审批通过后：{{ (ev.write_back or {}).get('label') or '仅记录审批结果，不写回业务状态' }}。<br>未配置规则时：直接放行并留直通记录。</div>
+        </aside>
+    </div>
+</div>
+<script>
+function scopeType(){
+  var r=document.querySelector('input[name="scope_type"]:checked');
+  return r?r.value:'all';
+}
+function switchScope(){
+  var type=scopeType();
+  document.querySelectorAll('[data-scope-card]').forEach(function(el){
+    el.classList.toggle('selected', el.dataset.scopeCard===type);
+  });
+  var wrap=document.getElementById('scopeValueWrap');
+  var sel=document.getElementById('scopeValue');
+  wrap.style.display=(type==='all')?'none':'block';
+  sel.disabled=(type==='all');
+  for(var i=0;i<sel.options.length;i++){
+    var o=sel.options[i];
+    if(!o.dataset.scope){continue;}
+    o.hidden=(o.dataset.scope!==type);
+    if(o.hidden && o.selected){sel.value='';}
+  }
+  updatePreview();
+}
+function addStep(){
+  var box=document.getElementById('steps');
+  var row=document.createElement('div');row.className='step-row';
+  row.innerHTML='<input type="text" name="step_name" placeholder="如：部门负责人审批">'+
+    '<div class="actor-box"><input type="text" name="step_assignee_value" class="actor-input" list="actorList" placeholder="输入姓名/账号搜索"><span class="actor-label" data-actor-label></span></div>'+
+    '<div class="actor-box"><input type="text" name="step_backup_value" class="actor-input" list="actorList" placeholder="可选"><span class="actor-label" data-actor-label></span></div>'+
+    '<button class="btn" type="button" onclick="this.parentNode.remove();updatePreview();" title="删除这一步">×</button>';
+  box.appendChild(row);updatePreview();
+}
+function actorDisplay(inp){
+  var v=(inp.value||'').trim();
+  if(!v)return '待选择';
+  var opt=document.querySelector('#actorList option[value="'+v.replace(/"/g,'\\"')+'"]');
+  if(opt && opt.label)return (opt.label.split(' · ')[0]||v);
+  return v;
+}
+function scopeText(){
+  var type=scopeType();
+  if(type==='all')return '全部业务';
+  var sel=document.getElementById('scopeValue');
+  var val=sel.value||'';
+  var opt=sel.options[sel.selectedIndex];
+  var label=opt&&opt.value?opt.text:val;
+  if(!val)return (type==='product'?'指定产品（未选择）':'指定项目类型（未选择）');
+  return (type==='product'?'产品【'+label+'】':'项目类型【'+label+'】');
+}
+function updatePreview(){
+  var rows=document.querySelectorAll('#steps .step-row');
+  var nodes=[];
+  var names=[];
+  rows.forEach(function(row,i){
+    var name=(row.querySelector('input[name="step_name"]')||{}).value||('第'+(i+1)+'步审批');
+    var main=actorDisplay(row.querySelector('input[name="step_assignee_value"]'));
+    var backup=actorDisplay(row.querySelector('input[name="step_backup_value"]'));
+    names.push(main+(backup!=='待选择'?'（备份 '+backup+'）':''));
+    nodes.push({name:name,main:main,backup:backup});
+  });
+  var scope=scopeText();
+  var summary='当「'+scope+'」发生「{{ ev.label }}」时，';
+  if(nodes.length){
+    summary+='依次由 '+names.join(' → ')+' 审批；通过后'+( '{{ (ev.write_back or {}).get("label") or "仅记录审批结果" }}')+'。';
+  }else{
+    summary+='还没有添加审批人，保存前至少要加一步。';
+  }
+  document.getElementById('summaryText').textContent=summary;
+  var box=document.getElementById('previewChain');
+  box.innerHTML='';
+  var start=document.createElement('div');start.className='preview-node';
+  start.innerHTML='<span class="preview-dot">起</span><div><b>业务发起</b><small>'+scope+'</small></div>';
+  box.appendChild(start);
+  nodes.forEach(function(n,i){
+    var line=document.createElement('div');line.className='preview-line';box.appendChild(line);
+    var el=document.createElement('div');el.className='preview-node';
+    el.innerHTML='<span class="preview-dot">'+(i+1)+'</span><div><b>'+escapeHtml(n.main)+'</b><small>'+escapeHtml(n.name)+(n.backup!=='待选择'?' · 不可用时转 '+escapeHtml(n.backup):'')+'</small></div>';
+    box.appendChild(el);
+  });
+  var line2=document.createElement('div');line2.className='preview-line';box.appendChild(line2);
+  var end=document.createElement('div');end.className='preview-node end';
+  end.innerHTML='<span class="preview-dot">✓</span><div><b>审批完成</b><small>{{ (ev.write_back or {}).get("label") or "记录审批结果" }}</small></div>';
+  box.appendChild(end);
+}
+function escapeHtml(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function loadActors(){
+  fetch('{{ url_for("workflow.admin_actors") }}?type=user',{credentials:'same-origin'})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var list=document.getElementById('actorList');list.innerHTML='';
+      (d.items||[]).forEach(function(it){
+        var o=document.createElement('option');o.value=it.value;o.label=it.label+(it.sub?(' · '+it.sub):'');list.appendChild(o);
+      });
+      document.querySelectorAll('.actor-input').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var row=inp.closest('.step-row');
+          var lab=row.querySelector('[data-actor-label]');
+          if(lab)lab.textContent=actorDisplay(inp);
+          updatePreview();
+        });
+      });
+      updatePreview();
+    }).catch(function(){updatePreview();});
+}
+document.getElementById('steps').addEventListener('input',updatePreview);
+document.getElementById('steps').addEventListener('change',updatePreview);
+document.getElementById('scopeValue').addEventListener('change',updatePreview);
+switchScope();loadActors();
+</script>
+{% endblock %}

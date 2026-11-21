@@ -524,7 +524,7 @@ def _log(action, detail):
 VP_PLUGIN = 'version_plan'
 
 
-def _wf_managed(event_key):
+def _wf_managed(event_key, context=None):
     """该版本节点是否已绑定流程且流程启用、且流程里真的配了写回动作。
 
     返回 dict（workflow_engine.event_managed 的结构）或 None。
@@ -533,7 +533,7 @@ def _wf_managed(event_key):
     try:
         import workflow_engine as wf
         main = get_main_db()
-        info = wf.event_managed(main, VP_PLUGIN, event_key)
+        info = wf.event_managed(main, VP_PLUGIN, event_key, context or {})
         if info and not (info.get('definition') or {}).get('has_write_back'):
             return None
         return info
@@ -1612,9 +1612,9 @@ def version_detail(no):
     ensure_checks(db, no, v['product_code'] or '')
     gate = release_gate(db, no, v['product_code'] or '', v['vtype'])
     # v13.5：发布审批托管后，门禁只看 7 项业务确认清单；签核由流程引擎审批节点替代
-    wf_release_managed = bool(_wf_managed('version_plan.version.release'))
-    wf_freeze_managed = bool(_wf_managed('version_plan.version.freeze'))
-    wf_unfreeze_managed = bool(_wf_managed('version_plan.version.unfreeze'))
+    wf_release_managed = bool(_wf_managed('version_plan.version.release', {'product_code': v['product_code'] or ''}))
+    wf_freeze_managed = bool(_wf_managed('version_plan.version.freeze', {'product_code': v['product_code'] or ''}))
+    wf_unfreeze_managed = bool(_wf_managed('version_plan.version.unfreeze', {'product_code': v['product_code'] or ''}))
     if wf_release_managed:
         checks_ok = all((c['result'] or '') == '通过' for c in gate['checks'])
         bad = [c for c in gate['checks'] if (c['result'] or '') != '通过']
@@ -1894,7 +1894,7 @@ def version_status(no):
         if not reason:
             flash('强制解冻必须填写原因，便于留痕（R1）', 'error')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
-        managed = _wf_managed('version_plan.version.unfreeze')
+        managed = _wf_managed('version_plan.version.unfreeze', {'product_code': v['product_code'] or ''})
         if managed and _can_admin() and _wf_running(no, v['product_code']):
             flash(f'{no} 已有审批在流程中，请到流程中心处理后再操作。', 'warning')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
@@ -1913,14 +1913,22 @@ def version_status(no):
             else:
                 flash(f'{no} 解冻申请已提交流程引擎，管理员审批通过后自动解冻并留痕。', 'success')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
-        if not _can_admin():
-            flash('解冻只能由管理员或平台管理员执行（R1）；流程未启用时无法提交审批', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+        if not _can_admin() and not managed:
+            # v13.7：未配置规则先放行，写 unmatched 流水；解冻原因仍强制留痕
+            _wf_emit('version_plan.version.unfreeze',
+                     business_key=_vf_business_key(no, v['product_code']),
+                     title=f'{no} 强制解冻（未配置审批规则，直通）',
+                     context=_version_ctx(v, {'reason': reason}),
+                     record_type='version', record_id=no)
         _apply_unfreeze(db, no, v['product_code'], reason)
         _wf_emit('version_plan.version.unfrozen', business_key=_vf_business_key(no, v['product_code']),
                  title=f'{no} 已解冻', context=_version_ctx(v, {'version_status': '规划中'}),
                  record_type='version', record_id=no)
-        flash(f'{no} 已强制解冻（管理员操作，按规则免审批），原因已记入留痕（R1）', 'warning')
+        if managed:
+            msg = f'{no} 已强制解冻（管理员操作，按规则免审批）'
+        else:
+            msg = f'{no} 已强制解冻（未配置审批规则，本次直通）'
+        flash(msg + '，原因已记入留痕（R1）', 'warning')
         return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
 
     allowed = VERSION_FLOW.get(v['status'], [])
@@ -1936,13 +1944,18 @@ def version_status(no):
         if cnt == 0:
             flash('版本里还没有需求，不能冻结', 'error')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
-        managed_freeze = bool(_wf_managed('version_plan.version.freeze'))
+        managed_freeze = bool(_wf_managed('version_plan.version.freeze', {'product_code': v['product_code'] or ''}))
         if managed_freeze and _can_admin() and _wf_running(no, prod):
             flash(f'{no} 已有审批在流程中，请到流程中心处理后再操作。', 'warning')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+        direct_freeze = False
         if not managed_freeze and not _can_admin():
-            flash(f'{no} 冻结审批流程未配置或已停用：普通用户不能绕过审批，请联系管理员在「流程中心」启用。', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+            # v13.7：未配置规则先放行，写 unmatched 流水，不把业务卡死
+            _wf_emit('version_plan.version.freeze',
+                     business_key=_vf_business_key(no, prod),
+                     title=f'{no} 版本冻结（未配置审批规则，直通）',
+                     context=_version_ctx(v), record_type='version', record_id=no)
+            direct_freeze = True
         if managed_freeze and not _can_admin():
             res = _wf_emit('version_plan.version.freeze',
                            business_key=_vf_business_key(no, prod),
@@ -1960,13 +1973,14 @@ def version_status(no):
         _apply_freeze(db, no, prod, session.get('username', ''))
         _wf_emit('version_plan.version.frozen', business_key=_vf_business_key(no, prod),
                  title=f'{no} 已冻结', context=_version_ctx(v), record_type='version', record_id=no)
-        extra = ('管理员操作，按规则免审批。' if _can_admin() else '') + '冻结后需求构成不可再增删（R1）。'
+        extra = ('未配置审批规则，本次直接冻结并记录为直通。' if direct_freeze else
+                 ('管理员操作，按规则免审批。' if _can_admin() else '')) + '冻结后需求构成不可再增删（R1）。'
     elif target == '已发布':
         # 发布受控：业务硬门禁 = 7 项确认清单；签核属于审批，托管后只在流程引擎做
         from .trains import release_gate
         gate = release_gate(db, no, prod, v['vtype'])
         checks_ok = all((c['result'] or '') == '通过' for c in gate['checks'])
-        managed = _wf_managed('version_plan.version.release')
+        managed = _wf_managed('version_plan.version.release', {'product_code': prod or ''})
         if managed and _can_admin() and _wf_running(no, prod):
             flash(f'{no} 已有审批在流程中，请到流程中心处理后再操作。', 'warning')
             return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
@@ -1976,9 +1990,14 @@ def version_status(no):
             gate = dict(gate, ok=checks_ok,
                         reasons=([f'确认清单 {len(gate["checks"]) - len(bad)}/{len(gate["checks"])} 通过，缺：' +
                                   '、'.join('#%s' % c['item_no'] for c in bad)] if bad else []))
+        direct_release = False
         if not managed and not _can_admin():
-            flash(f'{no} 发布审批流程未配置或已停用：普通用户不能绕过审批，请联系管理员在「流程中心」启用。', 'error')
-            return redirect(url_for('version_plan.version_detail', no=no, product=v['product_code'] or None))
+            # v13.7：未配置规则先放行，写 unmatched 流水；7 项发布门禁仍然生效
+            _wf_emit('version_plan.version.release',
+                     business_key=_vf_business_key(no, prod),
+                     title=f'{no} 版本发布（未配置审批规则，直通）',
+                     context=_version_ctx(v), record_type='version', record_id=no)
+            direct_release = True
         if managed and not _can_admin():
             if not checks_ok:
                 flash('发布门禁未通过：' + '；'.join(gate['reasons']), 'error')
@@ -2002,7 +2021,9 @@ def version_status(no):
         res = _apply_release(db, no, prod, session.get('username', ''))
         _wf_emit('version_plan.version.released', business_key=_vf_business_key(no, prod),
                  title=f'{no} 已发布', context=_version_ctx(v), record_type='version', record_id=no)
-        extra = ('管理员操作，按规则免审批。' if _can_admin() else '') +                 f'{res.get("needs", 0)} 条需求已自动变为「已发布」，Release Note 草稿已生成，客户在用版本已更新。'
+        extra = ('未配置审批规则，本次直接发布并记录为直通。' if direct_release else
+                 ('管理员操作，按规则免审批。' if _can_admin() else '')) + \
+                f'{res.get("needs", 0)} 条需求已自动变为「已发布」，Release Note 草稿已生成，客户在用版本已更新。'
     else:
         db.execute(f'UPDATE {_t(L_VERSIONS)} SET status=?, updated_at=? '
                    'WHERE version_no=? AND product_code=?', (target, _now(), no, prod))

@@ -554,9 +554,12 @@ def register_plugin_guard(app):
         if request.path.startswith(_WHITELIST_PREFIX):
             return None
         # 静态资源、核心路由等放行
+        if request.path.rstrip('/') == '/workflow/api/plugin-events':
+            return None
         ep = request.endpoint
         if not ep or ep in ('static', 'plugin_center', 'toggle_plugin', 'profile',
-                            'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search') \
+                            'login', 'logout', 'index', 'logs', 'api_stats', 'api_global_search',
+                            'workflow.plugin_events') \
                             or (ep or '').endswith('.static'):
             return None
         # 前缀守卫兜底——子路由（URL 直连）也按路径判归属

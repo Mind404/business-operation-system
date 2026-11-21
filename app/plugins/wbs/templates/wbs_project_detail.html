@@ -29,7 +29,8 @@
 <div style="margin-bottom:10px;">
     <h1 style="margin:0;font-size:22px;">🗓️ {{ p.name }}</h1>
     <p style="color:#666;font-size:13px;margin:6px 0 0;">
-        负责人：{{ p.owner_disp or '-' }} · 参与人：{{ p.participants_disp or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
+        类型：<span style="display:inline-block;background:#eef2ff;color:#3730a3;border-radius:4px;padding:1px 7px;font-size:12px;">{{ p.project_type or '研发项目' }}</span>
+        · 负责人：{{ p.owner_disp or '-' }} · 参与人：{{ p.participants_disp or '-' }} · {{ p.start_date or '' }} ~ {{ p.end_date or '' }}
         {% if p.description %}<br>{{ p.description }}{% endif %}
     </p>
 </div>

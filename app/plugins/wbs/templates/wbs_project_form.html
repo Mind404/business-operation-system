@@ -1,5 +1,29 @@
 {% extends "base.html" %}
-{% block title %}{{ '编辑' if p else '新建' }}WBS项目 - 业务高效运转系统{% endblock %}
+{% block title %}{{ '编辑' if p else '新建' }}WBS项目 - 业务高效运转系统<script>
+(function(){
+  var box=document.getElementById('wfRulePreview');
+  var typeSel=document.querySelector('select[name="project_type"]');
+  if(!box || !typeSel) return;
+  function load(){
+    var t=typeSel.value||'';
+    fetch('{{ url_for("workflow.rule_preview") }}?plugin=wbs&event=wbs.project.created&project_type='+encodeURIComponent(t),{credentials:'same-origin'})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(!d.ok){box.textContent='审批规则读取失败，提交时仍按后台规则执行。';return;}
+        if(!d.configured){
+          box.innerHTML='<b>审批方式：</b>未配置审批规则，提交后直接通过，并记录“本次直通”。';
+          return;
+        }
+        var chain=(d.steps||[]).map(function(s,i){
+          return (i+1)+'. '+s.name+' → '+s.approver+(s.backup?'（备份：'+s.backup+'）':'');
+        }).join('<br>');
+        box.innerHTML='<b>审批方式：</b>提交后进入审批（'+d.scope+'）<br>'+chain;
+      }).catch(function(){box.textContent='审批规则读取失败，提交时仍按后台规则执行。';});
+  }
+  typeSel.addEventListener('change',load);load();
+})();
+</script>
+{% endblock %}
 {% block content %}
 <style>
 .wbs-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:30px;padding:0 14px;font-size:13px;border:1px solid #ccd2e0;border-radius:6px;background:#fff;color:#33415c;cursor:pointer;text-decoration:none;white-space:nowrap;transition:background .12s,border-color .12s}
@@ -80,6 +104,19 @@
             <div style="font-size:12px;color:#b45309;margin-top:4px;">🔒 人员名单仅管理员可调整</div>
             {% endif %}
         </div>
+    </div>
+
+    <!-- 项目类型：决定适用哪一类审批规则 -->
+    <div style="margin-bottom:20px;max-width:360px;">
+        <label style="display:block;font-size:13px;color:#444;margin-bottom:6px;font-weight:500;">项目类型</label>
+        {% set cur_type = (p.project_type if p and 'project_type' in p.keys() and p.project_type else '研发项目') %}
+        <select name="project_type" style="width:100%;padding:10px 12px;border:1px solid #d0d5dd;border-radius:6px;font-size:14px;box-sizing:border-box;background:#fff;">
+            {% for t in ['研发项目','交付项目','内部项目','其他项目'] %}
+            <option value="{{ t }}" {% if cur_type == t %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+        <div style="font-size:12px;color:#888;margin-top:4px;">平台管理员可按项目类型配置不同的审批人</div>
+        <div id="wfRulePreview" style="margin-top:8px;font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;line-height:1.6;">正在读取审批规则…</div>
     </div>
 
     <!-- 开始 + 结束时间：两列 -->

@@ -9,6 +9,7 @@
 """
 import copy
 import hashlib
+import hmac
 import importlib
 import json
 import os
@@ -173,12 +174,14 @@ CREATE TABLE IF NOT EXISTS wf_triggers (
     event_key TEXT NOT NULL,
     mode TEXT DEFAULT 'confirm',
     enabled INTEGER DEFAULT 1,
+    scope_type TEXT NOT NULL DEFAULT 'all',
+    scope_value TEXT NOT NULL DEFAULT '',
     created_by TEXT DEFAULT '系统',
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime')),
-    UNIQUE(plugin_id, event_key)
+    UNIQUE(plugin_id, event_key, scope_type, scope_value)
 );
-CREATE INDEX IF NOT EXISTS idx_wf_triggers_event ON wf_triggers(plugin_id, event_key, enabled);
+CREATE INDEX IF NOT EXISTS idx_wf_triggers_event ON wf_triggers(plugin_id, event_key, enabled, scope_type);
 CREATE TABLE IF NOT EXISTS wf_trigger_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trigger_id INTEGER,
@@ -316,7 +319,8 @@ def prune_event_log(db, keep_days=None, max_rows=None, force=False):
     cur = db.execute('DELETE FROM wf_event_log WHERE created_at < ?', (cutoff,))
     deleted += max(0, cur.rowcount or 0)
     if max_rows > 0:
-        total = db.execute('SELECT COUNT(*) c FROM wf_event_log').fetchone()['c']
+        row = db.execute('SELECT COUNT(*) c FROM wf_event_log').fetchone()
+        total = row['c'] if hasattr(row, 'keys') else row[0]
         if total > max_rows:
             extra = total - max_rows
             cur = db.execute(
@@ -538,6 +542,17 @@ EVENT_MODES = {
     'auto': '状态变更时自动发起',
 }
 
+# 审批规则适用范围：一个状态变更点 × 一个范围 = 一条生效规则
+SCOPE_TYPES = {
+    'all': '全部（默认规则）',
+    'product': '指定产品',
+    'project_type': '指定项目类型',
+}
+SCOPE_CONTEXT_KEYS = {
+    'product': ('product_code', 'product', 'product_name'),
+    'project_type': ('project_type',),
+}
+
 
 def register_event(plugin_id, key, label, description='', icon='', record_type='',
                    context_fields=None, default_steps=None, plugin_name='',
@@ -606,7 +621,7 @@ def event_catalog(db=None):
                     'SELECT t.*, d.name AS def_name, d.current_version AS def_version, '
                     'd.enabled AS def_enabled '
                     'FROM wf_triggers t LEFT JOIN wf_definitions d ON d.def_key=t.def_key').fetchall():
-                triggers[(row['plugin_id'], row['event_key'])] = dict(row)
+                triggers.setdefault((row['plugin_id'], row['event_key']), []).append(dict(row))
         except Exception:
             triggers = {}
     for key in _EVENT_META:
@@ -619,21 +634,121 @@ def event_catalog(db=None):
             'events': [],
         })
         ev = dict(meta)
-        trg = triggers.get((pid, key))
+        rules = triggers.get((pid, key)) or []
+        trg = rules[0] if rules else None
         ev['trigger'] = trg
-        ev['managed'] = bool(trg and int(trg.get('enabled') or 0) and int(trg.get('def_enabled') or 0))
+        ev['rules'] = rules
+        ev['rule_count'] = len(rules)
+        ev['managed'] = any(int(r.get('enabled') or 0) and int(r.get('def_enabled') or 0) for r in rules)
         wb = (meta.get('write_back') or {}).get('key') or ''
-        ev['managed_ready'] = bool(ev['managed'] and wb and
-                                   wb in definition_action_keys(db, trg.get('def_key')))
+        ev['managed_ready'] = bool(ev['managed'] and wb)
         g['events'].append(ev)
     return sorted(groups.values(), key=lambda x: x['plugin_id'])
 
+
+
+def register_manifest_events(plugin_id, manifest):
+    """把 manifest['workflow']['events'] 中未在代码里注册的节点补登记。
+
+    - 代码里已经 register_event 的节点优先，绝不用 manifest 的空壳覆盖真实元数据；
+    - 支持字符串（只有 key）或字典（key/label/description/context_fields/default_steps 等）；
+    - 外部服务型插件可以只声明 manifest，再通过 /workflow/api/plugin-events 上报事件。
+    """
+    workflow = (manifest or {}).get('workflow') or {}
+    items = workflow.get('events') or []
+    registered = 0
+    for item in items:
+        if isinstance(item, str):
+            key = item.strip()
+            meta = {}
+        elif isinstance(item, dict):
+            key = str(item.get('key') or '').strip()
+            meta = item
+        else:
+            continue
+        if not key or key in _EVENT_META:
+            continue
+        label = str(meta.get('label') or key.split('.')[-1] or key)
+        register_event(
+            plugin_id=plugin_id,
+            key=key,
+            label=label,
+            description=meta.get('description') or '由插件 manifest 声明的业务状态节点',
+            icon=meta.get('icon') or '◆',
+            record_type=meta.get('record_type') or '',
+            context_fields=meta.get('context_fields') or [],
+            default_steps=meta.get('default_steps') or [],
+            plugin_name=(manifest or {}).get('name') or plugin_id,
+            write_back=meta.get('write_back'),
+            on_reject=meta.get('on_reject'),
+        )
+        registered += 1
+    return registered
+
+
+def plugin_event_token(plugin_id):
+    """外部插件上报事件用的稳定令牌（由平台 SECRET_KEY 派生，不落库）。"""
+    try:
+        from flask import current_app
+        secret = str(current_app.config.get('SECRET_KEY') or '')
+    except Exception:
+        secret = ''
+    return hmac.new(secret.encode('utf-8'),
+                    ('plugin-event:' + str(plugin_id or '').strip()).encode('utf-8'),
+                    hashlib.sha256).hexdigest()
+
+
+def verify_plugin_event_token(plugin_id, token):
+    expected = plugin_event_token(plugin_id)
+    return bool(token) and hmac.compare_digest(str(token), expected)
 
 def get_event(event_key):
     return dict(_EVENT_META.get(str(event_key or '').strip()) or {})
 
 
-def event_managed(db, plugin_id, event_key):
+def _scope_value_from_context(scope_type, context):
+    for key in SCOPE_CONTEXT_KEYS.get(scope_type, ()):
+        value = (context or {}).get(key)
+        if value not in (None, ''):
+            return str(value).strip()
+    return ''
+
+
+def resolve_trigger(db, plugin_id, event_key, context=None):
+    """按“适用范围优先具体、再默认全部”选择一条生效规则。
+
+    - 指定产品 / 指定项目类型的规则优先于“全部”；
+    - 同一范围只允许一条规则（由唯一约束兜底）；
+    - 没有匹配规则返回 None，由调用方按“未配置直通”处理。
+    """
+    plugin_id = str(plugin_id or '').strip()
+    event_key = str(event_key or '').strip()
+    try:
+        rows = db.execute(
+            'SELECT * FROM wf_triggers WHERE plugin_id=? AND event_key=? AND enabled=1',
+            (plugin_id, event_key)).fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    rows = [dict(r) for r in rows]
+    context = dict(context or {})
+    for scope_type in ('product', 'project_type'):
+        value = _scope_value_from_context(scope_type, context)
+        if not value:
+            continue
+        matched = [r for r in rows
+                   if (r.get('scope_type') or 'all') == scope_type
+                   and str(r.get('scope_value') or '') == value]
+        if matched:
+            return sorted(matched, key=lambda r: (r.get('updated_at') or r.get('created_at') or '', r['id']), reverse=True)[0]
+    all_rows = [r for r in rows if (r.get('scope_type') or 'all') == 'all']
+    if all_rows:
+        return sorted(all_rows, key=lambda r: (r.get('updated_at') or r.get('created_at') or '', r['id']), reverse=True)[0]
+    return None
+
+
+def event_managed(db, plugin_id, event_key, context=None):
     """该业务节点的审批是否已由流程引擎托管（绑定存在且流程启用）。
 
     返回 None 或 {'trigger':..., 'definition':..., 'event':...}。
@@ -644,14 +759,19 @@ def event_managed(db, plugin_id, event_key):
     if not plugin_id or not event_key or not get_event(event_key):
         return None
     try:
-        row = db.execute(
-            "SELECT t.*, d.name AS def_name, d.enabled AS def_enabled "
-            "FROM wf_triggers t JOIN wf_definitions d ON d.def_key=t.def_key "
-            "WHERE t.plugin_id=? AND t.event_key=? AND t.enabled=1 AND d.enabled=1",
-            (plugin_id, event_key)).fetchone()
+        row = resolve_trigger(db, plugin_id, event_key, context)
+        if row:
+            d = db.execute('SELECT name, enabled FROM wf_definitions WHERE def_key=?',
+                           (row['def_key'],)).fetchone()
+            if d:
+                row = dict(row)
+                row['def_name'] = d['name']
+                row['def_enabled'] = d['enabled']
+            else:
+                row = None
     except Exception:
         return None
-    if not row:
+    if not row or not int(row.get('def_enabled') or 0):
         return None
     event = get_event(event_key)
     write_back = (event.get('write_back') or {}).get('key') or ''
@@ -664,32 +784,60 @@ def event_managed(db, plugin_id, event_key):
             'event': event}
 
 
-def is_event_managed(db, plugin_id, event_key):
-    return bool(event_managed(db, plugin_id, event_key))
+def is_event_managed(db, plugin_id, event_key, context=None):
+    return bool(event_managed(db, plugin_id, event_key, context))
 
 
 # ---------- 节点 ↔ 流程绑定 ----------
 
-def bind_trigger(db, def_key, plugin_id, event_key, mode='confirm', actor='系统'):
+def bind_trigger(db, def_key, plugin_id, event_key, mode='confirm', actor='系统',
+                 scope_type='all', scope_value='', replace=True):
     def_key = str(def_key or '').strip()
     plugin_id = str(plugin_id or '').strip()
     event_key = str(event_key or '').strip()
+    scope_type = (scope_type or 'all').strip()
+    scope_value = str(scope_value or '').strip()
     if not def_key or not plugin_id or not event_key:
         raise ValueError('流程、插件、状态变更节点都不能为空')
     if not get_event(event_key):
         raise ValueError('状态变更节点不存在：%s' % event_key)
     if get_event(event_key)['plugin'] != plugin_id:
         raise ValueError('状态变更节点与插件不匹配')
+    if scope_type not in SCOPE_TYPES:
+        raise ValueError('适用范围不合法')
+    if scope_type == 'all':
+        scope_value = ''
+    elif not scope_value:
+        raise ValueError('请选择要限定到哪个产品/项目类型')
     mode = mode if mode in EVENT_MODES else 'confirm'
-    # 一个状态变更节点只绑定一个流程，避免同一次变更重复发起
-    db.execute('DELETE FROM wf_triggers WHERE plugin_id=? AND event_key=? AND def_key<>?',
-               (plugin_id, event_key, def_key))
-    db.execute(
-        "INSERT INTO wf_triggers (def_key, plugin_id, event_key, mode, enabled, created_by, created_at, updated_at) "
-        "VALUES (?,?,?,?,1,?,datetime('now','localtime'),datetime('now','localtime')) "
-        "ON CONFLICT(def_key) DO UPDATE SET plugin_id=excluded.plugin_id, event_key=excluded.event_key, "
-        "mode=excluded.mode, enabled=1, updated_at=datetime('now','localtime')",
-        (def_key, plugin_id, event_key, mode, actor or '系统'))
+    # 一个“状态变更点 + 适用范围”只保留一条规则；同一流程已绑定时原地改范围，避免 def_key 冲突
+    existing = db.execute('SELECT * FROM wf_triggers WHERE def_key=?', (def_key,)).fetchone()
+    if existing:
+        dup = db.execute(
+            'SELECT id FROM wf_triggers WHERE plugin_id=? AND event_key=? AND scope_type=? AND scope_value=? AND id<>?',
+            (plugin_id, event_key, scope_type, scope_value, existing['id'])).fetchone()
+        if dup:
+            if not replace:
+                raise ValueError('该范围已经有生效规则，请直接编辑原规则')
+            db.execute('DELETE FROM wf_triggers WHERE id=?', (dup['id'],))
+            db.commit()
+        db.execute(
+            'UPDATE wf_triggers SET plugin_id=?, event_key=?, mode=?, enabled=1, '
+            "scope_type=?, scope_value=?, updated_at=datetime('now','localtime') WHERE id=?",
+            (plugin_id, event_key, mode, scope_type, scope_value, existing['id']))
+    else:
+        dup = db.execute(
+            'SELECT id FROM wf_triggers WHERE plugin_id=? AND event_key=? AND scope_type=? AND scope_value=?',
+            (plugin_id, event_key, scope_type, scope_value)).fetchone()
+        if dup:
+            if not replace:
+                raise ValueError('该范围已经有生效规则，请直接编辑原规则')
+            db.execute('DELETE FROM wf_triggers WHERE id=?', (dup['id'],))
+            db.commit()
+        db.execute(
+            "INSERT INTO wf_triggers (def_key, plugin_id, event_key, mode, enabled, scope_type, scope_value, created_by, created_at, updated_at) "
+            "VALUES (?,?,?,?,1,?,?,?,datetime('now','localtime'),datetime('now','localtime'))",
+            (def_key, plugin_id, event_key, mode, scope_type, scope_value, actor or '系统'))
     db.commit()
     return get_trigger_for_def(db, def_key)
 
@@ -766,14 +914,16 @@ def emit_state_change(db, plugin_id, event_key, business_key='', title='', conte
         (plugin_id, event_key, business_key, title or event['label'],
          json.dumps(dict(context or {}), ensure_ascii=False))).lastrowid
     db.commit()
-    trigger = db.execute(
-        'SELECT * FROM wf_triggers WHERE plugin_id=? AND event_key=? AND enabled=1',
-        (plugin_id, event_key)).fetchone()
+    ctx = dict(context or {})
+    trigger = resolve_trigger(db, plugin_id, event_key, ctx)
     if not trigger:
+        # 未配置规则：不阻塞业务，流水保留 unmatched，作为平台管理员的直通记录
+        result['mode'] = 'unmatched'
         return result
     result['matched'] = True
     result['mode'] = trigger['mode']
-    ctx = dict(context or {})
+    result['scope_type'] = trigger.get('scope_type') or 'all'
+    result['scope_value'] = trigger.get('scope_value') or ''
     actor_id, actor_name = _current_actor()
     if initiator_id is None:
         initiator_id = actor_id
@@ -923,7 +1073,8 @@ def generate_def_key(db, name='', event_key='', custom=''):
     """
     existing = set()
     try:
-        existing = {r['def_key'] for r in db.execute('SELECT def_key FROM wf_definitions').fetchall()}
+        existing = {(r['def_key'] if hasattr(r, 'keys') else r[0])
+                for r in db.execute('SELECT def_key FROM wf_definitions').fetchall()}
     except Exception:
         existing = set()
     base = _clean_key(custom)
@@ -1056,8 +1207,17 @@ def build_simple_definition(def_key, name, steps, action=None, category='通用'
         mode = step.get('mode') or 'any'
         if mode not in ('single', 'any', 'countersign'):
             mode = 'any'
-        approvals.append({'id': nid, 'name': str(step.get('name') or '审批').strip(),
-                           'assignee': assignee, 'mode': mode})
+        node = {'id': nid, 'name': str(step.get('name') or '审批').strip(),
+                'assignee': assignee, 'mode': mode}
+        # v13.7：每步可配一个备份审批人；主审批人失效（离职/停用）时自动转备份人
+        backup_type = str(step.get('backup_assignee_type') or '').strip()
+        backup_value = str(step.get('backup_assignee_value') or '').strip()
+        if backup_type in ('user', 'role', 'record_field') and backup_value:
+            backup = {'type': backup_type, 'value': backup_value}
+            if backup_type == 'record_field':
+                backup['field'] = backup_value
+            node['backup_assignee'] = backup
+        approvals.append(node)
 
     action = action or {}
     action_key = str(action.get('key') or '').strip()
@@ -1078,11 +1238,12 @@ def build_simple_definition(def_key, name, steps, action=None, category='通用'
             approve_next = 'end_approve'
         else:
             approve_next = approvals[i + 1]['id']
-        nodes.append({
-            'id': node['id'], 'type': 'approval', 'name': node['name'],
-            'assignee': node['assignee'], 'mode': node['mode'],
-            'next': {'approve': approve_next, 'reject': 'end_reject', 'return': 'end_return'}
-        })
+        item = {'id': node['id'], 'type': 'approval', 'name': node['name'],
+                'assignee': node['assignee'], 'mode': node['mode'],
+                'next': {'approve': approve_next, 'reject': 'end_reject', 'return': 'end_return'}}
+        if node.get('backup_assignee'):
+            item['backup_assignee'] = node['backup_assignee']
+        nodes.append(item)
     if action_node:
         nodes.append(action_node)
     nodes.extend([
@@ -1100,10 +1261,13 @@ def parse_simple_definition(definition):
     for node in (definition or {}).get('nodes', []):
         if node.get('type') == 'approval':
             rule = node.get('assignee') or {'type': 'initiator'}
+            backup = node.get('backup_assignee') or {}
             approvals.append({
                 'name': node.get('name') or '审批',
                 'assignee_type': rule.get('type') or 'role',
                 'assignee_value': rule.get('value') or rule.get('field') or '',
+                'backup_assignee_type': backup.get('type') or '',
+                'backup_assignee_value': backup.get('value') or backup.get('field') or '',
                 'mode': node.get('mode') or 'any'
             })
         elif node.get('type') == 'action':
@@ -1252,7 +1416,8 @@ def save_definition(db, def_key, name, definition, actor='系统', category='通
 def seed_defaults(db):
     if not SPIFF_AVAILABLE:
         return
-    existing = {r['def_key'] for r in db.execute('SELECT def_key FROM wf_definitions').fetchall()}
+    existing = {(r['def_key'] if hasattr(r, 'keys') else r[0])
+                for r in db.execute('SELECT def_key FROM wf_definitions').fetchall()}
     defaults = [
         ('generic_approval', '通用业务审批', '通用', '单节点审批，审批后由平台记录结果，适合验证审批入口', {
             'key': 'generic_approval', 'name': '通用业务审批',
@@ -1469,9 +1634,17 @@ def _upsert_approval_tasks(db, inst, node, spiff_task_id, context):
     if existing:
         return False
     users = _resolve_assignees(db, node.get('assignee'), context, inst['initiator_id'])
+    task_name = node.get('name') or '审批'
+    if not users and node.get('backup_assignee'):
+        # v13.7：主审批人失效（离职/停用/找不到）→ 自动转备份人
+        users = _resolve_assignees(db, node.get('backup_assignee'), context, inst['initiator_id'])
+        if users:
+            task_name = '%s（备份人）' % task_name
     if not users:
         fallback = _fallback_admin(db)
         users = [fallback] if fallback else []
+        if users:
+            task_name = '%s（平台管理员兜底）' % task_name
     mode = node.get('mode') or 'single'
     due_hours = int(node.get('due_hours') or 72)
     due_at = (datetime.now() + timedelta(hours=due_hours)).strftime('%Y-%m-%d %H:%M:%S')
@@ -1480,11 +1653,23 @@ def _upsert_approval_tasks(db, inst, node, spiff_task_id, context):
     if not users:
         raise RuntimeError('审批节点 %s 没有可用的审批人' % node.get('name'))
     for u in users:
-        db.execute(
+        cur = db.execute(
             'INSERT INTO wf_tasks (instance_id, node_id, spiff_task_id, name, assignee_id, assignee_name, candidate_role, mode, due_at) '
             'VALUES (?,?,?,?,?,?,?,?,?)',
-            (inst['id'], node['id'], spiff_task_id, node.get('name') or '审批',
+            (inst['id'], node['id'], spiff_task_id, task_name,
              u['id'], u['display_name'] or u['username'], node.get('candidate_role') or '', mode, due_at))
+        # v13.7：审批待办同步进工作台通知，点击直达流程实例
+        try:
+            trg = get_trigger_for_def(db, inst['def_key']) or {}
+            notify_user(
+                db, u['id'], '待审批：%s' % (inst['title'] or inst['def_key']),
+                body='%s 提交的「%s」等待你处理。' % (inst['initiator_name'] or '同事', task_name),
+                plugin_id=inst['plugin_id'] or 'workflow',
+                event_key='task:%s:%s' % (inst['id'], spiff_task_id),
+                url='/workflow/instance/%s' % inst['id'], instance_id=inst['id'],
+                business_key=inst['business_key'] or '', commit=False)
+        except Exception:
+            pass
     return True
 
 
@@ -1579,6 +1764,12 @@ def _finalize_if_complete(db, inst, wf):
                (status, decision, _now(), _now(), inst['id']))
     _event(db, inst['id'], 'instance_completed', inst['initiator_id'], inst['initiator_name'],
            {'status': status, 'decision': decision})
+    if status in ('completed', 'returned'):
+        # v13.7：审批结果回写工作台通知（驳回由 _notify_instance_rejected 带审批意见发送）
+        try:
+            _notify_instance_finished(db, inst, status, commit=False)
+        except Exception:
+            pass
     _queue_event(db, inst['id'], 'workflow.%s' % status, {'instance_id': inst['id'], 'decision': decision})
 
 
@@ -1968,6 +2159,23 @@ def _notify_instance_rejected(db, inst, wf_task, definition, actor_name='', comm
         body=body, plugin_id=inst['plugin_id'] or 'workflow', event_key=event_key,
         url='/workflow/instance/%s' % inst['id'], instance_id=inst['id'],
         business_key=inst['business_key'] or '', commit=False)
+
+
+def _notify_instance_finished(db, inst, status, commit=False):
+    """审批通过/退回后通知发起人；与工作台审批进度贯通。"""
+    u = _notification_user(db, inst['initiator_id'], inst['initiator_name'])
+    if not u:
+        return None
+    trg = get_trigger_for_def(db, inst['def_key'])
+    event_key = (trg['event_key'] if trg else '') or ''
+    title = '审批通过：%s' % (inst['title'] or inst['def_key']) if status == 'completed' else \
+            '审批退回：%s' % (inst['title'] or inst['def_key'])
+    body = '流程已完成，业务状态已写回。' if status == 'completed' else '流程已退回发起人，请修改后重新提交。'
+    return notify_user(
+        db, u['id'], title, body=body, plugin_id=inst['plugin_id'] or 'workflow',
+        event_key='%s:%s' % (event_key, status),
+        url='/workflow/instance/%s' % inst['id'], instance_id=inst['id'],
+        business_key=inst['business_key'] or '', commit=commit)
 
 
 def notifications_for_user(db, user_id, limit=50):
