@@ -1626,7 +1626,7 @@ def _admin_backup_restore_body():
         return redirect(url_for('admin_backup'))
     try:
         # v13.0.0：两种恢复方式。老备份（旧版本做的）请用「只恢复数据」，
-        # 它只搬业务数据，当前版本的表结构、索引、账号、插件登记、模型配置全部保持不变。
+        # 它只搬业务数据，当前版本的表结构、索引、插件登记、模型配置保持不变；备份里缺失的账号会补回，现有账号密码/角色/状态不回退。
         # v13.0.0.28：默认改为「只恢复数据」。整库覆盖（full）风险高，必须是用户明确点击
         # 「整库覆盖」才执行；请求里没带 mode 时按 data 处理，避免脚本/旧表单误触发整库回退。
         mode = (request.form.get('mode') or 'data').strip().lower()
@@ -1644,9 +1644,14 @@ def _admin_backup_restore_body():
                         _c.close()
                     except Exception:
                         _fresh = False
-                moved, no_such, defaulted = _restore_data_only(src, target, include_users=_fresh)
                 if pre != 'business':
-                    # 插件库只搬数据，随后按当前代码补表/补列，避免旧备份结构影响新版
+                    # v13.8.0.1：先按当前代码建好插件表，否则空库/换机恢复时备份里的表
+                    # 在目标库“不存在”，会被全部跳过，恢复后只剩空表。
+                    _reinit_plugin_schema(pre)
+                moved, no_such, defaulted, _ustats = _restore_data_only(
+                    src, target, include_users=('full' if _fresh else ('merge' if pre == 'business' else False)))
+                if pre != 'business':
+                    # 插件库只搬数据，随后再按当前代码补表/补列，避免旧备份结构影响新版
                     _reinit_plugin_schema(pre)
             except Exception as e:
                 print(f'[数据恢复] 搬迁失败：{e}')
@@ -1657,19 +1662,27 @@ def _admin_backup_restore_body():
             if defaulted:
                 _more = '…' if len(defaulted) > 8 else ''
                 _tip += f'（备份里缺 {len(defaulted)} 个新列，已按当前表定义取默认值：{"、".join(defaulted[:8])}{_more}）'
-            log_operation('数据备份', '恢复数据', f'{kind} ← {fname}', session.get('username'))
+            log_operation('数据备份', '恢复数据',
+                          f'{kind} ← {fname}；{_restore_user_summary(_ustats)}', session.get('username'))
             if _fresh:
+                if not _ustats.get('backup_has_users'):
+                    flash(f'✅ 已导入旧数据（表结构保持当前版本）：{fname}。'
+                          f'本次搬迁 {len(moved)} 张表：{"、".join(moved) or "无"}。'
+                          f'备份中没有账号表，已保留当前默认账号（admin / product），无需重新登录。{_tip}', 'warning')
+                    return redirect(url_for('admin_backup'))
                 # 账号跟着搬回来了，当前登录态指向的账号可能已变，清掉会话让人按备份里的账号重登
                 session.clear()
                 flash(f'✅ 已导入旧数据（表结构保持当前版本）：{fname}。'
                       f'本次搬迁 {len(moved)} 张表：{"、".join(moved) or "无"}。'
-                      f'因为这是新装系统，账号也一并从备份导入（{len(_names)} 个），'
+                      f'因为这是新装系统，账号也一并从备份导入（{_ustats.get("users_total") or len(_names)} 个），'
                       f'请用「备份时的账号和密码」重新登录（通常是 admin / admin123）。'
                       f'表结构 / 索引 / 插件登记 / 模型配置仍是当前版本，一个都没动。{_tip}', 'warning')
                 return redirect(url_for('login'))
+            _account_tip = _restore_user_summary(_ustats)
             flash(f'✅ 已恢复数据（表结构保持当前版本）：{fname}。'
                   f'本次搬迁 {len(moved)} 张业务表：{"、".join(moved) or "无"}。'
-                  f'表结构 / 索引 / 账号 / 插件登记 / 模型配置都未改动，无需重启，也不会被踢下线。{_tip}', 'success')
+                  f'表结构 / 索引 / 插件登记 / 模型配置均未回退；当前账号密码/角色/在线会话未被整体回退。'
+                  f'{_account_tip}无需重启，也不会被踢下线。{_tip}', 'success')
             return redirect(url_for('admin_backup'))
         # v12.7.10.19：改用 SQLite 在线备份 API 覆盖目标库，不再用“复制文件替换”。
         # 原因：系统运行中数据库文件被进程占用（Windows 上尤其明显），shutil.copy2 会抛 PermissionError，
@@ -1901,7 +1914,7 @@ def admin_backup_download_group(ts):
 @app.route('/admin/backup/restore-group', methods=['POST'])
 def admin_backup_restore_group():
     """v13.0.0.11：整组恢复（一次恢复一套备份里的全部数据库）。
-    仍然走「只恢复数据」：只搬业务数据，当前版本的表结构/账号体系/插件登记不动。
+    仍然走「只恢复数据」：只搬业务数据，当前版本的表结构/插件登记不动；备份里缺失的账号会补回，现有账号密码/角色/状态不回退。
     插件包代码不在此覆盖（避免用旧代码盖掉新版本），需要回退插件代码请到单库高级操作里单独还原。"""
     if _RESTORE_GATE.is_set():
         flash('已有恢复任务正在进行，请稍候再试。', 'warning')
@@ -1982,9 +1995,12 @@ def _admin_restore_group_body():
                     _c.close()
                 except Exception:
                     fresh = False
-                moved, no_such, defaulted = _restore_data_only(src, target, include_users=fresh)
+                moved, no_such, defaulted, _ustats = _restore_data_only(
+                    src, target, include_users=('full' if fresh else 'merge'))
             else:
-                moved, no_such, defaulted = _restore_data_only(src, target, include_users=False)
+                # v13.8.0.1：先建表再搬，避免空插件库把备份表全部当成“不存在”跳过。
+                _reinit_plugin_schema(pre)
+                moved, no_such, defaulted, _ustats = _restore_data_only(src, target, include_users=False)
                 _reinit_plugin_schema(pre)
         except Exception as e:
             flash('整组恢复已中止：恢复 %s 失败（%s）。已恢复的库：%s。'
@@ -1993,7 +2009,8 @@ def _admin_restore_group_body():
             return redirect(url_for('admin_backup'))
         after = _db_rowcount(target)
         rows.append({'kind': kind, 'file': fname, 'before': before, 'after': after,
-                     'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such)})
+                     'tables': len(moved), 'fresh': fresh, 'skipped': len(no_such),
+                     'user_stats': _ustats})
 
     # v13.0.0.34：同组附件文件一起恢复（只补缺失，不覆盖已有文件）
     files_msg = ''
@@ -2019,9 +2036,15 @@ def _admin_restore_group_body():
         return redirect(url_for('admin_backup'))
 
     try:
+        _log_users = ''
+        for r in rows:
+            if r['kind'] == '主库':
+                _log_users = '；' + _restore_user_summary(r.get('user_stats') or {})
+                break
         log_operation('数据备份', '整组恢复',
-                      '备份组 %s（%d 个库：%s%s）' % (ts, len(rows), '、'.join(r['kind'] for r in rows),
-                                                  ('；跳过 ' + '、'.join(skipped)) if skipped else ''),
+                      '备份组 %s（%d 个库：%s%s）%s' % (ts, len(rows), '、'.join(r['kind'] for r in rows),
+                                                     ('；跳过 ' + '、'.join(skipped)) if skipped else '',
+                                                     _log_users),
                       session.get('username'))
     except Exception:
         pass
@@ -2038,10 +2061,16 @@ def _admin_restore_group_body():
     # v13.0.0.32：整组恢复走的也是「只恢复数据」——user_sessions 不搬，登录态本不该失效。
     # 旧代码在这里无条件 session.clear() + 跳登录页，于是一次纯数据恢复也会把人踢下线，
     # 与页面上「不会把你踢下线」的说明矛盾。
+    _main_user_tip = ''
+    for r in rows:
+        if r['kind'] == '主库':
+            _main_user_tip = _restore_user_summary(r.get('user_stats') or {})
+            break
     flash('✅ 已整组恢复（%s）：%s。共 %d 个库，全部按「只恢复数据」处理，'
           '表结构 / 插件登记 / 模型配置未被回退；插件代码未改动。%s%s%s'
-          '账号与会话未改动，当前登录仍然有效，无需重新登录。'
-          % (ts, _detail, len(rows), _skip_note, files_msg, files_note), 'success')
+          '现有账号密码/角色/在线会话未被整体回退；%s无需重新登录。'
+          % (ts, _detail, len(rows), _skip_note, files_msg, files_note,
+             _main_user_tip or '账号体系未改动；'), 'success')
     return redirect(url_for('admin_backup'))
 
 
@@ -2461,10 +2490,226 @@ _RESTORE_DATA_SKIP = {
     'schema_version',    # 结构版本号：保持当前
     'plugin_registry',   # 插件登记：搬了可能缺 enabled/install_type，插件会"消失"或读不到数据
     'plugin_tables',     # 插件表登记：同上
-    'users',             # 账号：搬了密码/权限会退回备份时刻
+    'users',             # 账号：整表搬会回退密码/权限；改由 _restore_merge_users 只补缺失账号
     'user_plugins',      # 用户与插件的关系：跟账号绑定
     'ai_providers',      # 模型接口配置：旧 key 可能已失效，搬了 AI 反而不可用
 }
+
+
+# v13.8.0.1：用户 ID 型硬关联列。恢复“只搬数据”时如果只跳过 users，
+# 这些列会指向备份里的旧 ID；当前库若存在同名不同 ID、或根本没有该账号，
+# 待办/审批/通知就会变成“有记录、找不到人”。恢复后必须按 旧ID→新ID 重映射。
+_USER_ID_REF_COLUMNS = ('user_id', 'assignee_id', 'initiator_id', 'actor_id')
+
+
+def _restore_user_summary(stats, fresh=False):
+    """把账号合并/修复结果拼成用户能看懂的一句话，放在恢复结果提示里。"""
+    if not stats:
+        return ''
+    if stats.get('users_mode') in (None, 'none'):
+        if stats.get('target_has_users') and not stats.get('backup_has_users'):
+            return '备份中没有账号表，无法补回缺失账号；业务里的负责人可能显示为账号名。'
+        return ''
+    mode = stats.get('users_mode')
+    if mode == 'full':
+        return f'账号已随整库恢复 {stats.get("users_backup", 0)} 个。'
+    added = int(stats.get('users_added') or 0)
+    kept = int(stats.get('users_kept') or 0)
+    remapped = int(stats.get('user_ids_remapped') or 0)
+    grants = int(stats.get('user_plugins_added') or 0)
+    parts = []
+    if added:
+        names = stats.get('added_names') or []
+        name_tip = ('（%s%s）' % ('、'.join(names[:6]), '…' if len(names) > 6 else '')) if names else ''
+        parts.append(f'补回缺失账号 {added} 个{name_tip}')
+    if kept:
+        parts.append(f'备份内已有账号 {kept} 个保留原密码/角色/状态')
+    if remapped:
+        parts.append(f'修复用户ID关联 {remapped} 条')
+    if grants:
+        parts.append(f'补回新账号的插件授权 {grants} 条')
+    backup_orphan = stats.get('backup_orphan_refs') or []
+    if backup_orphan:
+        parts.append('备份自身有 %d 处用户ID在账号表缺失：%s'
+                     % (len(backup_orphan), '、'.join(backup_orphan[:6])))
+    orphan = stats.get('orphan_user_refs') or []
+    if orphan:
+        parts.append('仍有 %d 处用户引用未匹配：%s' % (len(orphan), '、'.join(orphan[:6])))
+    if not parts:
+        return '备份内账号均已存在，账号体系未改动。'
+    return '；'.join(parts) + '。'
+
+
+def _restore_merge_users(conn):
+    """把备份里有、当前库没有的账号补进来；已有账号一律保留当前密码/角色/状态。
+
+    这是“数据备份”语义的完整性修复：业务数据里的 owner、participants、审批人、
+    待办 assignee_id 都依赖账号存在。只补缺失账号，不整体回退账号表，避免把当前
+    密码、权限、启用状态退回备份时刻，也不会清在线会话。
+    """
+    cur_cols = [r[1] for r in conn.execute('PRAGMA table_info("users")')]
+    bak_cols = [r[1] for r in conn.execute('PRAGMA bak.table_info("users")')]
+    if 'username' not in cur_cols or 'username' not in bak_cols or 'password' not in cur_cols:
+        return {'users_backup': 0, 'users_added': 0, 'users_kept': 0,
+                'user_id_map': {}, 'new_user_ids': set(), 'added_names': [],
+                'display_filled': 0}
+    common = [c for c in cur_cols if c in bak_cols and c != 'id']
+    cur_rows = [dict(zip(cur_cols, r)) for r in conn.execute('SELECT * FROM users').fetchall()]
+    bak_rows = [dict(zip(bak_cols, r)) for r in conn.execute('SELECT * FROM bak.users').fetchall()]
+    by_name = {}
+    for u in cur_rows:
+        name = str(u.get('username') or '')
+        if name:
+            by_name[name] = u
+    id_map = {}
+    added_names = []
+    added_ids = set()
+    display_filled = 0
+    for b in bak_rows:
+        name = str(b.get('username') or '')
+        if not name:
+            continue
+        old_id = b.get('id')
+        cu = by_name.get(name)
+        if cu:
+            id_map[old_id] = cu.get('id')
+            # 只补空显示名/部门，不覆盖用户已经维护过的资料
+            upd = {}
+            for col in ('display_name', 'department'):
+                if col not in cur_cols:
+                    continue
+                cur_val = str(cu.get(col) or '').strip()
+                bak_val = str(b.get(col) or '').strip()
+                if (not cur_val or cur_val == name) and bak_val and bak_val != name:
+                    upd[col] = bak_val
+            if upd:
+                conn.execute(
+                    'UPDATE users SET %s WHERE id=?' % ','.join('%s=?' % c for c in upd),
+                    list(upd.values()) + [cu.get('id')])
+                display_filled += 1
+            continue
+        cols = ','.join('"%s"' % c for c in common)
+        ph = ','.join('?' for _ in common)
+        vals = [b.get(c) for c in common]
+        conn.execute('INSERT INTO users (%s) VALUES (%s)' % (cols, ph), vals)
+        new_id = conn.execute('SELECT id FROM users WHERE username=?', (name,)).fetchone()[0]
+        id_map[old_id] = new_id
+        added_names.append(name)
+        added_ids.add(new_id)
+        by_name[name] = {'id': new_id, 'username': name,
+                         'display_name': b.get('display_name'), 'department': b.get('department')}
+    return {'users_backup': len(bak_rows), 'users_added': len(added_names),
+            'users_kept': len(bak_rows) - len(added_names),
+            'user_id_map': id_map,
+            'new_user_ids': added_ids,
+            'added_names': added_names, 'display_filled': display_filled}
+
+
+def _restore_merge_user_plugins(conn, id_map, new_user_ids):
+    """只为“本次补进来的账号”补回插件授权；已有账号的授权保持当前状态。"""
+    if 'user_plugins' not in [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]:
+        return 0
+    bak_tables = [r[0] for r in conn.execute(
+        "SELECT name FROM bak.sqlite_master WHERE type='table'")]
+    if 'user_plugins' not in bak_tables:
+        return 0
+    cur_cols = [r[1] for r in conn.execute('PRAGMA table_info("user_plugins")')]
+    bak_cols = [r[1] for r in conn.execute('PRAGMA bak.table_info("user_plugins")')]
+    common = [c for c in cur_cols if c in bak_cols]
+    if not common:
+        return 0
+    added = 0
+    for row in conn.execute('SELECT * FROM bak.user_plugins').fetchall():
+        b = dict(zip(bak_cols, row))
+        new_uid = id_map.get(b.get('user_id'))
+        if new_uid not in new_user_ids:
+            continue
+        vals = [new_uid if c == 'user_id' else b.get(c) for c in common]
+        try:
+            conn.execute('INSERT OR IGNORE INTO user_plugins (%s) VALUES (%s)'
+                         % (','.join('"%s"' % c for c in common),
+                            ','.join('?' for _ in common)), vals)
+            added += 1
+        except Exception:
+            continue
+    return added
+
+
+def _remap_user_ids(conn, moved, id_map):
+    """按旧→新 ID 一次性重映射，使用 CASE 避免 3→10、10→3 这类交换时互相覆盖。"""
+    changed = 0
+    for t in moved:
+        cols = [r[1] for r in conn.execute('PRAGMA table_info("%s")' % t)]
+        for col in _USER_ID_REF_COLUMNS:
+            if col not in cols:
+                continue
+            pairs = [(old, new) for old, new in (id_map or {}).items()
+                     if old is not None and new is not None and int(old) != int(new)]
+            if not pairs:
+                continue
+            sets = ' '.join('WHEN %d THEN %d' % (int(old), int(new)) for old, new in pairs)
+            olds = ','.join(str(int(old)) for old, _ in pairs)
+            cur = conn.execute(
+                'UPDATE "%s" SET "%s" = CASE "%s" %s ELSE "%s" END '
+                'WHERE "%s" IN (%s)' % (t, col, col, sets, col, col, olds))
+            if cur.rowcount and cur.rowcount > 0:
+                changed += cur.rowcount
+    return changed
+
+
+def _audit_user_id_refs(conn, moved):
+    """恢复后检查硬关联：还有多少条用户 ID 指向不存在的账号。"""
+    if 'users' not in [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]:
+        return []
+    bad = []
+    for t in moved:
+        cols = [r[1] for r in conn.execute('PRAGMA table_info("%s")' % t)]
+        for col in _USER_ID_REF_COLUMNS:
+            if col not in cols:
+                continue
+            try:
+                n = conn.execute(
+                    'SELECT COUNT(*) FROM "%s" WHERE "%s" IS NOT NULL '
+                    'AND "%s"<>0 AND "%s" NOT IN (SELECT id FROM users)'
+                    % (t, col, col, col)).fetchone()[0]
+            except Exception:
+                continue
+            if n:
+                bad.append('%s.%s=%d' % (t, col, n))
+    return bad
+
+
+def _audit_backup_user_refs(conn, bak_tables):
+    """恢复前先看备份自身：业务表里的用户 ID 是否都能在备份账号表找到。
+
+    这一步能识别“备份本来就断档”的情况。否则目标库若恰好存在同号账号，
+    恢复后外键看起来是通的，实际却指向了另一个人，属于最隐蔽的错误关联。
+    """
+    if 'users' not in bak_tables:
+        return []
+    bad = []
+    for t in sorted(bak_tables):
+        if t.startswith('sqlite_') or t == 'users':
+            continue
+        try:
+            cols = [r[1] for r in conn.execute('PRAGMA bak.table_info("%s")' % t)]
+        except Exception:
+            continue
+        for col in _USER_ID_REF_COLUMNS:
+            if col not in cols:
+                continue
+            try:
+                n = conn.execute(
+                    'SELECT COUNT(*) FROM bak."%s" WHERE "%s" IS NOT NULL '
+                    'AND "%s"<>0 AND "%s" NOT IN (SELECT id FROM bak.users)'
+                    % (t, col, col, col)).fetchone()[0]
+            except Exception:
+                continue
+            if n:
+                bad.append('%s.%s=%d' % (t, col, n))
+    return bad
 
 
 def _db_looks_fresh(conn):
@@ -2503,13 +2748,20 @@ def _restore_data_only(src_path, dst_path, include_users=False):
     做法：把备份以只读方式 ATTACH 进来，逐张表按"两边都有的列"覆盖当前库的数据。
     - 备份里没有的新表 / 新列：保持当前（不回退结构）
     - 备份里缺的列：插入时取当前表定义的默认值（不会报 no such column）
-    返回 (搬迁的表, 跳过的表, 被兜底为默认值的列)
+    - include_users='merge'：补回备份里缺失的账号，保留现有账号资料，并重映射用户 ID
+    返回 (搬迁的表, 跳过的表, 被兜底为默认值的列, 账号合并统计)
     """
     import sqlite3 as _sq
     import shutil
     import tempfile
     conn = _sq.connect(dst_path, timeout=60, isolation_level=None)
     moved, no_such, defaulted = [], [], []
+    stats = {'users_mode': 'none', 'users_backup': 0, 'users_added': 0, 'users_kept': 0,
+             'display_filled': 0, 'user_plugins_added': 0, 'user_ids_remapped': 0,
+             'orphan_user_refs': [], 'backup_orphan_refs': [], 'added_names': [],
+             'backup_has_users': False, 'target_has_users': False}
+    merge_users = (include_users == 'merge')
+    copy_all_users = (include_users is True or include_users == 'full')
     tmp_bak = None
     try:
         # SQLite 的 ATTACH 不认 file: URI，所以先把备份复制成一份临时副本再挂进来，
@@ -2524,12 +2776,22 @@ def _restore_data_only(src_path, dst_path, include_users=False):
             "SELECT name FROM sqlite_master WHERE type='table'"))
         bakry = set(r[0] for r in conn.execute(
             "SELECT name FROM bak.sqlite_master WHERE type='table'"))
+        stats['target_has_users'] = 'users' in curry
+        stats['backup_has_users'] = 'users' in bakry
         conn.execute('BEGIN IMMEDIATE')
         _skip = set(_RESTORE_DATA_SKIP)
-        if include_users:
+        if copy_all_users and 'users' in bakry:
             # 空库导入旧数据时连账号一起搬回来，否则用户得在新版本里手工重建所有人
             _skip.discard('users')
             _skip.discard('user_plugins')
+            stats['users_mode'] = 'full'
+            stats['users_total'] = conn.execute('SELECT COUNT(*) FROM bak.users').fetchone()[0]
+            stats['users_backup'] = stats['users_total']
+        elif merge_users and 'users' in bakry:
+            # 非空库：只补缺失账号，不整体回退账号表，避免密码/角色/状态倒退。
+            stats.update(_restore_merge_users(conn))
+            stats['backup_orphan_refs'] = _audit_backup_user_refs(conn, bakry)
+            stats['users_mode'] = 'merge'
         for t in sorted(bakry):
             if t.startswith('sqlite_') or t in _skip:
                 continue
@@ -2549,6 +2811,11 @@ def _restore_data_only(src_path, dst_path, include_users=False):
             conn.execute(f'DELETE FROM "{t}"')
             conn.execute(f'INSERT INTO "{t}" ({cols}) SELECT {cols} FROM bak."{t}"')
             moved.append(t)
+        if merge_users:
+            stats['user_plugins_added'] = _restore_merge_user_plugins(
+                conn, stats.get('user_id_map') or {}, stats.get('new_user_ids') or set())
+            stats['user_ids_remapped'] = _remap_user_ids(conn, moved, stats.get('user_id_map') or {})
+            stats['orphan_user_refs'] = _audit_user_id_refs(conn, moved)
         # 自增序号按搬迁后的真实最大值重设，避免旧的序号偏小导致后续插入主键冲突
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'").fetchone():
             for t in moved:
@@ -2577,7 +2844,7 @@ def _restore_data_only(src_path, dst_path, include_users=False):
                 os.remove(tmp_bak)
             except Exception:
                 pass
-    return moved, no_such, defaulted
+    return moved, no_such, defaulted, stats
 
 
 def _ensure_all_tables():

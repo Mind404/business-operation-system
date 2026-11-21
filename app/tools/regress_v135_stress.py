@@ -55,10 +55,12 @@ def main():
 
     vp = sqlite3.connect(str(plug / 'version_plan.db'), timeout=30)
     vp.row_factory = sqlite3.Row
+    _vp_tables = {r[0] for r in vp.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for t in ('version_plan_demands', 'version_plan_versions', 'version_plan_releases',
               'version_plan_checks', 'version_plan_signoffs', 'version_plan_items',
               'version_plan_trains', 'version_plan_logs', 'version_plan_notices'):
-        vp.execute('DELETE FROM ' + t)
+        if t in _vp_tables:
+            vp.execute('DELETE FROM ' + t)
     vp.execute('DELETE FROM version_plan_products')
     vp.execute('DELETE FROM version_plan_customers')
     now = '2026-11-20 12:00:00'
